@@ -247,7 +247,7 @@ const file_kacho_cloud_operation_operation_proto_rawDesc = "" +
 	" \x01(\tR\rprincipalType\x12!\n" +
 	"\fprincipal_id\x18\v \x01(\tR\vprincipalId\x124\n" +
 	"\x16principal_display_name\x18\f \x01(\tR\x14principalDisplayNameB\b\n" +
-	"\x06resultBIZGgithub.com/PRO-Robotech/kacho/pkg/api/kacho/cloud/operation;operationv1b\x06proto3"
+	"\x06resultBGZEgithub.com/PRO-Robotech/corelib/api/kacho/cloud/operation;operationv1b\x06proto3"
 
 var (
 	file_kacho_cloud_operation_operation_proto_rawDescOnce sync.Once

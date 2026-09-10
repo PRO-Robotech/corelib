@@ -348,13 +348,29 @@ func TestDeriveEnumerations_AVerdictSurfaceThatStartsEnumeratingExtendsTheBan(t 
 	}
 }
 
+// ourModuleDecl is the `module` line of a fixture go.mod that the walk-up must
+// recognise as OURS.
+//
+// It is derived from this package's own import path rather than written out,
+// for the same reason moduleRootOf no longer names a module: `pkg/listfiltergate`
+// leaves for the foundation module with `pkg/`, and a fixture naming the platform
+// would then declare a module that is not ours — every Shared-source test would
+// start failing on a tree that is perfectly well formed.
+//
+// Any module CONTAINING this package is ours by moduleDeclIsOurs, and the package
+// path contains itself; so the package path is the one value that is correct in
+// both layouts without naming either.
+func ourModuleDecl() string {
+	return "module " + ownModulePath() + "\n\ngo 1.24\n"
+}
+
 // moduleTree materialises the real layout — go.mod on top, services/<svc> beneath
 // it, pkg/ beside it — and returns the SERVICE root inside it.
 func moduleTree(t *testing.T, files map[string]string, withGoMod bool) string {
 	t.Helper()
 	root := t.TempDir()
 	if withGoMod {
-		files["go.mod"] = "module github.com/PRO-Robotech/kacho\n\ngo 1.24\n"
+		files["go.mod"] = ourModuleDecl()
 	}
 	for rel, content := range files {
 		path := filepath.Join(root, rel)
@@ -465,7 +481,7 @@ func TestDeriveEnumerations_SharedSourceIsResolvedFromTheOuterModuleNotANestedOn
 			t.Fatalf("write: %v", err)
 		}
 	}
-	write("go.mod", "module github.com/PRO-Robotech/kacho\n\ngo 1.24\n")
+	write("go.mod", ourModuleDecl())
 	write("pkg/listnarrow/narrower.go", strings.Replace(sharedPort,
 		"type AuthorizeClient interface {",
 		"type AuthorizeClient interface {\n\tVisibleObjectIDs(ctx context.Context, subject string) ([]string, error)", 1))

@@ -27,7 +27,7 @@ var File_kacho_cloud_operation_package_options_proto protoreflect.FileDescriptor
 
 const file_kacho_cloud_operation_package_options_proto_rawDesc = "" +
 	"\n" +
-	"+kacho/cloud/operation/package_options.proto\x12\x15kacho.cloud.operationBIZGgithub.com/PRO-Robotech/kacho/pkg/api/kacho/cloud/operation;operationv1b\x06proto3"
+	"+kacho/cloud/operation/package_options.proto\x12\x15kacho.cloud.operationBGZEgithub.com/PRO-Robotech/corelib/api/kacho/cloud/operation;operationv1b\x06proto3"
 
 var file_kacho_cloud_operation_package_options_proto_goTypes = []any{}
 var file_kacho_cloud_operation_package_options_proto_depIdxs = []int32{

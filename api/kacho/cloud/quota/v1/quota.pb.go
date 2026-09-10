@@ -259,7 +259,7 @@ const file_kacho_cloud_quota_v1_quota_proto_rawDesc = "" +
 	"\x11SCOPE_UNSPECIFIED\x10\x00\x12\v\n" +
 	"\aDEFAULT\x10\x01\x12\v\n" +
 	"\aACCOUNT\x10\x02\x12\v\n" +
-	"\aPROJECT\x10\x03BDZBgithub.com/PRO-Robotech/kacho/pkg/api/kacho/cloud/quota/v1;quotav1b\x06proto3"
+	"\aPROJECT\x10\x03BBZ@github.com/PRO-Robotech/corelib/api/kacho/cloud/quota/v1;quotav1b\x06proto3"
 
 var (
 	file_kacho_cloud_quota_v1_quota_proto_rawDescOnce sync.Once

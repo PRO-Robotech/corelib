@@ -36,7 +36,7 @@ const (
 //
 // Разделение не косметическое: домены импортируют ФОРМУ (чтобы говорить на одном
 // языке подписки) и НЕ обязаны импортировать глагол — его регистрирует общий
-// сервер `pkg/subscription`, один на платформу.
+// сервер `corelib/subscription`, один на платформу.
 // SubscriptionMessage — то, что едет по потоку: ЛИБО служебное сообщение
 // открытия, ЛИБО событие.
 //
@@ -145,7 +145,7 @@ const file_kacho_cloud_subscription_subscription_service_proto_rawDesc = "" +
 	"\x05event\x18\x02 \x01(\v2+.kacho.cloud.subscription.SubscriptionEventH\x00R\x05eventB\t\n" +
 	"\amessage2\xb9\x01\n" +
 	"\x1bInternalSubscriptionService\x12\x99\x01\n" +
-	"\tSubscribe\x12-.kacho.cloud.subscription.SubscriptionRequest\x1a-.kacho.cloud.subscription.SubscriptionMessage\",\x8a\xb5\x18\x1fplatform.subscription.subscribe\xa2\xb5\x18\x011\xb0\xb5\x18\x010\x01BOZMgithub.com/PRO-Robotech/kacho/pkg/api/kacho/cloud/subscription;subscriptionv1b\x06proto3"
+	"\tSubscribe\x12-.kacho.cloud.subscription.SubscriptionRequest\x1a-.kacho.cloud.subscription.SubscriptionMessage\",\x8a\xb5\x18\x1fplatform.subscription.subscribe\xa2\xb5\x18\x011\xb0\xb5\x18\x010\x01BMZKgithub.com/PRO-Robotech/corelib/api/kacho/cloud/subscription;subscriptionv1b\x06proto3"
 
 var (
 	file_kacho_cloud_subscription_subscription_service_proto_rawDescOnce sync.Once

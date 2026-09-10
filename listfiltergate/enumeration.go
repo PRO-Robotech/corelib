@@ -69,6 +69,7 @@ import (
 	"go/ast"
 	"os"
 	"path/filepath"
+	"reflect"
 	"regexp"
 	"sort"
 	"strings"
@@ -346,13 +347,46 @@ func anyShared(sources []EnumerationSource) bool {
 	return false
 }
 
-// sharedFoundationModule is the module a Shared source resolves against. Today's
-// only Shared source (pkg/listnarrow) lives here, at the outer kacho module —
-// never inside a service's own nested one (services/iam declares module kaname).
-const sharedFoundationModule = "github.com/PRO-Robotech/kacho"
+// ownModuleAnchor exists so that the import path of THIS package can be read at
+// run time. It carries no value and is never instantiated outside ownModulePath.
+type ownModuleAnchor struct{}
+
+// ownModulePath is the import path of this package, read from the package itself.
+//
+// It is DERIVED, never named by a constant, and the difference is not stylistic.
+// `pkg/listfiltergate` is classed `оснастка сборки` and `pkg/listnarrow` — the only
+// Shared source today — is classed `corelib`: both leave for the foundation module
+// when `pkg/` is published, so a constant naming the platform module would outlive
+// its subject on the day of the move. It would do so in the worst way available —
+// the walk-up would meet the foundation's own go.mod, fail to recognise the module
+// it declares, walk PAST it to the filesystem root and report "no go.mod declaring
+// …" about a tree that is perfectly well formed.
+//
+// The same derivation-from-place is how `pkg/grpcsrv` fixes the TLS guard's scope:
+// from the guard's own package, not from a path literal. Tree-wide, the class is
+// refused by `internal/repohygiene` TestModulePathConstantDoesNotOutliveItsModule;
+// here it is refused by construction, because nothing is left to outlive.
+func ownModulePath() string {
+	return reflect.TypeOf(ownModuleAnchor{}).PkgPath()
+}
+
+// moduleDeclIsOurs reports whether a module path declared by some go.mod is the
+// module that CONTAINS own — that is, whether the directory holding that go.mod is
+// the root this package (and the Shared sources beside it) is resolved from.
+//
+// Containment, not equality: the declaring module is a prefix of the package path
+// at a PATH SEGMENT boundary. Plain string prefix would accept a sibling module
+// whose name merely starts the same way, and equality would reject the monorepo,
+// where the module root sits two directories above this package.
+func moduleDeclIsOurs(decl, own string) bool {
+	if decl == "" || own == "" {
+		return false
+	}
+	return own == decl || strings.HasPrefix(own, decl+"/")
+}
 
 // moduleRootOf walks up from root until it finds the directory whose go.mod
-// declares sharedFoundationModule.
+// declares the module CONTAINING this package (ownModulePath, moduleDeclIsOurs).
 //
 // The module root is a FACT about the tree — a file that is there or is not —
 // rather than a count of path segments above the service. "services/<x> is two
@@ -374,6 +408,14 @@ const sharedFoundationModule = "github.com/PRO-Robotech/kacho"
 // with it while the run went on printing OK — the exact shape this gate exists to
 // refuse.
 func moduleRootOf(root string) (string, error) {
+	own := ownModulePath()
+	if own == "" {
+		return "", fmt.Errorf(
+			"Profile.EnumerationSources declares a Shared source, but the import path of " +
+				"this package could not be read — the module it is resolved against would then " +
+				"be derived from nothing, and a source that resolves to nothing removes the ban " +
+				"it derives while the run reports OK")
+	}
 	abs, err := filepath.Abs(root)
 	if err != nil {
 		return "", fmt.Errorf(
@@ -383,28 +425,29 @@ func moduleRootOf(root string) (string, error) {
 	}
 	for dir := abs; ; {
 		if raw, rerr := os.ReadFile(filepath.Join(dir, "go.mod")); rerr == nil { // #nosec G304 -- walk-up path under the tree the caller named
-			switch decl := moduleDeclOf(raw); decl {
-			case "":
+			decl := moduleDeclOf(raw)
+			switch {
+			case decl == "":
 				return "", fmt.Errorf(
 					"Profile.EnumerationSources declares a Shared source, and %s declares a go.mod, "+
 						"but it names no `module` line — the module root it is resolved from cannot "+
 						"be confirmed, so a source that resolves to nothing removes the ban it derives "+
 						"while the run reports OK", filepath.Join(dir, "go.mod"))
-			case sharedFoundationModule:
+			case moduleDeclIsOurs(decl, own):
 				return dir, nil
 			default:
-				// A REAL module, just not this one — a service nested in its own
-				// module (services/iam) sits inside a go.mod exactly like this.
-				// Walked past, not trusted: the shared foundation is further up.
+				// A REAL module, just not the one holding this package — a service
+				// nested in its own module (services/iam) sits inside a go.mod
+				// exactly like this. Walked past, not trusted: our root is further up.
 			}
 		}
 		parent := filepath.Dir(dir)
 		if parent == dir {
 			return "", fmt.Errorf(
-				"Profile.EnumerationSources declares a Shared source, but no go.mod declaring %s was "+
-					"found walking up from %s — the module root it is resolved from does not exist "+
-					"here, so the ban it derives would silently disappear while the gate reported OK",
-				sharedFoundationModule, abs)
+				"Profile.EnumerationSources declares a Shared source, but no go.mod declaring the "+
+					"module that holds %s was found walking up from %s — the module root it is "+
+					"resolved from does not exist here, so the ban it derives would silently "+
+					"disappear while the gate reported OK", own, abs)
 		}
 		dir = parent
 	}

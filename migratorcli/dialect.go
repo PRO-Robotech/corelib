@@ -183,7 +183,11 @@ func OpenDB(ctx context.Context, dsn string, spec DialectSpec, notices *NoticeRe
 	}
 	cfg.OnNotice = notices.Handler()
 
-	db := stdlib.OpenDB(*cfg)
+	// Порог, которым СЕРВЕР решает, отдавать ли уведомление, возвращается перед
+	// каждой миграцией: обработчик выше бесполезен на сообщении, которого сервер
+	// не отправил вовсе. Почему возврат стоит именно здесь, почему `RESET`, а не
+	// подстановка величины, и почему параметр один — noticethreshold.go (#2560).
+	db := stdlib.OpenDB(*cfg, stdlib.OptionResetSession(resetNoticeThreshold))
 	if err := dbready.Wait(ctx, db, dbready.Options{}); err != nil {
 		_ = db.Close()
 		// Текст нейтральный: сюда приходит И «не дождались» (ошибка уже несёт
