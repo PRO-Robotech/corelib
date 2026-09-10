@@ -1,0 +1,166 @@
+{{/*
+Copyright (c) PRO-Robotech
+SPDX-License-Identifier: Apache-2.0
+
+СОБСТВЕННЫЙ заголовок ЭТОГО ФАЙЛА, и он отличается от заголовка, который файл
+ЭМИТИРУЕТ, — ниже. Разница не косметическая, и до 2026-09-04 её не было видно,
+потому что лицензия в дереве была одна.
+
+Шаблон встраивается в пакет `pkg/quota` директивой `go:embed`, а пакет входит в
+граф зависимостей ВЫНЕСЕННОГО iam (предикат: `go list -deps ./services/iam/cmd/...
+| grep -c 'pkg/quota$'` → 1). Значит эти байты линкуются в бинарь под AGPL, и
+лицензия у них обязана быть пермиссивной — иначе §10 AGPL нарушен.
+
+Вывод же рендерится в миграции пяти BUSL-владельцев (`services/{vpc,nlb,registry,
+storage,compute}/internal/migrations/`), поэтому эмитируемый заголовок остаётся
+BUSL-1.1 — по уровню того каталога, куда файл ложится.
+
+Это действие комментария: оно рендерится в ПУСТОТУ, поэтому вывод генератора
+байт-в-байт прежний. Перепись генератора обязана сказать «без изменений 5».
+*/}}-- Copyright (c) PRO-Robotech
+-- SPDX-License-Identifier: BUSL-1.1
+--
+-- СГЕНЕРИРОВАНО ИЗ `pkg/quota/refusal.sql.tmpl`. РУКАМИ НЕ ПРАВИТЬ.
+-- Перегенерация: `go run ./tools/quota-refusal-migration`.
+
+-- =============================================================================
+-- Отказ учёта: один производитель на платформу, а не пять согласованных.
+-- =============================================================================
+-- Задача `PRO-Robotech/kacho#413`.
+--
+-- ЧТО БЫЛО НЕВЕРНО. Функция отказа существовала в пяти копиях — по одной у
+-- каждого владельца, — и копии УЖЕ разошлись. Два владельца называли носителя
+-- («% % has reached…»), три вписывали слово «project» литералом. Совпадение
+-- держалось на том, что носитель у них сегодня всегда проект: как только у
+-- владельца появляется носитель-родитель, один и тот же случай начинает
+-- читаться арендатором по-разному в разных доменах.
+--
+-- Тон и форма отказа — часть контракта. Междоменной байт-идентичности не держал
+-- ни один гейт, поэтому расхождение и не было замечено: каждая копия по
+-- отдельности защитима, а разницу видно только рядом.
+--
+-- ЧТО ВЫБРАНО КАНОНОМ И ПОЧЕМУ ЭТО НЕ МЕНЯЕТ ПОВЕДЕНИЯ. Канон — форма,
+-- НАЗЫВАЮЩАЯ носителя. На носителе-проекте она разворачивается в тот же текст
+-- побайтово («project prj-… has reached…»), поэтому для трёх владельцев,
+-- у которых носитель сегодня только проект, не меняется ничего. Для двух
+-- остальных сохраняется то, что у них уже было. Обратный выбор — литерал
+-- «project» — сделал бы отказ по родительскому носителю прямой неправдой.
+--
+-- ПОЧЕМУ ФАЙЛ ГЕНЕРИРУЕТСЯ, А НЕ СВЕРЯЕТСЯ ГЛАЗОМ. У каждого владельца своя
+-- база, поэтому физически функция обязана быть у каждого своя — «одно место»
+-- достижимо только как один ИСТОЧНИК. Источник — шаблон рядом; файлы
+-- рендерятся из него, а гейт дерева перерендеривает и сравнивает побайтово.
+-- Правка копии руками краснеет; правка шаблона расходится по всем сразу.
+
+-- +goose Up
+-- +goose StatementBegin
+SET search_path TO {{.SearchPath}};
+
+-- -----------------------------------------------------------------------------
+-- ЕДИНСТВЕННЫЙ производитель отказа учёта.
+-- -----------------------------------------------------------------------------
+-- Зовётся ТОЛЬКО тогда, когда списание или совещательная проверка уже
+-- установили, что места нет. Сама ничего не решает — она классифицирует уже
+-- случившийся отказ и облекает его в контракт: текст, SQLSTATE и машинные
+-- подробности.
+--
+-- Различие двух исходов несущее, а не косметическое: «строки нет» требует от
+-- администратора ЗАВЕСТИ потолок, «строка полна» — ПОДНЯТЬ его. Один код на оба
+-- послал бы его искать, что понизить, там, где ничего не назначено.
+--
+-- Носитель НАЗЫВАЕТСЯ, а не подразумевается: у владельца, считающего вид в
+-- родительском ресурсе, «project» было бы прямой неправдой, а арендатор,
+-- упёршийся в предел родителя, не понял бы, что именно поднимать.
+CREATE OR REPLACE FUNCTION {{.Q}}kacho_quota_refuse(
+    v_carrier_type text,
+    v_carrier_id   text,
+    v_kind         text
+)
+RETURNS void
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    v_limit bigint;
+    v_used  bigint;
+BEGIN
+    SELECT limit_value, used INTO v_limit, v_used
+      FROM {{.Q}}project_resource_quotas
+     WHERE carrier_type = v_carrier_type AND carrier_id = v_carrier_id AND kind = v_kind;
+
+    IF FOUND THEN
+        RAISE EXCEPTION '% % has reached its limit of % %',
+                        v_carrier_type, v_carrier_id, v_limit, v_kind
+            USING ERRCODE = 'KQ001',
+                  DETAIL  = jsonb_build_object(
+                                'carrier_type', v_carrier_type,
+                                'carrier_id',   v_carrier_id,
+                                'kind',         v_kind,
+                                'limit',        v_limit,
+                                'used',         v_used)::text;
+    END IF;
+
+    RAISE EXCEPTION '% % has no ceiling stated for %', v_carrier_type, v_carrier_id, v_kind
+        USING ERRCODE = 'KQ002',
+              DETAIL  = jsonb_build_object(
+                            'carrier_type', v_carrier_type,
+                            'carrier_id',   v_carrier_id,
+                            'kind',         v_kind)::text;
+END;
+$$;
+
+COMMENT ON FUNCTION {{.Q}}kacho_quota_refuse(text, text, text) IS
+    'the ONLY producer of a quota refusal, generated for every owner from one '
+    'template: both the advisory read and the authoritative charge call it, so '
+    'their text, SQLSTATE and details cannot drift apart — there is one source, '
+    'not five agreeing copies';
+
+-- -----------------------------------------------------------------------------
+-- Совещательная полоса.
+-- -----------------------------------------------------------------------------
+-- Возвращает void, когда место есть, и отказывает через единственного
+-- производителя, когда его нет. Ничего не пишет: чтение остаётся чтением.
+--
+-- Отдельная функция, а не запрос из Go, ровно ради байт-идентичности: запрос из
+-- Go пришлось бы снабдить СВОИМ текстом отказа, и второе место завелось бы
+-- обратно.
+CREATE OR REPLACE FUNCTION {{.Q}}kacho_quota_admit(
+    v_carrier_type text,
+    v_carrier_id   text,
+    v_kind         text
+)
+RETURNS void
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    v_ok boolean;
+BEGIN
+    SELECT used < limit_value INTO v_ok
+      FROM {{.Q}}project_resource_quotas
+     WHERE carrier_type = v_carrier_type AND carrier_id = v_carrier_id AND kind = v_kind;
+
+    IF COALESCE(v_ok, false) THEN
+        RETURN;
+    END IF;
+
+    PERFORM {{.Q}}kacho_quota_refuse(v_carrier_type, v_carrier_id, v_kind);
+END;
+$$;
+
+COMMENT ON FUNCTION {{.Q}}kacho_quota_admit(text, text, text) IS
+    'advisory band: says whether a slot is available WITHOUT taking it. Never a '
+    'decision — the decision is the conditional UPDATE of the charging trigger; '
+    'this exists so the tenant is refused early and in the same words';
+-- +goose StatementEnd
+
+-- +goose Down
+-- +goose StatementBegin
+SET search_path TO {{.SearchPath}};
+
+-- Откат снимает совещательную полосу и производителя отказа. Тело триггерной
+-- функции при этом НЕ трогается: оно зовёт производителя по имени, и если
+-- откатывать этот файл в одиночку, звать станет некого. Откат имеет смысл
+-- только вместе с откатом всей полосы учёта — это сказано здесь, потому что
+-- иначе следующий читатель примет обратимость за безопасность.
+DROP FUNCTION IF EXISTS {{.Q}}kacho_quota_admit(text, text, text);
+DROP FUNCTION IF EXISTS {{.Q}}kacho_quota_refuse(text, text, text);
+-- +goose StatementEnd

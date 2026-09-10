@@ -1,0 +1,429 @@
+// Copyright (c) PRO-Robotech
+// SPDX-License-Identifier: Apache-2.0
+
+package authz
+
+import (
+	"errors"
+	"fmt"
+)
+
+// ObjectExtractor извлекает (object_type, object_id) из request'а конкретного
+// RPC.
+//
+// Для типичных RPC (Get/Update/Delete на ресурс) — возвращает фиксированный
+// object_type из RPCEntry и динамический object_id из request'а (например
+// `GetNetworkRequest.network_id`).
+//
+// Для scope-conditional RPC (например `iam.AccessBindingService.Upsert`, где
+// scope в request: account / project / resource) — возвращает оба значения
+// зависимо от полей request'а.
+type ObjectExtractor func(req any) (objectType string, objectID string, err error)
+
+// StaticExtractor — helper для типичного случая, когда object_type фиксирован
+// в RPCEntry, а ID extract'ится из конкретного поля request'а.
+//
+// Пример:
+//
+//	"/kacho.cloud.vpc.v1.NetworkService/Get": {
+//	    Relation: "viewer",
+//	    Extract:  authz.StaticExtractor("vpc_network", func(req any) (string, error) {
+//	        return req.(*vpcv1.GetNetworkRequest).GetNetworkId(), nil
+//	    }),
+//	},
+func StaticExtractor(objectType string, extractID func(req any) (string, error)) ObjectExtractor {
+	return func(req any) (string, string, error) {
+		id, err := extractID(req)
+		if err != nil {
+			return "", "", err
+		}
+		return objectType, id, nil
+	}
+}
+
+// RPCEntry — описание прав, требуемых на конкретный RPC.
+//
+// НЕ ЗАПОЛНЯЕТСЯ РУКАМИ. Запись выводится из аннотаций метода в proto —
+// `pkg/authz/catalogderive`, — то есть из того же источника, из которого
+// генерируется каталог прав шлюза:
+//
+//	func PermissionMap() authz.RPCMap {
+//	    return catalogderive.MustDerive("kacho.cloud.vpc.v1", "kacho.cloud.operation")
+//	}
+//
+// Литеральная карта рядом с выведенной — второе объявление одного и того же
+// права: действующим требованием становится их пересечение, а пересечение не
+// записано ни в одном документе, по которому выдают права. За этим следит
+// internal/repohygiene TestNoServiceDeclaresItsPermissionsASecondTime.
+type RPCEntry struct {
+	// Relation — FGA-relation, требуемое на object'е.
+	// "viewer" | "editor" | "admin" | "use" | "start_stop" | etc.
+	Relation string
+
+	// Extract — функция, извлекающая (object_type, object_id) из request'а.
+	// Возвращаемый objectType+":"+objectID составляет FGA object string.
+	//
+	// Для статичных object_type — используй StaticExtractor.
+	// Для scope-conditional — пиши full ObjectExtractor.
+	Extract ObjectExtractor
+
+	// Public — если true, RPC освобожден от per-RPC tenant-authz Check
+	// (exempt). Default false → Check энфорсится. Имя историческое: «public»
+	// здесь означает «не требует tenant-authz» (напр. OperationService.Get,
+	// который авторизуется на data-уровне), а не «доступен извне».
+	//
+	// Internal RPC, поднятый на :9091, ОБЯЗАН присутствовать в RPCMap: либо с
+	// Relation (Check по своему tier), либо Public=true для явного exempt'а.
+	// Не-замапленный RPC fail-closed — name-based исключений нет.
+	Public bool
+
+	// ScopeFiltered — если true, interceptor НЕ делает
+	// single-object Check для этого RPC: RPC сам авторизует на data-уровне
+	// (scope-filter List — handler читает страницу и проверяет права на её
+	// идентификаторах через `AuthorizeService.BatchCheck`, возвращая 200 +
+	// filtered, EMPTY если доступа нет). Единичный per-RPC Check здесь
+	// семантически неверен — он отверг бы весь вызов `no path` 403 ДО того, как
+	// scope-filter отработает.
+	//
+	// NB: спрашивать «перечисли ВСЕ объекты, которые subject'у можно» для этого
+	// ЗАПРЕЩЕНО. Такой глагол на этой поверхности был и СНЯТ: он не был
+	// постраничен by construction — продолжения у ответа не существовало, — и
+	// объекты сверх потолка молча выпадали из выдачи при живых правах. Только
+	// per-object проверка страницы.
+	//
+	// СУБЪЕКТ ПРИ ЭТОМ ОБЯЗАТЕЛЕН. Interceptor извлекает его ДО ветвления на это
+	// поле и fail-close'ит запрос, который не называет никого (см. authorize()).
+	// Снимается ровно единичный Check — не выяснение личности: под
+	// scope-filtered RPC нет второго рубежа (per-RPC Check отсутствует по
+	// построению), поэтому неназванный вызывающий плюс отсутствующий или
+	// деградировавший фильтр — полный обход. Отсечка безусловна и не зависит ни
+	// от режима, ни от того, подвешен ли фильтр.
+	//
+	// Отличие от Public: ScopeFiltered RPC требует аутентификации и авторизуется
+	// на уровне данных (страница/батч → вопрос про её идентификаторы). Public —
+	// «вообще вне tenant-authz», и allow отдаётся ДО чтения субъекта, поэтому
+	// применим ТОЛЬКО там, где авторизация есть в другом месте (предикат
+	// владельца в SQL у OperationService) либо где ответ — глобальный справочник,
+	// который обязан читать каждый аутентифицированный. Mapping в
+	// `DecisionInternal` (skip) — общий, но смысл разный, поэтому отдельное поле.
+	ScopeFiltered bool
+
+	// HideExistence — отказ на этом RPC обязан прийти как NOT_FOUND ТЕКСТОМ
+	// владельца, а не как PermissionDenied.
+	//
+	// Пообъектное чтение (`/Get` на глагольном `v_get`) скрывает существование
+	// БЕЗ этого поля — оно выводится из формы RPC, ровно как на крае
+	// (`CatalogEntry.HidesExistenceOnDeny`). Поле нужно там, где вывести нельзя:
+	// МУТАЦИЯ, которую край помечает скрывающей явно (registry Update/Delete в
+	// каталоге несут `hide_existence`). Без него сервис отвечал бы 403 на тот же
+	// запрос, на который край отвечает 404, и вызывающий отличал бы «нет
+	// доступа» от «нет такого» по одному лишь коду.
+	//
+	// Поле НЕ включает скрытие само по себе: текст берётся из таблицы владельцев
+	// (hide_existence.go), поэтому тип объекта без текста и вызов без
+	// конкретного id остаются отказом — придумывать «not found» не из чего.
+	HideExistence bool
+
+	// Permission — строка из permission-catalog в формате
+	// `<module>.<resource>.<verb>` (напр. `loadbalancer.networkLoadBalancers.getTargetStates`),
+	// предназначена для будущего fine-grained Check.
+	//
+	// Сейчас interceptor ее НЕ читает — Check идет по полю Relation как
+	// раньше. Permission заполняется параллельно в per-service
+	// PermissionMap'ах, чтобы при переключении на fine-grained model
+	// (relation → permission per RPC) был drop-in путь без переписывания
+	// proto-stubs / extractors. Optional: zero-value ("") допустим и
+	// означает «пока не каталогизировано».
+	Permission string
+}
+
+// RPCMap — карта `<FullMethod>` → RPCEntry. Передается в Interceptor.
+//
+// FullMethod (grpc-go convention): "/<package>.<service>/<method>", напр.
+// "/kacho.cloud.vpc.v1.NetworkService/Get".
+type RPCMap map[string]RPCEntry
+
+// Lookup возвращает RPCEntry, ok — если найден.
+func (m RPCMap) Lookup(fullMethod string) (RPCEntry, bool) {
+	e, ok := m[fullMethod]
+	return e, ok
+}
+
+// Decision — что interceptor решил сделать с RPC.
+type Decision int
+
+const (
+	// DecisionAllowed — разрешено (Check вернул allowed=true или break-glass).
+	DecisionAllowed Decision = iota
+	// DecisionDenied — отказано (Check вернул allowed=false).
+	DecisionDenied
+	// DecisionUnavailable — FGA / kaname недоступны (fail-closed).
+	DecisionUnavailable
+	// DecisionUnmapped — RPC не в RPCMap (fail-closed по умолчанию).
+	DecisionUnmapped
+	// DecisionInternal — RPC помечен Public=false / internal — пропуск.
+	DecisionInternal
+	// DecisionRateLimited — превышен per-Principal rate limit on denied storm.
+	DecisionRateLimited
+	// DecisionNoPath — FGA нет пути к ресурсу: ресурс, скорее всего, не существует
+	// (нет hierarchy-tuple). Interceptor пропускает вызов к handler'у, который
+	// вернет NOT_FOUND из DB. Инициируется, когда CheckClient.Check() возвращает
+	// ErrNoPath.
+	DecisionNoPath
+	// DecisionHideExistence — object-scoped deny на СУЩЕСТВУЮЩИЙ ресурс, который
+	// caller не вправе видеть. Interceptor БЛОКИРУЕТ handler (в отличие от
+	// DecisionNoPath) и возвращает NOT_FOUND, скрывая факт существования
+	// (existence-hiding): tenant без доступа не должен отличить «есть-но-не-твой»
+	// от «нет такого». Инициируется, когда CheckClient.Check() возвращает
+	// ErrHideExistence (клиент сам сверил наличие объекта в своей БД).
+	DecisionHideExistence
+)
+
+// String — human-readable representation, используется в метриках / логах.
+func (d Decision) String() string {
+	switch d {
+	case DecisionAllowed:
+		return "allowed"
+	case DecisionDenied:
+		return "denied"
+	case DecisionUnavailable:
+		return "unavailable"
+	case DecisionUnmapped:
+		return "unmapped"
+	case DecisionInternal:
+		return "internal"
+	case DecisionRateLimited:
+		return "rate_limited"
+	case DecisionNoPath:
+		return "no_path"
+	case DecisionHideExistence:
+		return "hide_existence"
+	}
+	return "unknown"
+}
+
+// ErrUnmapped — RPC не покрыт RPCMap. Должен мапиться в `PermissionDenied`
+// (fail-closed). Метрика `kacho_authz_unmapped_total{rpc=...}` инкрементируется.
+var ErrUnmapped = errors.New("authz: RPC not mapped in PermissionMap")
+
+// ErrUnavailable — FGA / kaname.Check недоступны. fail-closed default.
+var ErrUnavailable = errors.New("authz: check service unavailable")
+
+// ErrPermissionDenied — FGA / kaname отвергли запрос (gRPC PermissionDenied).
+// Семантически отличается от ErrUnavailable: это легитимный denial subject'а,
+// а НЕ инфраструктурная недоступность. Caller должен мапить на gRPC
+// PermissionDenied (HTTP 403), а не Unavailable (HTTP 503) — иначе клиент
+// (UI / SDK) не отличит "у тебя нет прав" от "сервис не работает", и retry-логика
+// сделает хуже.
+//
+// Ранее listobjects.go оборачивал PermissionDenied
+// в ErrUnavailable через `fmt.Errorf("%w: %v", ErrUnavailable, err)` —
+// gRPC-код терялся в `%v`-formatting, caller'ы вынужденно возвращали 503.
+var ErrPermissionDenied = errors.New("authz: permission denied")
+
+// ErrNoPath — CheckClient.Check() sentinel: FGA вернул allowed=false с
+// причиной "no path" (нет hierarchy-tuple для объекта). Означает: ресурс
+// либо не существует, либо tuple еще не записан. Interceptor интерпретирует
+// это как DecisionNoPath и пропускает RPC к handler'у, который вернет
+// NOT_FOUND из DB.
+//
+// Используется только клиентами, которые имеют доступ к полю `reason`
+// в CheckResponse (kacho-compute, kacho-vpc). Другие клиенты могут игнорировать.
+var ErrNoPath = errors.New("authz: no FGA path to resource")
+
+// ErrHideExistence — CheckClient.Check() sentinel: object-scoped deny на ресурс,
+// который СУЩЕСТВУЕТ в БД сервиса, но caller не вправе его видеть. В отличие от
+// ErrNoPath (passthrough → handler сам отдаст NOT_FOUND для отсутствующего),
+// здесь объект есть — passthrough слил бы его. Interceptor БЛОКИРУЕТ handler и
+// возвращает NOT_FOUND (existence-hiding): «есть-но-не-твой» неотличимо от «нет».
+// Клиент возвращает этот sentinel, только сам сверив наличие объекта в своей БД.
+var ErrHideExistence = errors.New("authz: hide existence (deny on existing object)")
+
+// fgaReservedChar сообщает, способен ли символ изменить семантику FGA-токена
+// (object ИЛИ subject): ':' (граница type:id), '#' (userset-ссылка
+// type:id#relation), '@' и whitespace (' '/'\t'/'\n'). Единый набор для object- и
+// subject-санитизации — иначе один из путей доходит до FGA менее строго
+// проверенным, чем другой (defense-in-depth против userset-инъекции).
+func fgaReservedChar(r rune) bool {
+	switch r {
+	case ':', '#', '@', ' ', '\t', '\n':
+		return true
+	}
+	return false
+}
+
+// FormatObject форматирует FGA-object string: "<type>:<id>".
+// Возвращает err если type/id содержат FGA-разделители (':', '#', '@', whitespace)
+// — симметрично subject-пути (validSubjectID), чтобы attacker-controlled resource
+// id не мог сдвинуть границу type:id или образовать userset-ссылку.
+func FormatObject(objectType, objectID string) (string, error) {
+	if objectType == "" {
+		return "", fmt.Errorf("authz: empty object type")
+	}
+	if objectID == "" {
+		return "", fmt.Errorf("authz: empty object id")
+	}
+	for _, r := range objectType {
+		if fgaReservedChar(r) {
+			return "", fmt.Errorf("authz: invalid char in object type: %q", objectType)
+		}
+	}
+	for _, r := range objectID {
+		if fgaReservedChar(r) {
+			return "", fmt.Errorf("authz: invalid char in object id: %q", objectID)
+		}
+	}
+	return objectType + ":" + objectID, nil
+}
+
+// FormatSubject форматирует FGA-subject string из Principal'а.
+//
+// Mapping:
+//   - Principal{Type:"user", ID:"usr_xxx"}            → "user:usr_xxx"
+//   - Principal{Type:"service_account", ID:"sva_xxx"} → "service_account:sva_xxx"
+//   - Principal{Type:"system", ID:"bootstrap"}        → "user:bootstrap" (для аудита;
+//     обычно system-principal обходит interceptor через internal-path).
+//
+// Group-principal'ы в этом mapping'е не появляются: для group-binding'ов FGA
+// разрешает access через `group:<id>#member` tuple — но subject в Check всегда
+// конкретный user / SA (resolved от Principal в auth-interceptor'е).
+func FormatSubject(principalType, principalID string) string {
+	if principalID == "" || !validSubjectID(principalID) {
+		// Пустой либо содержащий FGA-разделители (':', '#', '@', whitespace) id —
+		// вырожденный/attack-случай. НЕ конкатенируем его в subject: 'usr_x#member'
+		// стал бы userset-ссылкой, 'usr_x:usr_y' сдвинул бы границу id. Мапим в
+		// неподбираемый sentinel → fail-closed (симметрично FormatObject, который
+		// отвергает те же символы). Первичный gate — defaultSubjectExtractor,
+		// отбивающий такой id ещё до Check; здесь — defense-in-depth для прямых
+		// вызовов FormatSubject.
+		principalID = "unknown"
+	}
+	switch principalType {
+	case "user", "service_account":
+		return principalType + ":" + principalID
+	default:
+		// system / anonymous / unknown — мапим как user (fallback аудит).
+		return "user:" + principalID
+	}
+}
+
+// TenantSubject — субъект модели прав для НАЗВАННОЙ пары «тип, идентификатор»,
+// либо отказ. Строгая дверь рядом с [FormatSubject].
+//
+// # Чем отличается от FormatSubject и почему нужны обе
+//
+// [FormatSubject] обязан вернуть строку ВСЕГДА: он зовётся на пути аудита, где
+// «никакого субъекта» — не исход, и потому сводит неизвестный тип к `user:`.
+// Для решения о доступе такое сведение недопустимо: оно ПРИДУМЫВАЕТ субъекта,
+// которым вызывающий не является.
+//
+// Здесь исход второй — «названным субъектом это не является», — и он нужен
+// всякому, кто по имени субъекта ЧТО-ТО НАХОДИТ: спрашивает право у модели,
+// сбрасывает записи кэша, закрывает открытые потоки по отзыву (kacho#1022).
+// Ключи всех троих обязаны совпадать ПО ПОСТРОЕНИЮ, поэтому кодек один: две
+// похожие сборки строки разошлись бы молча — обе непусты, обе выглядят
+// субъектом, а найти по второй нельзя ничего.
+//
+// Словарь ЗАКРЫТ и псевдонимов не признаёт (`usr`, `sva`, `serviceaccount`):
+// расширять его переписыванием входа значит заводить второй словарь.
+func TenantSubject(principalType, principalID string) (string, bool) {
+	switch principalType {
+	case "user", "service_account":
+	default:
+		return "", false
+	}
+	if principalID == "" || !validSubjectID(principalID) {
+		return "", false
+	}
+	return principalType + ":" + principalID, true
+}
+
+// SubjectNaming — ПОЧЕМУ пара «тип, идентификатор» не стала именем субъекта.
+//
+// # Зачем исход, если [TenantSubject] уже отвечает «нет»
+//
+// Отвечает — ОДНИМ значением на два несравнимых события, и тот, кто по имени
+// субъекта что-то НАХОДИТ, встречает оба. Строка, выданная ГРУППЕ, безымянна по
+// устройству продукта: удостоверение предъявляет участник, а не множество, и
+// потоков по множеству не заводится. Строка, чьего типа производитель не
+// проставил, безымянна по ДЕФЕКТУ: отзыв по ней не доедет ни до кэша поимённо,
+// ни до открытого потока.
+//
+// Считая их одним числом, наблюдатель получает величину, ненулевую в штатной
+// работе, — а на такую тревогу не вешают, и дефект остаётся в шуме нормы
+// (kacho#1463).
+//
+// # Почему разделяет НЕ второе значение [TenantSubject]
+//
+// Оно `false` и на группе, и на отсутствующем типе, и на типе вне словаря
+// продукта, и на непригодном идентификаторе — один ответ на оба исхода. Разделяет
+// САМ ТИП, известный вызывающему; здесь он сверяется со словарём продукта, а не
+// с непустотой строки: иначе тип-мусор («nonsense») попал бы в норму, и дефект
+// снова стал бы невидимым — только под другой корзиной.
+type SubjectNaming uint8
+
+const (
+	// SubjectUnnameable — назвать НЕЛЬЗЯ: типа нет вовсе, он вне словаря
+	// продукта, либо идентификатор непригоден. ДЕФЕКТ производителя.
+	//
+	// Ноль значения намеренно: величина, собранная без разбора, попадает в
+	// ГРОМКУЮ корзину. Обратный порядок прятал бы дефект в норме — ровно то,
+	// ради чего исход и разделён.
+	SubjectUnnameable SubjectNaming = iota
+	// SubjectNamed — имя собрано.
+	SubjectNamed
+	// SubjectUserset — тип назван, принадлежит словарю продукта и адресуемым
+	// принципалом НЕ является. НОРМА, а не потеря.
+	SubjectUserset
+)
+
+func (n SubjectNaming) String() string {
+	switch n {
+	case SubjectNamed:
+		return "named"
+	case SubjectUserset:
+		return "userset-kind"
+	default:
+		return "unnameable"
+	}
+}
+
+// usersetSubjectTypes — виды словаря продукта, которые адресуемым принципалом не
+// бывают by construction.
+//
+// Словарь субъектов продукта — `user | service_account | group`
+// (`domain.SubjectType` у владельца прав); адресуемое подмножество объявлено
+// выше в [TenantSubject]. Здесь названа РАЗНИЦА между ними, и названа она рядом
+// с подмножеством намеренно: разъедься эти два перечня — и вид, выпавший из
+// обоих, молча уехал бы в корзину дефекта, то есть поднял бы тревогу на норме.
+var usersetSubjectTypes = map[string]struct{}{
+	"group": {},
+}
+
+// NameTenantSubject — [TenantSubject] с НАЗВАННОЙ причиной отказа.
+//
+// Решение об адресуемости принимает та же дверь: второго словаря здесь нет, и
+// расширить его переписыванием входа по-прежнему нельзя.
+func NameTenantSubject(principalType, principalID string) (string, SubjectNaming) {
+	if subject, ok := TenantSubject(principalType, principalID); ok {
+		return subject, SubjectNamed
+	}
+	if _, userset := usersetSubjectTypes[principalType]; userset {
+		return "", SubjectUserset
+	}
+	return "", SubjectUnnameable
+}
+
+// validSubjectID возвращает false, если principal id содержит символ, способный
+// изменить семантику FGA-subject строки: ':' (сдвиг границы type:id), '#'
+// (userset-ссылка `type:id#relation`), '@' и whitespace (' '/'\t'/'\n'). Набор —
+// общий fgaReservedChar, симметричный с FormatObject (object- и subject-токены
+// санитизируются одинаково).
+func validSubjectID(id string) bool {
+	for _, r := range id {
+		if fgaReservedChar(r) {
+			return false
+		}
+	}
+	return true
+}
