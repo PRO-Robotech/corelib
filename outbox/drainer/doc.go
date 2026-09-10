@@ -93,5 +93,5 @@
 //
 // # См. также
 //
-//   - Writer-side (Emit): пакет github.com/PRO-Robotech/kacho/pkg/outbox
+//   - Writer-side (Emit): объемлющий пакет фундамента `outbox`
 package drainer

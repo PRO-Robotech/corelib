@@ -202,7 +202,7 @@ const file_corelib_authz_v1_authz_options_proto_rawDesc = "" +
 	"\x10required_acr_min\x12\x1e.google.protobuf.MethodOptions\x18Ԇ\x03 \x01(\tR\x0erequiredAcrMin:G\n" +
 	"\x0ehide_existence\x12\x1e.google.protobuf.MethodOptions\x18Ն\x03 \x01(\bR\rhideExistence:G\n" +
 	"\x0escope_filtered\x12\x1e.google.protobuf.MethodOptions\x18ֆ\x03 \x01(\bR\rscopeFiltered:E\n" +
-	"\rexempt_reason\x12\x1e.google.protobuf.MethodOptions\x18׆\x03 \x01(\tR\fexemptReasonB@Z>github.com/PRO-Robotech/kacho/pkg/api/corelib/authz/v1;authzv1b\x06proto3"
+	"\rexempt_reason\x12\x1e.google.protobuf.MethodOptions\x18׆\x03 \x01(\tR\fexemptReasonB>Z<github.com/PRO-Robotech/corelib/api/corelib/authz/v1;authzv1b\x06proto3"
 
 var (
 	file_corelib_authz_v1_authz_options_proto_rawDescOnce sync.Once

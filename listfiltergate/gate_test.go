@@ -28,9 +28,17 @@ var flatProfile = Profile{
 }
 
 // pkgProfile mirrors vpc/nlb: one package per resource, one transport type name.
+//
+// The anchor root used to name the layout of the ACCESS SERVICE, which has been
+// carved out into its own repository (its path is deliberately not quoted here —
+// a coordinate that resolves in another tree reads as one that resolves in this
+// one). The comment above already said "mirrors vpc/nlb", and those two anchor at
+// `internal/apps/kacho/api`; the fixture now says the same thing its comment does.
+// A synthetic path naming a layout no tree carries is not merely unused: it reads
+// as a coordinate of THIS tree, and the over-applied-rename gate says so.
 var pkgProfile = Profile{
 	Service:        "fixture-pkg",
-	AnchorRoot:     "internal/apps/kaname/api",
+	AnchorRoot:     "internal/apps/kacho/api",
 	PerPackage:     true,
 	ReceiverSuffix: "Handler",
 	Filters:        []string{"FilterVisibleIDs", "FilterVisiblePage"},
@@ -162,7 +170,7 @@ func (hd *InstanceHandler) List(ctx context.Context) error {
 			profile: pkgProfile,
 			// vpc's real shape: the use-case calls a helper, the helper calls the
 			// port. The walk has to follow both hops.
-			files: map[string]string{"internal/apps/kaname/api/network/handler.go": `package network
+			files: map[string]string{"internal/apps/kacho/api/network/handler.go": `package network
 
 type Handler struct{ list *ListNetworksUseCase }
 
@@ -186,7 +194,7 @@ func filterVisibleNetworks(ctx context.Context, filter ListFilter, rows []string
 		{
 			name:    "leak: the helper stops filtering, two hops down",
 			profile: pkgProfile,
-			files: map[string]string{"internal/apps/kaname/api/network/handler.go": `package network
+			files: map[string]string{"internal/apps/kacho/api/network/handler.go": `package network
 
 type Handler struct{ list *ListNetworksUseCase }
 
@@ -212,7 +220,7 @@ func filterVisibleNetworks(ctx context.Context, filter ListFilter, rows []string
 			name:    "compliant: the declaration may live in any file of the package",
 			profile: pkgProfile,
 			files: map[string]string{
-				"internal/apps/kaname/api/network/grpc_handler.go": `package network
+				"internal/apps/kacho/api/network/grpc_handler.go": `package network
 
 type Handler struct{ list *ListNetworksUseCase }
 
@@ -221,7 +229,7 @@ func (h *Handler) List(ctx context.Context) error {
 	return nil
 }
 `,
-				"internal/apps/kaname/api/network/list_usecase.go": `package network
+				"internal/apps/kacho/api/network/list_usecase.go": `package network
 
 type ListNetworksUseCase struct{ filter ListFilter }
 
@@ -235,7 +243,7 @@ func (u *ListNetworksUseCase) Execute(ctx context.Context) ([]string, error) {
 		{
 			name:    "reject: enumerate-then-narrow is not a per-page check",
 			profile: pkgProfile,
-			files: map[string]string{"internal/apps/kaname/api/network/handler.go": `package network
+			files: map[string]string{"internal/apps/kacho/api/network/handler.go": `package network
 
 type Handler struct{ list *ListNetworksUseCase }
 
@@ -258,7 +266,7 @@ func (u *ListNetworksUseCase) Execute(ctx context.Context) ([]string, error) {
 			name:    "compliant: a comment may EXPLAIN why enumeration is banned",
 			profile: pkgProfile,
 			// The converse of the case above: documenting the ban must not trip it.
-			files: map[string]string{"internal/apps/kaname/api/network/handler.go": `package network
+			files: map[string]string{"internal/apps/kacho/api/network/handler.go": `package network
 
 type Handler struct{ list *ListNetworksUseCase }
 
@@ -280,7 +288,7 @@ func (u *ListNetworksUseCase) Execute(ctx context.Context) ([]string, error) {
 			name:    "not a resource: a package with no public List is not judged",
 			profile: pkgProfile,
 			files: map[string]string{
-				"internal/apps/kaname/api/network/handler.go": `package network
+				"internal/apps/kacho/api/network/handler.go": `package network
 
 type Handler struct{ list *ListNetworksUseCase }
 
@@ -297,7 +305,7 @@ func (u *ListNetworksUseCase) Execute(ctx context.Context) ([]string, error) {
 }
 `,
 				// No List at all, and no filter either: it must not be a finding.
-				"internal/apps/kaname/api/operation/handler.go": `package operation
+				"internal/apps/kacho/api/operation/handler.go": `package operation
 
 type Handler struct{}
 
@@ -433,7 +441,7 @@ func TestAudit_UnattributedListIsAFinding(t *testing.T) {
 			profile: pkgProfile,
 			files: map[string]string{
 				// A properly named neighbour, so the run is not "examined nothing".
-				"internal/apps/kaname/api/network/handler.go": `package network
+				"internal/apps/kacho/api/network/handler.go": `package network
 
 type Handler struct{}
 
@@ -445,7 +453,7 @@ func (h *Handler) List(ctx context.Context) error {
 }
 `,
 				// Same shape, type named otherwise: it used to vanish from the census.
-				"internal/apps/kaname/api/subnet/handler.go": `package subnet
+				"internal/apps/kacho/api/subnet/handler.go": `package subnet
 
 type SubnetHandler struct{}
 
@@ -490,7 +498,7 @@ func (s *VolumeService) List(ctx context.Context) error {
 			name:    "MIRROR: every List attributed — silent",
 			profile: pkgProfile,
 			files: map[string]string{
-				"internal/apps/kaname/api/network/handler.go": `package network
+				"internal/apps/kacho/api/network/handler.go": `package network
 
 type Handler struct{}
 
@@ -505,7 +513,7 @@ func (h *Handler) List(ctx context.Context) error {
 				// nlb's announce/operation/shared are exactly this, and must not be
 				// coloured. Otherwise the plain census gap ("more packages than
 				// resources") would be the predicate, and it would fire on them.
-				"internal/apps/kaname/api/shared/helpers.go": `package shared
+				"internal/apps/kacho/api/shared/helpers.go": `package shared
 
 type Helper struct{}
 
@@ -518,7 +526,7 @@ func (h *Helper) Page(ctx context.Context) error { return nil }
 			name:    "MIRROR: List on a non-transport type is not the transport surface",
 			profile: pkgProfile,
 			files: map[string]string{
-				"internal/apps/kaname/api/network/handler.go": `package network
+				"internal/apps/kacho/api/network/handler.go": `package network
 
 type Handler struct{}
 
@@ -532,7 +540,7 @@ func (h *Handler) List(ctx context.Context) error {
 				// Parsed but NOT a transport declaration: the gate only ever looked at
 				// non-test files, and a repository adapter living beside the handler
 				// legitimately has a List. Colouring it would make the gate unusable.
-				"internal/apps/kaname/api/network/repo_test.go": `package network
+				"internal/apps/kacho/api/network/repo_test.go": `package network
 
 type fakeRepo struct{}
 
@@ -570,7 +578,7 @@ func TestAudit_NothingExaminedIsNotOK(t *testing.T) {
 		{
 			name:    "flat: the anchor root does not exist",
 			profile: flatProfile,
-			files:   map[string]string{"internal/apps/kaname/api/network/handler.go": "package network\n"},
+			files:   map[string]string{"internal/apps/kacho/api/network/handler.go": "package network\n"},
 		},
 		{
 			name:    "flat: the anchor root holds no public List",
@@ -585,7 +593,7 @@ func TestAudit_NothingExaminedIsNotOK(t *testing.T) {
 		{
 			name:    "per-package: the anchor root holds no package",
 			profile: pkgProfile,
-			files:   map[string]string{"internal/apps/kaname/api/doc.go": "package api\n"},
+			files:   map[string]string{"internal/apps/kacho/api/doc.go": "package api\n"},
 		},
 	}
 	for _, tc := range cases {

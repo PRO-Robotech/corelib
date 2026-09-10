@@ -127,7 +127,7 @@ const file_kacho_cloud_operation_operation_service_proto_rawDesc = "" +
 	"\foperation_id\x18\x01 \x01(\tR\voperationId2\xd4\x02\n" +
 	"\x10OperationService\x12\x96\x01\n" +
 	"\x03Get\x12*.kacho.cloud.operation.GetOperationRequest\x1a .kacho.cloud.operation.Operation\"A\x8a\xb5\x18\b<exempt>\xba\xb5\x18\x0fHANDLER_DECIDES\x82\xd3\xe4\x93\x02\x1c\x12\x1a/operations/{operation_id}\x12\xa6\x01\n" +
-	"\x06Cancel\x12-.kacho.cloud.operation.CancelOperationRequest\x1a .kacho.cloud.operation.Operation\"K\x8a\xb5\x18\b<exempt>\xba\xb5\x18\x0fHANDLER_DECIDES\x82\xd3\xe4\x93\x02&:\x01*\"!/operations/{operation_id}:cancelBIZGgithub.com/PRO-Robotech/kacho/pkg/api/kacho/cloud/operation;operationv1b\x06proto3"
+	"\x06Cancel\x12-.kacho.cloud.operation.CancelOperationRequest\x1a .kacho.cloud.operation.Operation\"K\x8a\xb5\x18\b<exempt>\xba\xb5\x18\x0fHANDLER_DECIDES\x82\xd3\xe4\x93\x02&:\x01*\"!/operations/{operation_id}:cancelBGZEgithub.com/PRO-Robotech/corelib/api/kacho/cloud/operation;operationv1b\x06proto3"
 
 var (
 	file_kacho_cloud_operation_operation_service_proto_rawDescOnce sync.Once

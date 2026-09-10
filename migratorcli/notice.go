@@ -161,6 +161,20 @@ const noticeCensusPrefix = "migration-notices"
 // Без этого хвоста «0 delivered» читалось бы как состояние ДО правки, когда
 // обработчика не было вовсе, — то есть перепись подтверждала бы ровно тот дефект,
 // который она заведена наблюдать.
+//
+// # Хвост НЕ утверждает, что цепочка молчала, — он этого не знает
+//
+// Прежняя редакция говорила «and the chain raised nothing». Клиент такого факта
+// не имеет: сообщение, не прошедшее порог `client_min_messages`, сервер не
+// отправляет вовсе, и приёмнику оно неотличимо от несказанного. Наблюдалось
+// дословно: цепочка, поднявшая уведомление после `SET client_min_messages =
+// warning`, дала перепись «0 delivered … the chain raised nothing» — то есть
+// утверждение о цепочке, сделанное вместо утверждения о доставке (#2560).
+//
+// Поэтому хвост называет ОБА условия нуля: обработчик стоял, а порог сессии
+// ничего выше себя не пропустил. Возврат порога живёт в noticethreshold.go и
+// делает первый случай штатным, но не отменяет второго: порог вправе поднять сам
+// оператор.
 func (r *NoticeRelay) Summary() string {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -168,7 +182,7 @@ func (r *NoticeRelay) Summary() string {
 	line := fmt.Sprintf("%s %s: %d delivered, %d suppressed, limit %d",
 		noticeCensusPrefix, r.service, r.delivered, r.suppressed, NoticeLimit)
 	if r.delivered == 0 && r.suppressed == 0 {
-		line += " — the handler was installed and the chain raised nothing"
+		line += " — the handler was installed; nothing above the session notice threshold reached it"
 	}
 	return line
 }

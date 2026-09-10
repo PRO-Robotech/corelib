@@ -109,7 +109,7 @@ const file_corelib_api_v1_operation_proto_rawDesc = "" +
 	"\tOperation\x12\x1a\n" +
 	"\bmetadata\x18\x01 \x01(\tR\bmetadata\x12\x1a\n" +
 	"\bresponse\x18\x02 \x01(\tR\bresponse:Y\n" +
-	"\toperation\x12\x1e.google.protobuf.MethodOptions\x18\xa6\xaa\x05 \x01(\v2\x19.corelib.api.v1.OperationR\toperationB<Z:github.com/PRO-Robotech/kacho/pkg/api/corelib/api/v1;apiv1b\x06proto3"
+	"\toperation\x12\x1e.google.protobuf.MethodOptions\x18\xa6\xaa\x05 \x01(\v2\x19.corelib.api.v1.OperationR\toperationB:Z8github.com/PRO-Robotech/corelib/api/corelib/api/v1;apiv1b\x06proto3"
 
 var (
 	file_corelib_api_v1_operation_proto_rawDescOnce sync.Once

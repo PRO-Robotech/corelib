@@ -440,7 +440,7 @@ type SubscriptionRequest_Position struct {
 	// граница по максимуму видимого — нет.
 	//
 	// Кодек позиции живёт там же, где объявлены прочие формы курсора этого
-	// дерева, — в пакете `pkg/pagetoken`, и объявляется СВОИМ типом. Уже
+	// дерева, — в пакете `corelib/pagetoken`, и объявляется СВОИМ типом. Уже
 	// объявленный там `Cursor` для неё НЕ ГОДИТСЯ: его семантика — «последняя
 	// ОТДАННАЯ строка», а это дословно та граница, которую обязательство выше и
 	// запрещает.
@@ -931,7 +931,7 @@ const file_kacho_cloud_subscription_subscription_proto_rawDesc = "" +
 	"\x12SubscriptionAnchor\x12#\n" +
 	"\x1fSUBSCRIPTION_ANCHOR_UNSPECIFIED\x10\x00\x12\r\n" +
 	"\tBEGINNING\x10\x01\x12\x0f\n" +
-	"\vCURRENT_END\x10\x02BOZMgithub.com/PRO-Robotech/kacho/pkg/api/kacho/cloud/subscription;subscriptionv1b\x06proto3"
+	"\vCURRENT_END\x10\x02BMZKgithub.com/PRO-Robotech/corelib/api/kacho/cloud/subscription;subscriptionv1b\x06proto3"
 
 var (
 	file_kacho_cloud_subscription_subscription_proto_rawDescOnce sync.Once
