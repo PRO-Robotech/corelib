@@ -144,13 +144,30 @@ type Watermark struct {
 //
 // Имя таблицы и колонки попадают в текст запроса, поэтому вызывающий обязан
 // подавать сюда СВОИ имена, а не пришедшие снаружи: наблюдение их не
-// экранирует. У механизма подписки за это отвечает [Journal.Validate]; у
-// прямого потребителя — то, что оба имени объявлены константами его же пакета.
+// экранирует. У прямого потребителя за это отвечает то, что оба имени
+// объявлены константами его же пакета; у сервера потока — проверка объявления
+// владельца, которая живёт вместе с сервером в репозитории платформы.
 func NewWatermark(table, positionColumn string, log *slog.Logger) *Watermark {
 	if log == nil {
 		log = slog.Default()
 	}
 	return newWatermark(table, positionColumn, log, time.Now)
+}
+
+// NewWatermarkWithClock — та же сборка с УПРАВЛЯЕМЫМИ часами.
+//
+// Объявлен экспортируемым, потому что [stallWarnAfter] измеряется ВРЕМЕНЕМ, а
+// сервер потока живёт в другом репозитории и обязан двигать часы сам, а не
+// ждать их. Прямому потребителю нужен [NewWatermark]: часы по умолчанию —
+// настоящие, и подменять их незачем.
+func NewWatermarkWithClock(table, positionColumn string, log *slog.Logger, now func() time.Time) *Watermark {
+	if log == nil {
+		log = slog.Default()
+	}
+	if now == nil {
+		now = time.Now
+	}
+	return newWatermark(table, positionColumn, log, now)
 }
 
 // newWatermark — та же сборка с УПРАВЛЯЕМЫМИ часами: [stallWarnAfter]

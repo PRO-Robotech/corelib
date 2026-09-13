@@ -15,7 +15,7 @@ package subscription
 // Проба разбирает ПЕРЕХОД состояния, а не запрос к базе: вход подаётся так же,
 // как его подаёт наблюдение, и потому воспроизводим без Postgres. Что то же
 // самое состояние производит НАСТОЯЩИЙ писатель, утверждает интеграционная
-// проба (`coldwatermark_integration_test.go`).
+// проба, живущая вместе с сервером потока в репозитории платформы.
 
 import (
 	"context"
@@ -118,33 +118,6 @@ func TestWatermarkEstablishedSeparatesNoPositionFromPositionZero(t *testing.T) {
 			t.Errorf("граница %d, ожидалась 42 — она не вправе двигаться до подтверждения", h.settled)
 		}
 	})
-}
-
-// TestResolveCursorSeatsFromNowOnTheSettledBoundary — подписчик без позиции
-// садится на границу, и садиться ему дают только на подтверждённую.
-//
-// Две другие ветви выбора курсора подтверждением не связаны, и это утверждается
-// здесь же: «с начала» и «с названной позиции» не спрашивают границу вовсе.
-func TestResolveCursorSeatsFromNowOnTheSettledBoundary(t *testing.T) {
-	s := &Server{}
-	h := newProbeWatermark()
-	h.observe(77, 1, nil)
-
-	got, err := s.resolveCursor(Start{}, h, 0)
-	if err != nil {
-		t.Fatalf("выбор курсора: %v", err)
-	}
-	if got != 77 {
-		t.Errorf("курсор %d, ожидался 77 — подписчик без позиции садится на границу", got)
-	}
-
-	got, err = s.resolveCursor(Start{FromBeginning: true}, h, 3)
-	if err != nil {
-		t.Fatalf("выбор курсора с начала: %v", err)
-	}
-	if got != 3 {
-		t.Errorf("курсор %d, ожидался 3 — «с начала» садится на пол удержанного", got)
-	}
 }
 
 // TestWatermarkSettlesUnderContinuousWriting — ПОДТВЕРЖДЕНИЕ НАСТУПАЕТ ПОД
