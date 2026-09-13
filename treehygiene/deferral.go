@@ -73,6 +73,16 @@ var deferralForms = []DeferralForm{
 	// что и русские образцы: написанные целиком, они сделали бы ЭТОТ файл
 	// нарушителем собственного запрета. Это не гипотеза — первая редакция
 	// перечня в монорепо дала четыре находки, все в этих строках.
+	// Класс границы `[\s;{(]` перед именем маркера — НЕСУЩИЙ, а не украшение:
+	// он и есть то, чем вызов через точку (`context.TODO()`, `pkg.FIXME()`)
+	// отличается от обращения к читателю кода. Прежде рядом стоял отдельный
+	// вычет имени функции стандартной библиотеки; он снят, потому что ветвь
+	// была НЕДОСТИЖИМА — измерено инъекцией: с отключённым вычетом вердикт
+	// суиты не изменился ни на одной пробе, а прямой замер по объединённому
+	// образцу дал «нет совпадения» на всех трёх написаниях вызова через точку,
+	// включая то, за которым стоит двоеточие. Ослабишь класс границы —
+	// свойство потеряется вместе с ним, и об этом скажет
+	// TestDottedCallIsNotADeferral.
 	{Seed: "TODO", Pattern: `(?m)(?:^|[\s;{(])TODO\s*(?:\([^)]*\))?\s*:`,
 		Example: "\t// " + "TODO" + ": дочинить"},
 	{Seed: "FIXME", Pattern: `(?m)(?:^|[\s;{(])FIXME\s*(?:\([^)]*\))?\s*:`,
@@ -153,12 +163,6 @@ func HasDeferralSeed(body string) bool {
 	}
 	return false
 }
-
-// deferralStdlibContext — имя функции стандартной библиотеки, синтаксически
-// неотличимое от формы с круглыми скобками. Собирается из частей по той же
-// причине, что и образцы: написанное целиком, оно сделало бы ЭТОТ файл
-// нарушителем собственного запрета.
-var deferralStdlibContext = regexp.MustCompile(`context\.` + "TODO" + `\(\)`)
 
 // DeferralSkip — вид, вычитаемый из области, и предикат его узнавания.
 //
@@ -383,12 +387,6 @@ func AuditDeferredWork(root string, skips []DeferralSkip) (
 		lines, mentions := deferralMarkedLines(body)
 		census.Mentions += mentions
 		for _, line := range lines {
-			// Строка, где единственное совпадение — имя функции стандартной
-			// библиотеки, отсрочкой не является.
-			if deferralStdlibContext.MatchString(line.text) &&
-				!deferralMarker.MatchString(deferralStdlibContext.ReplaceAllString(line.text, "")) {
-				continue
-			}
 			findings = append(findings, DeferralFinding{
 				Where: fmt.Sprintf("%s:%d", slashed, line.no),
 				Line:  strings.TrimSpace(line.text),

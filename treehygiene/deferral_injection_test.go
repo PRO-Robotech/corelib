@@ -135,24 +135,39 @@ func TestSubtractedKindIsTheConsumersAndItWorks(t *testing.T) {
 	}
 }
 
-// TestStdlibContextIsNotADeferral — ЗАКОННЫЙ БЛИЗНЕЦ, живой в обоих деревьях:
-// имя функции стандартной библиотеки отсрочкой не является.
+// TestDottedCallIsNotADeferral — ЗАКОННЫЙ БЛИЗНЕЦ, живой в обоих деревьях:
+// вызов функции через точку отсрочкой не является, даже когда за ним стоит
+// двоеточие.
 //
-// Положительный контроль стоит РЯДОМ и отличается ОДНИМ фактом: в той же строке
-// добавлена форма обращения к читателю кода. Без него молчание на имени функции
-// было бы неотличимо от разбора, разучившегося падать.
-func TestStdlibContextIsNotADeferral(t *testing.T) {
+// Держит это КЛАСС ГРАНИЦЫ в образце, а не отдельный вычет: прежде рядом стоял
+// вычет имени функции стандартной библиотеки, и инъекция показала, что его
+// ветвь недостижима — вердикт суиты не менялся при её отключении. Ветвь снята,
+// свойство осталось за тем, что его действительно держит, и проба переписана на
+// этого держателя.
+//
+// Фикстура выбрана так, чтобы РАЗЛИЧАТЬ: строка с вызовом через точку, за
+// которым идёт двоеточие, — законный Go (ключ в литерале карты) и ровно тот
+// вход, на котором ослабленный класс границы дал бы ложную находку.
+// Положительный контроль стоит РЯДОМ и отличается ОДНИМ фактом: в тот же файл
+// добавлена форма обращения к читателю кода.
+func TestDottedCallIsNotADeferral(t *testing.T) {
 	t.Parallel()
-	root := synthTree(t, map[string]string{
-		"internal/a/lawful.go": "package a\n\nimport \"context\"\n\n" +
-			"func F() { _ = context." + "TODO" + "() }\n",
-		"internal/b/defect.go": "package b\n\nimport \"context\"\n\n" +
-			"func F() { _ = context." + "TODO" + "() } // " + "TODO" + ": убрать\n",
+	head := "package a\n\nimport \"context\"\n\n"
+	call := "var m = map[context.Context]int{context." + "TODO" + "(): 1}\n"
+
+	lawful := synthTree(t, map[string]string{"internal/a/a.go": head + call})
+	found, _ := audit(t, lawful)
+	if len(found) != 0 {
+		t.Fatalf("вызов через точку принят за обещание: %+v — класс границы в "+
+			"образце перестал отличать обращение к читателю кода от вызова", found)
+	}
+
+	defect := synthTree(t, map[string]string{
+		"internal/a/a.go": head + call + "\n// " + "TODO" + ": убрать\n",
 	})
-	findings, _ := audit(t, root)
-	if len(findings) != 1 || !strings.Contains(findings[0].Where, "internal/b/defect.go") {
-		t.Fatalf("вычет имени функции стандартной библиотеки сработал не по существу: %+v",
-			findings)
+	promise, _ := audit(t, defect)
+	if len(promise) != 1 {
+		t.Fatalf("форма обращения в том же файле обязана находиться: %+v", promise)
 	}
 }
 
