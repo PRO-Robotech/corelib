@@ -5,7 +5,7 @@
 // versions:
 // 	protoc-gen-go v1.36.11
 // 	protoc        (unknown)
-// source: kacho/cloud/quota/v1/quota.proto
+// source: corelib/quota/v1/quota.proto
 
 package quotav1
 
@@ -76,11 +76,11 @@ func (x Quota_Scope) String() string {
 }
 
 func (Quota_Scope) Descriptor() protoreflect.EnumDescriptor {
-	return file_kacho_cloud_quota_v1_quota_proto_enumTypes[0].Descriptor()
+	return file_corelib_quota_v1_quota_proto_enumTypes[0].Descriptor()
 }
 
 func (Quota_Scope) Type() protoreflect.EnumType {
-	return &file_kacho_cloud_quota_v1_quota_proto_enumTypes[0]
+	return &file_corelib_quota_v1_quota_proto_enumTypes[0]
 }
 
 func (x Quota_Scope) Number() protoreflect.EnumNumber {
@@ -89,7 +89,7 @@ func (x Quota_Scope) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use Quota_Scope.Descriptor instead.
 func (Quota_Scope) EnumDescriptor() ([]byte, []int) {
-	return file_kacho_cloud_quota_v1_quota_proto_rawDescGZIP(), []int{0, 0}
+	return file_corelib_quota_v1_quota_proto_rawDescGZIP(), []int{0, 0}
 }
 
 // Quota — one ceiling as the tenant sees it: the limit, what is already spent
@@ -120,8 +120,9 @@ func (Quota_Scope) EnumDescriptor() ([]byte, []int) {
 // widened answer.
 //
 // READ-ONLY BY CONSTRUCTION. This message never appears in a request body. The
-// tenant reads; only the cloud administrator changes a value, through
-// `iam.v1.InternalLimitService` on the internal listener. The split is a
+// tenant reads; a value is changed only by the cloud administrator, through the
+// limit authority — a domain the access service has retired whole and which the
+// platform has not re-established (PRO-Robotech/kacho#2190). The split is a
 // permission boundary, not a convenience: a tenant able to raise their own
 // ceiling has no ceiling.
 type Quota struct {
@@ -143,7 +144,7 @@ type Quota struct {
 	// Without it "you are at 16 of 16" does not tell the tenant whether the number
 	// is their own override, their account's, or the platform's, and therefore does
 	// not tell them who can change it.
-	SourceScope Quota_Scope `protobuf:"varint,4,opt,name=source_scope,json=sourceScope,proto3,enum=kacho.cloud.quota.v1.Quota_Scope" json:"source_scope,omitempty"`
+	SourceScope Quota_Scope `protobuf:"varint,4,opt,name=source_scope,json=sourceScope,proto3,enum=corelib.quota.v1.Quota_Scope" json:"source_scope,omitempty"`
 	// Id of the object the winning scope names: an account id for ACCOUNT, a
 	// project id for PROJECT. Empty when the winner is DEFAULT, and empty ONLY
 	// then — the pairing mirrors `iam.v1.Limit`, where a DB CHECK enforces it.
@@ -164,7 +165,7 @@ type Quota struct {
 
 func (x *Quota) Reset() {
 	*x = Quota{}
-	mi := &file_kacho_cloud_quota_v1_quota_proto_msgTypes[0]
+	mi := &file_corelib_quota_v1_quota_proto_msgTypes[0]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -176,7 +177,7 @@ func (x *Quota) String() string {
 func (*Quota) ProtoMessage() {}
 
 func (x *Quota) ProtoReflect() protoreflect.Message {
-	mi := &file_kacho_cloud_quota_v1_quota_proto_msgTypes[0]
+	mi := &file_corelib_quota_v1_quota_proto_msgTypes[0]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -189,7 +190,7 @@ func (x *Quota) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Quota.ProtoReflect.Descriptor instead.
 func (*Quota) Descriptor() ([]byte, []int) {
-	return file_kacho_cloud_quota_v1_quota_proto_rawDescGZIP(), []int{0}
+	return file_corelib_quota_v1_quota_proto_rawDescGZIP(), []int{0}
 }
 
 func (x *Quota) GetKind() string {
@@ -241,16 +242,16 @@ func (x *Quota) GetCarrierId() string {
 	return ""
 }
 
-var File_kacho_cloud_quota_v1_quota_proto protoreflect.FileDescriptor
+var File_corelib_quota_v1_quota_proto protoreflect.FileDescriptor
 
-const file_kacho_cloud_quota_v1_quota_proto_rawDesc = "" +
+const file_corelib_quota_v1_quota_proto_rawDesc = "" +
 	"\n" +
-	" kacho/cloud/quota/v1/quota.proto\x12\x14kacho.cloud.quota.v1\"\xbc\x02\n" +
+	"\x1ccorelib/quota/v1/quota.proto\x12\x10corelib.quota.v1\"\xb8\x02\n" +
 	"\x05Quota\x12\x12\n" +
 	"\x04kind\x18\x01 \x01(\tR\x04kind\x12\x14\n" +
 	"\x05limit\x18\x02 \x01(\x03R\x05limit\x12\x12\n" +
-	"\x04used\x18\x03 \x01(\x03R\x04used\x12D\n" +
-	"\fsource_scope\x18\x04 \x01(\x0e2!.kacho.cloud.quota.v1.Quota.ScopeR\vsourceScope\x12&\n" +
+	"\x04used\x18\x03 \x01(\x03R\x04used\x12@\n" +
+	"\fsource_scope\x18\x04 \x01(\x0e2\x1d.corelib.quota.v1.Quota.ScopeR\vsourceScope\x12&\n" +
 	"\x0fsource_scope_id\x18\x05 \x01(\tR\rsourceScopeId\x12!\n" +
 	"\fcarrier_type\x18\x06 \x01(\tR\vcarrierType\x12\x1d\n" +
 	"\n" +
@@ -259,28 +260,28 @@ const file_kacho_cloud_quota_v1_quota_proto_rawDesc = "" +
 	"\x11SCOPE_UNSPECIFIED\x10\x00\x12\v\n" +
 	"\aDEFAULT\x10\x01\x12\v\n" +
 	"\aACCOUNT\x10\x02\x12\v\n" +
-	"\aPROJECT\x10\x03BBZ@github.com/PRO-Robotech/corelib/api/kacho/cloud/quota/v1;quotav1b\x06proto3"
+	"\aPROJECT\x10\x03B>Z<github.com/PRO-Robotech/corelib/api/corelib/quota/v1;quotav1b\x06proto3"
 
 var (
-	file_kacho_cloud_quota_v1_quota_proto_rawDescOnce sync.Once
-	file_kacho_cloud_quota_v1_quota_proto_rawDescData []byte
+	file_corelib_quota_v1_quota_proto_rawDescOnce sync.Once
+	file_corelib_quota_v1_quota_proto_rawDescData []byte
 )
 
-func file_kacho_cloud_quota_v1_quota_proto_rawDescGZIP() []byte {
-	file_kacho_cloud_quota_v1_quota_proto_rawDescOnce.Do(func() {
-		file_kacho_cloud_quota_v1_quota_proto_rawDescData = protoimpl.X.CompressGZIP(unsafe.Slice(unsafe.StringData(file_kacho_cloud_quota_v1_quota_proto_rawDesc), len(file_kacho_cloud_quota_v1_quota_proto_rawDesc)))
+func file_corelib_quota_v1_quota_proto_rawDescGZIP() []byte {
+	file_corelib_quota_v1_quota_proto_rawDescOnce.Do(func() {
+		file_corelib_quota_v1_quota_proto_rawDescData = protoimpl.X.CompressGZIP(unsafe.Slice(unsafe.StringData(file_corelib_quota_v1_quota_proto_rawDesc), len(file_corelib_quota_v1_quota_proto_rawDesc)))
 	})
-	return file_kacho_cloud_quota_v1_quota_proto_rawDescData
+	return file_corelib_quota_v1_quota_proto_rawDescData
 }
 
-var file_kacho_cloud_quota_v1_quota_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_kacho_cloud_quota_v1_quota_proto_msgTypes = make([]protoimpl.MessageInfo, 1)
-var file_kacho_cloud_quota_v1_quota_proto_goTypes = []any{
-	(Quota_Scope)(0), // 0: kacho.cloud.quota.v1.Quota.Scope
-	(*Quota)(nil),    // 1: kacho.cloud.quota.v1.Quota
+var file_corelib_quota_v1_quota_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
+var file_corelib_quota_v1_quota_proto_msgTypes = make([]protoimpl.MessageInfo, 1)
+var file_corelib_quota_v1_quota_proto_goTypes = []any{
+	(Quota_Scope)(0), // 0: corelib.quota.v1.Quota.Scope
+	(*Quota)(nil),    // 1: corelib.quota.v1.Quota
 }
-var file_kacho_cloud_quota_v1_quota_proto_depIdxs = []int32{
-	0, // 0: kacho.cloud.quota.v1.Quota.source_scope:type_name -> kacho.cloud.quota.v1.Quota.Scope
+var file_corelib_quota_v1_quota_proto_depIdxs = []int32{
+	0, // 0: corelib.quota.v1.Quota.source_scope:type_name -> corelib.quota.v1.Quota.Scope
 	1, // [1:1] is the sub-list for method output_type
 	1, // [1:1] is the sub-list for method input_type
 	1, // [1:1] is the sub-list for extension type_name
@@ -288,27 +289,27 @@ var file_kacho_cloud_quota_v1_quota_proto_depIdxs = []int32{
 	0, // [0:1] is the sub-list for field type_name
 }
 
-func init() { file_kacho_cloud_quota_v1_quota_proto_init() }
-func file_kacho_cloud_quota_v1_quota_proto_init() {
-	if File_kacho_cloud_quota_v1_quota_proto != nil {
+func init() { file_corelib_quota_v1_quota_proto_init() }
+func file_corelib_quota_v1_quota_proto_init() {
+	if File_corelib_quota_v1_quota_proto != nil {
 		return
 	}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
-			RawDescriptor: unsafe.Slice(unsafe.StringData(file_kacho_cloud_quota_v1_quota_proto_rawDesc), len(file_kacho_cloud_quota_v1_quota_proto_rawDesc)),
+			RawDescriptor: unsafe.Slice(unsafe.StringData(file_corelib_quota_v1_quota_proto_rawDesc), len(file_corelib_quota_v1_quota_proto_rawDesc)),
 			NumEnums:      1,
 			NumMessages:   1,
 			NumExtensions: 0,
 			NumServices:   0,
 		},
-		GoTypes:           file_kacho_cloud_quota_v1_quota_proto_goTypes,
-		DependencyIndexes: file_kacho_cloud_quota_v1_quota_proto_depIdxs,
-		EnumInfos:         file_kacho_cloud_quota_v1_quota_proto_enumTypes,
-		MessageInfos:      file_kacho_cloud_quota_v1_quota_proto_msgTypes,
+		GoTypes:           file_corelib_quota_v1_quota_proto_goTypes,
+		DependencyIndexes: file_corelib_quota_v1_quota_proto_depIdxs,
+		EnumInfos:         file_corelib_quota_v1_quota_proto_enumTypes,
+		MessageInfos:      file_corelib_quota_v1_quota_proto_msgTypes,
 	}.Build()
-	File_kacho_cloud_quota_v1_quota_proto = out.File
-	file_kacho_cloud_quota_v1_quota_proto_goTypes = nil
-	file_kacho_cloud_quota_v1_quota_proto_depIdxs = nil
+	File_corelib_quota_v1_quota_proto = out.File
+	file_corelib_quota_v1_quota_proto_goTypes = nil
+	file_corelib_quota_v1_quota_proto_depIdxs = nil
 }
