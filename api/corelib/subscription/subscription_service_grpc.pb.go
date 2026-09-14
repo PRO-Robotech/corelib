@@ -5,7 +5,7 @@
 // versions:
 // - protoc-gen-go-grpc v1.6.2
 // - protoc             (unknown)
-// source: kacho/cloud/subscription/subscription_service.proto
+// source: corelib/subscription/subscription_service.proto
 
 package subscriptionv1
 
@@ -22,7 +22,7 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	InternalSubscriptionService_Subscribe_FullMethodName = "/kacho.cloud.subscription.InternalSubscriptionService/Subscribe"
+	InternalSubscriptionService_Subscribe_FullMethodName = "/corelib.subscription.InternalSubscriptionService/Subscribe"
 )
 
 // InternalSubscriptionServiceClient is the client API for InternalSubscriptionService service.
@@ -58,7 +58,7 @@ const (
 //
 // # Один сервис на всех владельцев, а не по сервису на домен
 //
-// Полное имя метода одно (`/kacho.cloud.subscription.InternalSubscriptionService/Subscribe`),
+// Полное имя метода одно (`/corelib.subscription.InternalSubscriptionService/Subscribe`),
 // и каждый владелец журнала регистрирует ЭТОТ сервис на своём внутреннем
 // слушателе. Имена gRPC-сервисов уникальны в пределах процесса, а процессы у
 // владельцев разные — поэтому одно объявление обслуживает всех, и запись каталога
@@ -156,7 +156,7 @@ type InternalSubscriptionService_SubscribeClient = grpc.ServerStreamingClient[Su
 //
 // # Один сервис на всех владельцев, а не по сервису на домен
 //
-// Полное имя метода одно (`/kacho.cloud.subscription.InternalSubscriptionService/Subscribe`),
+// Полное имя метода одно (`/corelib.subscription.InternalSubscriptionService/Subscribe`),
 // и каждый владелец журнала регистрирует ЭТОТ сервис на своём внутреннем
 // слушателе. Имена gRPC-сервисов уникальны в пределах процесса, а процессы у
 // владельцев разные — поэтому одно объявление обслуживает всех, и запись каталога
@@ -242,7 +242,7 @@ type InternalSubscriptionService_SubscribeServer = grpc.ServerStreamingServer[Su
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
 var InternalSubscriptionService_ServiceDesc = grpc.ServiceDesc{
-	ServiceName: "kacho.cloud.subscription.InternalSubscriptionService",
+	ServiceName: "corelib.subscription.InternalSubscriptionService",
 	HandlerType: (*InternalSubscriptionServiceServer)(nil),
 	Methods:     []grpc.MethodDesc{},
 	Streams: []grpc.StreamDesc{
@@ -252,5 +252,5 @@ var InternalSubscriptionService_ServiceDesc = grpc.ServiceDesc{
 			ServerStreams: true,
 		},
 	},
-	Metadata: "kacho/cloud/subscription/subscription_service.proto",
+	Metadata: "corelib/subscription/subscription_service.proto",
 }

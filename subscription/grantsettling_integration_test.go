@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	subscriptionv1 "github.com/PRO-Robotech/corelib/api/kacho/cloud/subscription"
+	subscriptionv1 "github.com/PRO-Robotech/corelib/api/corelib/subscription"
 	"github.com/PRO-Robotech/corelib/listnarrow"
 	"github.com/PRO-Robotech/corelib/listnarrow/narrowtest"
 )

@@ -11,7 +11,7 @@ import (
 
 	"google.golang.org/protobuf/types/known/anypb"
 
-	subscriptionv1 "github.com/PRO-Robotech/corelib/api/kacho/cloud/subscription"
+	subscriptionv1 "github.com/PRO-Robotech/corelib/api/corelib/subscription"
 )
 
 // Journal — ВСЁ, что владелец приносит, подключаясь к общему серверу потока:
