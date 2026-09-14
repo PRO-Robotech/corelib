@@ -5,7 +5,7 @@
 // versions:
 // 	protoc-gen-go v1.36.11
 // 	protoc        (unknown)
-// source: kacho/cloud/subscription/subscription.proto
+// source: corelib/subscription/subscription.proto
 
 package subscriptionv1
 
@@ -66,11 +66,11 @@ func (x SubscriptionAnchor) String() string {
 }
 
 func (SubscriptionAnchor) Descriptor() protoreflect.EnumDescriptor {
-	return file_kacho_cloud_subscription_subscription_proto_enumTypes[0].Descriptor()
+	return file_corelib_subscription_subscription_proto_enumTypes[0].Descriptor()
 }
 
 func (SubscriptionAnchor) Type() protoreflect.EnumType {
-	return &file_kacho_cloud_subscription_subscription_proto_enumTypes[0]
+	return &file_corelib_subscription_subscription_proto_enumTypes[0]
 }
 
 func (x SubscriptionAnchor) Number() protoreflect.EnumNumber {
@@ -79,7 +79,7 @@ func (x SubscriptionAnchor) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use SubscriptionAnchor.Descriptor instead.
 func (SubscriptionAnchor) EnumDescriptor() ([]byte, []int) {
-	return file_kacho_cloud_subscription_subscription_proto_rawDescGZIP(), []int{0}
+	return file_corelib_subscription_subscription_proto_rawDescGZIP(), []int{0}
 }
 
 // Change — род изменения предмета.
@@ -121,11 +121,11 @@ func (x SubscriptionEvent_Change) String() string {
 }
 
 func (SubscriptionEvent_Change) Descriptor() protoreflect.EnumDescriptor {
-	return file_kacho_cloud_subscription_subscription_proto_enumTypes[1].Descriptor()
+	return file_corelib_subscription_subscription_proto_enumTypes[1].Descriptor()
 }
 
 func (SubscriptionEvent_Change) Type() protoreflect.EnumType {
-	return &file_kacho_cloud_subscription_subscription_proto_enumTypes[1]
+	return &file_corelib_subscription_subscription_proto_enumTypes[1]
 }
 
 func (x SubscriptionEvent_Change) Number() protoreflect.EnumNumber {
@@ -134,7 +134,7 @@ func (x SubscriptionEvent_Change) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use SubscriptionEvent_Change.Descriptor instead.
 func (SubscriptionEvent_Change) EnumDescriptor() ([]byte, []int) {
-	return file_kacho_cloud_subscription_subscription_proto_rawDescGZIP(), []int{2, 0}
+	return file_corelib_subscription_subscription_proto_rawDescGZIP(), []int{2, 0}
 }
 
 // Reason — почему состояния нет. Словарь закрыт: «прочее» здесь не
@@ -200,11 +200,11 @@ func (x SubscriptionEvent_StateUnavailable_Reason) String() string {
 }
 
 func (SubscriptionEvent_StateUnavailable_Reason) Descriptor() protoreflect.EnumDescriptor {
-	return file_kacho_cloud_subscription_subscription_proto_enumTypes[2].Descriptor()
+	return file_corelib_subscription_subscription_proto_enumTypes[2].Descriptor()
 }
 
 func (SubscriptionEvent_StateUnavailable_Reason) Type() protoreflect.EnumType {
-	return &file_kacho_cloud_subscription_subscription_proto_enumTypes[2]
+	return &file_corelib_subscription_subscription_proto_enumTypes[2]
 }
 
 func (x SubscriptionEvent_StateUnavailable_Reason) Number() protoreflect.EnumNumber {
@@ -213,7 +213,7 @@ func (x SubscriptionEvent_StateUnavailable_Reason) Number() protoreflect.EnumNum
 
 // Deprecated: Use SubscriptionEvent_StateUnavailable_Reason.Descriptor instead.
 func (SubscriptionEvent_StateUnavailable_Reason) EnumDescriptor() ([]byte, []int) {
-	return file_kacho_cloud_subscription_subscription_proto_rawDescGZIP(), []int{2, 0, 0}
+	return file_corelib_subscription_subscription_proto_rawDescGZIP(), []int{2, 0, 0}
 }
 
 // SubscriptionRequest — запрос подписки: чем сузить поток и с какого места его
@@ -334,7 +334,7 @@ type SubscriptionRequest struct {
 
 func (x *SubscriptionRequest) Reset() {
 	*x = SubscriptionRequest{}
-	mi := &file_kacho_cloud_subscription_subscription_proto_msgTypes[0]
+	mi := &file_corelib_subscription_subscription_proto_msgTypes[0]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -346,7 +346,7 @@ func (x *SubscriptionRequest) String() string {
 func (*SubscriptionRequest) ProtoMessage() {}
 
 func (x *SubscriptionRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_kacho_cloud_subscription_subscription_proto_msgTypes[0]
+	mi := &file_corelib_subscription_subscription_proto_msgTypes[0]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -359,7 +359,7 @@ func (x *SubscriptionRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SubscriptionRequest.ProtoReflect.Descriptor instead.
 func (*SubscriptionRequest) Descriptor() ([]byte, []int) {
-	return file_kacho_cloud_subscription_subscription_proto_rawDescGZIP(), []int{0}
+	return file_corelib_subscription_subscription_proto_rawDescGZIP(), []int{0}
 }
 
 func (x *SubscriptionRequest) GetKinds() []string {
@@ -414,7 +414,7 @@ type isSubscriptionRequest_Start interface {
 
 type SubscriptionRequest_Anchor struct {
 	// anchor — назвать место словом.
-	Anchor SubscriptionAnchor `protobuf:"varint,10,opt,name=anchor,proto3,enum=kacho.cloud.subscription.SubscriptionAnchor,oneof"`
+	Anchor SubscriptionAnchor `protobuf:"varint,10,opt,name=anchor,proto3,enum=corelib.subscription.SubscriptionAnchor,oneof"`
 }
 
 type SubscriptionRequest_Position struct {
@@ -575,7 +575,7 @@ type SubscriptionOpened struct {
 
 func (x *SubscriptionOpened) Reset() {
 	*x = SubscriptionOpened{}
-	mi := &file_kacho_cloud_subscription_subscription_proto_msgTypes[1]
+	mi := &file_corelib_subscription_subscription_proto_msgTypes[1]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -587,7 +587,7 @@ func (x *SubscriptionOpened) String() string {
 func (*SubscriptionOpened) ProtoMessage() {}
 
 func (x *SubscriptionOpened) ProtoReflect() protoreflect.Message {
-	mi := &file_kacho_cloud_subscription_subscription_proto_msgTypes[1]
+	mi := &file_corelib_subscription_subscription_proto_msgTypes[1]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -600,7 +600,7 @@ func (x *SubscriptionOpened) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SubscriptionOpened.ProtoReflect.Descriptor instead.
 func (*SubscriptionOpened) Descriptor() ([]byte, []int) {
-	return file_kacho_cloud_subscription_subscription_proto_rawDescGZIP(), []int{1}
+	return file_corelib_subscription_subscription_proto_rawDescGZIP(), []int{1}
 }
 
 func (x *SubscriptionOpened) GetPosition() string {
@@ -698,7 +698,7 @@ type SubscriptionEvent struct {
 	// change — род изменения. Словарь платформенный, в отличие от `kind`: действие
 	// потребителя зависит именно от него, и различать снос от правки обязан уметь
 	// всякий подписчик, не зная домена.
-	Change SubscriptionEvent_Change `protobuf:"varint,5,opt,name=change,proto3,enum=kacho.cloud.subscription.SubscriptionEvent_Change" json:"change,omitempty"`
+	Change SubscriptionEvent_Change `protobuf:"varint,5,opt,name=change,proto3,enum=corelib.subscription.SubscriptionEvent_Change" json:"change,omitempty"`
 	// Носитель нагрузки — ВЫБОР ИЗ ДВУХ ВЕТВЕЙ: состояние ЛИБО признак, что
 	// состояния нет.
 	//
@@ -721,7 +721,7 @@ type SubscriptionEvent struct {
 
 func (x *SubscriptionEvent) Reset() {
 	*x = SubscriptionEvent{}
-	mi := &file_kacho_cloud_subscription_subscription_proto_msgTypes[2]
+	mi := &file_corelib_subscription_subscription_proto_msgTypes[2]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -733,7 +733,7 @@ func (x *SubscriptionEvent) String() string {
 func (*SubscriptionEvent) ProtoMessage() {}
 
 func (x *SubscriptionEvent) ProtoReflect() protoreflect.Message {
-	mi := &file_kacho_cloud_subscription_subscription_proto_msgTypes[2]
+	mi := &file_corelib_subscription_subscription_proto_msgTypes[2]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -746,7 +746,7 @@ func (x *SubscriptionEvent) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SubscriptionEvent.ProtoReflect.Descriptor instead.
 func (*SubscriptionEvent) Descriptor() ([]byte, []int) {
-	return file_kacho_cloud_subscription_subscription_proto_rawDescGZIP(), []int{2}
+	return file_corelib_subscription_subscription_proto_rawDescGZIP(), []int{2}
 }
 
 func (x *SubscriptionEvent) GetPosition() string {
@@ -839,14 +839,14 @@ func (*SubscriptionEvent_StateUnavailable_) isSubscriptionEvent_Carrier() {}
 // подписчик узнаёт, что по этому конкретному событию состояния не будет.
 type SubscriptionEvent_StateUnavailable struct {
 	state         protoimpl.MessageState                    `protogen:"open.v1"`
-	Reason        SubscriptionEvent_StateUnavailable_Reason `protobuf:"varint,1,opt,name=reason,proto3,enum=kacho.cloud.subscription.SubscriptionEvent_StateUnavailable_Reason" json:"reason,omitempty"`
+	Reason        SubscriptionEvent_StateUnavailable_Reason `protobuf:"varint,1,opt,name=reason,proto3,enum=corelib.subscription.SubscriptionEvent_StateUnavailable_Reason" json:"reason,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
 func (x *SubscriptionEvent_StateUnavailable) Reset() {
 	*x = SubscriptionEvent_StateUnavailable{}
-	mi := &file_kacho_cloud_subscription_subscription_proto_msgTypes[3]
+	mi := &file_corelib_subscription_subscription_proto_msgTypes[3]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -858,7 +858,7 @@ func (x *SubscriptionEvent_StateUnavailable) String() string {
 func (*SubscriptionEvent_StateUnavailable) ProtoMessage() {}
 
 func (x *SubscriptionEvent_StateUnavailable) ProtoReflect() protoreflect.Message {
-	mi := &file_kacho_cloud_subscription_subscription_proto_msgTypes[3]
+	mi := &file_corelib_subscription_subscription_proto_msgTypes[3]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -871,7 +871,7 @@ func (x *SubscriptionEvent_StateUnavailable) ProtoReflect() protoreflect.Message
 
 // Deprecated: Use SubscriptionEvent_StateUnavailable.ProtoReflect.Descriptor instead.
 func (*SubscriptionEvent_StateUnavailable) Descriptor() ([]byte, []int) {
-	return file_kacho_cloud_subscription_subscription_proto_rawDescGZIP(), []int{2, 0}
+	return file_corelib_subscription_subscription_proto_rawDescGZIP(), []int{2, 0}
 }
 
 func (x *SubscriptionEvent_StateUnavailable) GetReason() SubscriptionEvent_StateUnavailable_Reason {
@@ -881,18 +881,18 @@ func (x *SubscriptionEvent_StateUnavailable) GetReason() SubscriptionEvent_State
 	return SubscriptionEvent_StateUnavailable_REASON_UNSPECIFIED
 }
 
-var File_kacho_cloud_subscription_subscription_proto protoreflect.FileDescriptor
+var File_corelib_subscription_subscription_proto protoreflect.FileDescriptor
 
-const file_kacho_cloud_subscription_subscription_proto_rawDesc = "" +
+const file_corelib_subscription_subscription_proto_rawDesc = "" +
 	"\n" +
-	"+kacho/cloud/subscription/subscription.proto\x12\x18kacho.cloud.subscription\x1a\x19google/protobuf/any.proto\"\xcb\x01\n" +
+	"'corelib/subscription/subscription.proto\x12\x14corelib.subscription\x1a\x19google/protobuf/any.proto\"\xc7\x01\n" +
 	"\x13SubscriptionRequest\x12\x14\n" +
 	"\x05kinds\x18\x01 \x03(\tR\x05kinds\x12\x1d\n" +
 	"\n" +
 	"project_id\x18\x02 \x01(\tR\tprojectId\x12\x10\n" +
-	"\x03ids\x18\x03 \x03(\tR\x03ids\x12F\n" +
+	"\x03ids\x18\x03 \x03(\tR\x03ids\x12B\n" +
 	"\x06anchor\x18\n" +
-	" \x01(\x0e2,.kacho.cloud.subscription.SubscriptionAnchorH\x00R\x06anchor\x12\x1c\n" +
+	" \x01(\x0e2(.corelib.subscription.SubscriptionAnchorH\x00R\x06anchor\x12\x1c\n" +
 	"\bposition\x18\v \x01(\tH\x00R\bpositionB\a\n" +
 	"\x05start\"\x86\x02\n" +
 	"\x12SubscriptionOpened\x12\x1a\n" +
@@ -902,20 +902,20 @@ const file_kacho_cloud_subscription_subscription_proto_rawDesc = "" +
 	"\x1bearliest_resumable_position\x18\x04 \x01(\tR\x19earliestResumablePosition\x12-\n" +
 	"\x12retains_everything\x18\x05 \x01(\bR\x11retainsEverything\x12\x1f\n" +
 	"\vknown_kinds\x18\x06 \x03(\tR\n" +
-	"knownKinds\"\x9a\x05\n" +
+	"knownKinds\"\x8e\x05\n" +
 	"\x11SubscriptionEvent\x12\x1a\n" +
 	"\bposition\x18\x01 \x01(\tR\bposition\x12\x12\n" +
 	"\x04kind\x18\x02 \x01(\tR\x04kind\x12\x1f\n" +
 	"\vresource_id\x18\x03 \x01(\tR\n" +
 	"resourceId\x12\x1d\n" +
 	"\n" +
-	"project_id\x18\x04 \x01(\tR\tprojectId\x12J\n" +
-	"\x06change\x18\x05 \x01(\x0e22.kacho.cloud.subscription.SubscriptionEvent.ChangeR\x06change\x12,\n" +
+	"project_id\x18\x04 \x01(\tR\tprojectId\x12F\n" +
+	"\x06change\x18\x05 \x01(\x0e2..corelib.subscription.SubscriptionEvent.ChangeR\x06change\x12,\n" +
 	"\x05state\x18\n" +
-	" \x01(\v2\x14.google.protobuf.AnyH\x00R\x05state\x12k\n" +
-	"\x11state_unavailable\x18\v \x01(\v2<.kacho.cloud.subscription.SubscriptionEvent.StateUnavailableH\x00R\x10stateUnavailable\x1a\xd9\x01\n" +
-	"\x10StateUnavailable\x12[\n" +
-	"\x06reason\x18\x01 \x01(\x0e2C.kacho.cloud.subscription.SubscriptionEvent.StateUnavailable.ReasonR\x06reason\"h\n" +
+	" \x01(\v2\x14.google.protobuf.AnyH\x00R\x05state\x12g\n" +
+	"\x11state_unavailable\x18\v \x01(\v28.corelib.subscription.SubscriptionEvent.StateUnavailableH\x00R\x10stateUnavailable\x1a\xd5\x01\n" +
+	"\x10StateUnavailable\x12W\n" +
+	"\x06reason\x18\x01 \x01(\x0e2?.corelib.subscription.SubscriptionEvent.StateUnavailable.ReasonR\x06reason\"h\n" +
 	"\x06Reason\x12\x16\n" +
 	"\x12REASON_UNSPECIFIED\x10\x00\x12\x14\n" +
 	"\x10NOT_SERIALIZABLE\x10\x01\x12\x10\n" +
@@ -931,38 +931,38 @@ const file_kacho_cloud_subscription_subscription_proto_rawDesc = "" +
 	"\x12SubscriptionAnchor\x12#\n" +
 	"\x1fSUBSCRIPTION_ANCHOR_UNSPECIFIED\x10\x00\x12\r\n" +
 	"\tBEGINNING\x10\x01\x12\x0f\n" +
-	"\vCURRENT_END\x10\x02BMZKgithub.com/PRO-Robotech/corelib/api/kacho/cloud/subscription;subscriptionv1b\x06proto3"
+	"\vCURRENT_END\x10\x02BIZGgithub.com/PRO-Robotech/corelib/api/corelib/subscription;subscriptionv1b\x06proto3"
 
 var (
-	file_kacho_cloud_subscription_subscription_proto_rawDescOnce sync.Once
-	file_kacho_cloud_subscription_subscription_proto_rawDescData []byte
+	file_corelib_subscription_subscription_proto_rawDescOnce sync.Once
+	file_corelib_subscription_subscription_proto_rawDescData []byte
 )
 
-func file_kacho_cloud_subscription_subscription_proto_rawDescGZIP() []byte {
-	file_kacho_cloud_subscription_subscription_proto_rawDescOnce.Do(func() {
-		file_kacho_cloud_subscription_subscription_proto_rawDescData = protoimpl.X.CompressGZIP(unsafe.Slice(unsafe.StringData(file_kacho_cloud_subscription_subscription_proto_rawDesc), len(file_kacho_cloud_subscription_subscription_proto_rawDesc)))
+func file_corelib_subscription_subscription_proto_rawDescGZIP() []byte {
+	file_corelib_subscription_subscription_proto_rawDescOnce.Do(func() {
+		file_corelib_subscription_subscription_proto_rawDescData = protoimpl.X.CompressGZIP(unsafe.Slice(unsafe.StringData(file_corelib_subscription_subscription_proto_rawDesc), len(file_corelib_subscription_subscription_proto_rawDesc)))
 	})
-	return file_kacho_cloud_subscription_subscription_proto_rawDescData
+	return file_corelib_subscription_subscription_proto_rawDescData
 }
 
-var file_kacho_cloud_subscription_subscription_proto_enumTypes = make([]protoimpl.EnumInfo, 3)
-var file_kacho_cloud_subscription_subscription_proto_msgTypes = make([]protoimpl.MessageInfo, 4)
-var file_kacho_cloud_subscription_subscription_proto_goTypes = []any{
-	(SubscriptionAnchor)(0),                        // 0: kacho.cloud.subscription.SubscriptionAnchor
-	(SubscriptionEvent_Change)(0),                  // 1: kacho.cloud.subscription.SubscriptionEvent.Change
-	(SubscriptionEvent_StateUnavailable_Reason)(0), // 2: kacho.cloud.subscription.SubscriptionEvent.StateUnavailable.Reason
-	(*SubscriptionRequest)(nil),                    // 3: kacho.cloud.subscription.SubscriptionRequest
-	(*SubscriptionOpened)(nil),                     // 4: kacho.cloud.subscription.SubscriptionOpened
-	(*SubscriptionEvent)(nil),                      // 5: kacho.cloud.subscription.SubscriptionEvent
-	(*SubscriptionEvent_StateUnavailable)(nil),     // 6: kacho.cloud.subscription.SubscriptionEvent.StateUnavailable
+var file_corelib_subscription_subscription_proto_enumTypes = make([]protoimpl.EnumInfo, 3)
+var file_corelib_subscription_subscription_proto_msgTypes = make([]protoimpl.MessageInfo, 4)
+var file_corelib_subscription_subscription_proto_goTypes = []any{
+	(SubscriptionAnchor)(0),                        // 0: corelib.subscription.SubscriptionAnchor
+	(SubscriptionEvent_Change)(0),                  // 1: corelib.subscription.SubscriptionEvent.Change
+	(SubscriptionEvent_StateUnavailable_Reason)(0), // 2: corelib.subscription.SubscriptionEvent.StateUnavailable.Reason
+	(*SubscriptionRequest)(nil),                    // 3: corelib.subscription.SubscriptionRequest
+	(*SubscriptionOpened)(nil),                     // 4: corelib.subscription.SubscriptionOpened
+	(*SubscriptionEvent)(nil),                      // 5: corelib.subscription.SubscriptionEvent
+	(*SubscriptionEvent_StateUnavailable)(nil),     // 6: corelib.subscription.SubscriptionEvent.StateUnavailable
 	(*anypb.Any)(nil),                              // 7: google.protobuf.Any
 }
-var file_kacho_cloud_subscription_subscription_proto_depIdxs = []int32{
-	0, // 0: kacho.cloud.subscription.SubscriptionRequest.anchor:type_name -> kacho.cloud.subscription.SubscriptionAnchor
-	1, // 1: kacho.cloud.subscription.SubscriptionEvent.change:type_name -> kacho.cloud.subscription.SubscriptionEvent.Change
-	7, // 2: kacho.cloud.subscription.SubscriptionEvent.state:type_name -> google.protobuf.Any
-	6, // 3: kacho.cloud.subscription.SubscriptionEvent.state_unavailable:type_name -> kacho.cloud.subscription.SubscriptionEvent.StateUnavailable
-	2, // 4: kacho.cloud.subscription.SubscriptionEvent.StateUnavailable.reason:type_name -> kacho.cloud.subscription.SubscriptionEvent.StateUnavailable.Reason
+var file_corelib_subscription_subscription_proto_depIdxs = []int32{
+	0, // 0: corelib.subscription.SubscriptionRequest.anchor:type_name -> corelib.subscription.SubscriptionAnchor
+	1, // 1: corelib.subscription.SubscriptionEvent.change:type_name -> corelib.subscription.SubscriptionEvent.Change
+	7, // 2: corelib.subscription.SubscriptionEvent.state:type_name -> google.protobuf.Any
+	6, // 3: corelib.subscription.SubscriptionEvent.state_unavailable:type_name -> corelib.subscription.SubscriptionEvent.StateUnavailable
+	2, // 4: corelib.subscription.SubscriptionEvent.StateUnavailable.reason:type_name -> corelib.subscription.SubscriptionEvent.StateUnavailable.Reason
 	5, // [5:5] is the sub-list for method output_type
 	5, // [5:5] is the sub-list for method input_type
 	5, // [5:5] is the sub-list for extension type_name
@@ -970,16 +970,16 @@ var file_kacho_cloud_subscription_subscription_proto_depIdxs = []int32{
 	0, // [0:5] is the sub-list for field type_name
 }
 
-func init() { file_kacho_cloud_subscription_subscription_proto_init() }
-func file_kacho_cloud_subscription_subscription_proto_init() {
-	if File_kacho_cloud_subscription_subscription_proto != nil {
+func init() { file_corelib_subscription_subscription_proto_init() }
+func file_corelib_subscription_subscription_proto_init() {
+	if File_corelib_subscription_subscription_proto != nil {
 		return
 	}
-	file_kacho_cloud_subscription_subscription_proto_msgTypes[0].OneofWrappers = []any{
+	file_corelib_subscription_subscription_proto_msgTypes[0].OneofWrappers = []any{
 		(*SubscriptionRequest_Anchor)(nil),
 		(*SubscriptionRequest_Position)(nil),
 	}
-	file_kacho_cloud_subscription_subscription_proto_msgTypes[2].OneofWrappers = []any{
+	file_corelib_subscription_subscription_proto_msgTypes[2].OneofWrappers = []any{
 		(*SubscriptionEvent_State)(nil),
 		(*SubscriptionEvent_StateUnavailable_)(nil),
 	}
@@ -987,18 +987,18 @@ func file_kacho_cloud_subscription_subscription_proto_init() {
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
-			RawDescriptor: unsafe.Slice(unsafe.StringData(file_kacho_cloud_subscription_subscription_proto_rawDesc), len(file_kacho_cloud_subscription_subscription_proto_rawDesc)),
+			RawDescriptor: unsafe.Slice(unsafe.StringData(file_corelib_subscription_subscription_proto_rawDesc), len(file_corelib_subscription_subscription_proto_rawDesc)),
 			NumEnums:      3,
 			NumMessages:   4,
 			NumExtensions: 0,
 			NumServices:   0,
 		},
-		GoTypes:           file_kacho_cloud_subscription_subscription_proto_goTypes,
-		DependencyIndexes: file_kacho_cloud_subscription_subscription_proto_depIdxs,
-		EnumInfos:         file_kacho_cloud_subscription_subscription_proto_enumTypes,
-		MessageInfos:      file_kacho_cloud_subscription_subscription_proto_msgTypes,
+		GoTypes:           file_corelib_subscription_subscription_proto_goTypes,
+		DependencyIndexes: file_corelib_subscription_subscription_proto_depIdxs,
+		EnumInfos:         file_corelib_subscription_subscription_proto_enumTypes,
+		MessageInfos:      file_corelib_subscription_subscription_proto_msgTypes,
 	}.Build()
-	File_kacho_cloud_subscription_subscription_proto = out.File
-	file_kacho_cloud_subscription_subscription_proto_goTypes = nil
-	file_kacho_cloud_subscription_subscription_proto_depIdxs = nil
+	File_corelib_subscription_subscription_proto = out.File
+	file_corelib_subscription_subscription_proto_goTypes = nil
+	file_corelib_subscription_subscription_proto_depIdxs = nil
 }
