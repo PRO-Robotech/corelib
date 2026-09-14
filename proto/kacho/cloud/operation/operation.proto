@@ -3,14 +3,14 @@
 
 syntax = "proto3";
 
-package corelib.operation;
+package kacho.cloud.operation;
 
 import "google/protobuf/any.proto";
 import "google/rpc/status.proto";
 import "google/protobuf/timestamp.proto";
 
 
-option go_package = "github.com/PRO-Robotech/corelib/api/corelib/operation;operationv1";
+option go_package = "github.com/PRO-Robotech/corelib/api/kacho/cloud/operation;operationv1";
 
 // An Operation resource — the result of an asynchronous (long-running) API request.
 message Operation {

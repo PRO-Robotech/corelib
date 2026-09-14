@@ -114,11 +114,7 @@ func Serve(ctx context.Context, d servicecontract.Descriptor, public, internal R
 		return fmt.Errorf("servicehost: %s не поднимается — карта прав не выводится из аннотаций "+
 			"дескрипторов, слинкованных в этот бинарь: %w", spec.Service, err)
 	}
-	cat, err := catalogOf(domains)
-	if err != nil {
-		return fmt.Errorf("servicehost: %s не поднимается — строки каталога не выводятся из "+
-			"разметки, слинкованной в это двоичное: %w", nameOf(spec), err)
-	}
+	cat := catalogOf(domains)
 
 	c, err := audit(spec, served, cat, rpcMap)
 	if err != nil {
@@ -508,14 +504,9 @@ func domainsOf(served servedSet) ([]string, error) {
 // catalogOf собирает строки каталога из АННОТАЦИЙ дескрипторов, слинкованных в
 // бинарь, — из того же источника, из которого генерируется каталог края.
 // Второго объявления не существует, поэтому расходиться нечему.
-//
-// ОШИБКА ОБХОДА ДОЕЗЖАЕТ ДО ВЫЗЫВАЮЩЕГО, А НЕ ГЛОТАЕТСЯ. Чтение разметки
-// отказывает, когда словарь разметки не приехал в это двоичное; пустая разметка
-// при этом читается как «проверки нет», то есть проглоченная ошибка объявила бы
-// ОСВОБОЖДЁННЫМ каждый метод процесса — и объявила бы молча, зелёным стартом.
-func catalogOf(domains []string) (catalogView, error) {
+func catalogOf(domains []string) catalogView {
 	out := catalogView{rows: map[servicecontract.MethodFQN]catalogRow{}}
-	err := catalogderive.RangeAnnotated(domains, func(fullMethod string, md protoreflect.MethodDescriptor, a catalogderive.Annotations) {
+	catalogderive.RangeAnnotated(domains, func(fullMethod string, md protoreflect.MethodDescriptor, a catalogderive.Annotations) {
 		m := servicecontract.MethodFQN(fullMethod)
 		dom, err := domainOf(m)
 		if err != nil {
@@ -536,10 +527,7 @@ func catalogOf(domains []string) (catalogView, error) {
 			ServerStreaming: md.IsStreamingServer(),
 		}
 	})
-	if err != nil {
-		return catalogView{}, err
-	}
-	return out, nil
+	return out
 }
 
 // unaryChain / streamChain — ПОРЯДОК ЗВЕНЬЕВ, один на все сервисы.

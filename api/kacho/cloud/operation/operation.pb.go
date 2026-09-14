@@ -5,7 +5,7 @@
 // versions:
 // 	protoc-gen-go v1.36.11
 // 	protoc        (unknown)
-// source: corelib/operation/operation.proto
+// source: kacho/cloud/operation/operation.proto
 
 package operationv1
 
@@ -79,7 +79,7 @@ type Operation struct {
 
 func (x *Operation) Reset() {
 	*x = Operation{}
-	mi := &file_corelib_operation_operation_proto_msgTypes[0]
+	mi := &file_kacho_cloud_operation_operation_proto_msgTypes[0]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -91,7 +91,7 @@ func (x *Operation) String() string {
 func (*Operation) ProtoMessage() {}
 
 func (x *Operation) ProtoReflect() protoreflect.Message {
-	mi := &file_corelib_operation_operation_proto_msgTypes[0]
+	mi := &file_kacho_cloud_operation_operation_proto_msgTypes[0]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -104,7 +104,7 @@ func (x *Operation) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Operation.ProtoReflect.Descriptor instead.
 func (*Operation) Descriptor() ([]byte, []int) {
-	return file_corelib_operation_operation_proto_rawDescGZIP(), []int{0}
+	return file_kacho_cloud_operation_operation_proto_rawDescGZIP(), []int{0}
 }
 
 func (x *Operation) GetId() string {
@@ -225,11 +225,11 @@ func (*Operation_Error) isOperation_Result() {}
 
 func (*Operation_Response) isOperation_Result() {}
 
-var File_corelib_operation_operation_proto protoreflect.FileDescriptor
+var File_kacho_cloud_operation_operation_proto protoreflect.FileDescriptor
 
-const file_corelib_operation_operation_proto_rawDesc = "" +
+const file_kacho_cloud_operation_operation_proto_rawDesc = "" +
 	"\n" +
-	"!corelib/operation/operation.proto\x12\x11corelib.operation\x1a\x19google/protobuf/any.proto\x1a\x17google/rpc/status.proto\x1a\x1fgoogle/protobuf/timestamp.proto\"\x84\x04\n" +
+	"%kacho/cloud/operation/operation.proto\x12\x15kacho.cloud.operation\x1a\x19google/protobuf/any.proto\x1a\x17google/rpc/status.proto\x1a\x1fgoogle/protobuf/timestamp.proto\"\x84\x04\n" +
 	"\tOperation\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12 \n" +
 	"\vdescription\x18\x02 \x01(\tR\vdescription\x129\n" +
@@ -247,33 +247,33 @@ const file_corelib_operation_operation_proto_rawDesc = "" +
 	" \x01(\tR\rprincipalType\x12!\n" +
 	"\fprincipal_id\x18\v \x01(\tR\vprincipalId\x124\n" +
 	"\x16principal_display_name\x18\f \x01(\tR\x14principalDisplayNameB\b\n" +
-	"\x06resultBCZAgithub.com/PRO-Robotech/corelib/api/corelib/operation;operationv1b\x06proto3"
+	"\x06resultBGZEgithub.com/PRO-Robotech/corelib/api/kacho/cloud/operation;operationv1b\x06proto3"
 
 var (
-	file_corelib_operation_operation_proto_rawDescOnce sync.Once
-	file_corelib_operation_operation_proto_rawDescData []byte
+	file_kacho_cloud_operation_operation_proto_rawDescOnce sync.Once
+	file_kacho_cloud_operation_operation_proto_rawDescData []byte
 )
 
-func file_corelib_operation_operation_proto_rawDescGZIP() []byte {
-	file_corelib_operation_operation_proto_rawDescOnce.Do(func() {
-		file_corelib_operation_operation_proto_rawDescData = protoimpl.X.CompressGZIP(unsafe.Slice(unsafe.StringData(file_corelib_operation_operation_proto_rawDesc), len(file_corelib_operation_operation_proto_rawDesc)))
+func file_kacho_cloud_operation_operation_proto_rawDescGZIP() []byte {
+	file_kacho_cloud_operation_operation_proto_rawDescOnce.Do(func() {
+		file_kacho_cloud_operation_operation_proto_rawDescData = protoimpl.X.CompressGZIP(unsafe.Slice(unsafe.StringData(file_kacho_cloud_operation_operation_proto_rawDesc), len(file_kacho_cloud_operation_operation_proto_rawDesc)))
 	})
-	return file_corelib_operation_operation_proto_rawDescData
+	return file_kacho_cloud_operation_operation_proto_rawDescData
 }
 
-var file_corelib_operation_operation_proto_msgTypes = make([]protoimpl.MessageInfo, 1)
-var file_corelib_operation_operation_proto_goTypes = []any{
-	(*Operation)(nil),             // 0: corelib.operation.Operation
+var file_kacho_cloud_operation_operation_proto_msgTypes = make([]protoimpl.MessageInfo, 1)
+var file_kacho_cloud_operation_operation_proto_goTypes = []any{
+	(*Operation)(nil),             // 0: kacho.cloud.operation.Operation
 	(*timestamppb.Timestamp)(nil), // 1: google.protobuf.Timestamp
 	(*anypb.Any)(nil),             // 2: google.protobuf.Any
 	(*status.Status)(nil),         // 3: google.rpc.Status
 }
-var file_corelib_operation_operation_proto_depIdxs = []int32{
-	1, // 0: corelib.operation.Operation.created_at:type_name -> google.protobuf.Timestamp
-	1, // 1: corelib.operation.Operation.modified_at:type_name -> google.protobuf.Timestamp
-	2, // 2: corelib.operation.Operation.metadata:type_name -> google.protobuf.Any
-	3, // 3: corelib.operation.Operation.error:type_name -> google.rpc.Status
-	2, // 4: corelib.operation.Operation.response:type_name -> google.protobuf.Any
+var file_kacho_cloud_operation_operation_proto_depIdxs = []int32{
+	1, // 0: kacho.cloud.operation.Operation.created_at:type_name -> google.protobuf.Timestamp
+	1, // 1: kacho.cloud.operation.Operation.modified_at:type_name -> google.protobuf.Timestamp
+	2, // 2: kacho.cloud.operation.Operation.metadata:type_name -> google.protobuf.Any
+	3, // 3: kacho.cloud.operation.Operation.error:type_name -> google.rpc.Status
+	2, // 4: kacho.cloud.operation.Operation.response:type_name -> google.protobuf.Any
 	5, // [5:5] is the sub-list for method output_type
 	5, // [5:5] is the sub-list for method input_type
 	5, // [5:5] is the sub-list for extension type_name
@@ -281,12 +281,12 @@ var file_corelib_operation_operation_proto_depIdxs = []int32{
 	0, // [0:5] is the sub-list for field type_name
 }
 
-func init() { file_corelib_operation_operation_proto_init() }
-func file_corelib_operation_operation_proto_init() {
-	if File_corelib_operation_operation_proto != nil {
+func init() { file_kacho_cloud_operation_operation_proto_init() }
+func file_kacho_cloud_operation_operation_proto_init() {
+	if File_kacho_cloud_operation_operation_proto != nil {
 		return
 	}
-	file_corelib_operation_operation_proto_msgTypes[0].OneofWrappers = []any{
+	file_kacho_cloud_operation_operation_proto_msgTypes[0].OneofWrappers = []any{
 		(*Operation_Error)(nil),
 		(*Operation_Response)(nil),
 	}
@@ -294,17 +294,17 @@ func file_corelib_operation_operation_proto_init() {
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
-			RawDescriptor: unsafe.Slice(unsafe.StringData(file_corelib_operation_operation_proto_rawDesc), len(file_corelib_operation_operation_proto_rawDesc)),
+			RawDescriptor: unsafe.Slice(unsafe.StringData(file_kacho_cloud_operation_operation_proto_rawDesc), len(file_kacho_cloud_operation_operation_proto_rawDesc)),
 			NumEnums:      0,
 			NumMessages:   1,
 			NumExtensions: 0,
 			NumServices:   0,
 		},
-		GoTypes:           file_corelib_operation_operation_proto_goTypes,
-		DependencyIndexes: file_corelib_operation_operation_proto_depIdxs,
-		MessageInfos:      file_corelib_operation_operation_proto_msgTypes,
+		GoTypes:           file_kacho_cloud_operation_operation_proto_goTypes,
+		DependencyIndexes: file_kacho_cloud_operation_operation_proto_depIdxs,
+		MessageInfos:      file_kacho_cloud_operation_operation_proto_msgTypes,
 	}.Build()
-	File_corelib_operation_operation_proto = out.File
-	file_corelib_operation_operation_proto_goTypes = nil
-	file_corelib_operation_operation_proto_depIdxs = nil
+	File_kacho_cloud_operation_operation_proto = out.File
+	file_kacho_cloud_operation_operation_proto_goTypes = nil
+	file_kacho_cloud_operation_operation_proto_depIdxs = nil
 }

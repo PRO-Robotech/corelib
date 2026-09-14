@@ -1,0 +1,9 @@
+// Copyright (c) PRO-Robotech
+// SPDX-License-Identifier: Apache-2.0
+
+syntax = "proto3";
+
+
+package kacho.cloud.operation;
+
+option go_package = "github.com/PRO-Robotech/corelib/api/kacho/cloud/operation;operationv1";

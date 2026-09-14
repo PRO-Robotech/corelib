@@ -195,7 +195,7 @@ func TestServerLatency_SameMethodOnBothListenersIsNotBlended(t *testing.T) {
 	l, err := grpcsrv.NewServerLatency(reg)
 	require.NoError(t, err)
 
-	info := &grpc.UnaryServerInfo{FullMethod: "/corelib.operation.OperationService/Get"}
+	info := &grpc.UnaryServerInfo{FullMethod: "/kacho.cloud.operation.v1.OperationService/Get"}
 	pass := func(context.Context, any) (any, error) { return "ok", nil }
 
 	_, err = l.UnaryServerInterceptor(grpcsrv.ListenerPublic)(context.Background(), nil, info, pass)

@@ -48,7 +48,7 @@ func StaticExtractor(objectType string, extractID func(req any) (string, error))
 // генерируется каталог прав шлюза:
 //
 //	func PermissionMap() authz.RPCMap {
-//	    return catalogderive.MustDerive("kacho.cloud.vpc.v1", "corelib.operation")
+//	    return catalogderive.MustDerive("kacho.cloud.vpc.v1", "kacho.cloud.operation")
 //	}
 //
 // Литеральная карта рядом с выведенной — второе объявление одного и того же

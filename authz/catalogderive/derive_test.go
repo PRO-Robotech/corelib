@@ -16,7 +16,7 @@
 // предмете. Так уже было: одна из проб ниже переезжала с `List` на `Create`,
 // когда полосу чтения каталога типов дисков исправили.
 //
-// Полоса `<exempt>` осталась на настоящем контракте — `corelib.operation`
+// Полоса `<exempt>` осталась на настоящем контракте — `kacho.cloud.operation`
 // живёт в ФУНДАМЕНТЕ, ребра к платформе не образует, и подделывать её нечем:
 // это единственная полоса, чей представитель у фундамента свой.
 package catalogderive_test
@@ -35,8 +35,8 @@ import (
 	// импортирует тип операции. Со снятием тех стабов транзитивный путь исчез, и
 	// полоса `<exempt>` осталась бы без своего представителя — то есть проба
 	// зеленела бы на пустой карте. Ребра к платформе импорт не образует:
-	// `api/corelib/operation` объявлен классом `corelib`.
-	_ "github.com/PRO-Robotech/corelib/api/corelib/operation"
+	// `pkg/api/kacho/cloud/operation` объявлен классом `corelib`.
+	_ "github.com/PRO-Robotech/corelib/api/kacho/cloud/operation"
 
 	"github.com/PRO-Robotech/corelib/authz"
 	"github.com/PRO-Robotech/corelib/authz/catalogderive"
@@ -107,13 +107,13 @@ func TestDeriveCarriesTheScopeFilteredLane(t *testing.T) {
 
 // TestDeriveCarriesTheExemptLane — `<exempt>` снимает per-RPC Check целиком.
 //
-// Единственная полоса на НАСТОЯЩЕМ контракте: `corelib.operation` — контракт
+// Единственная полоса на НАСТОЯЩЕМ контракте: `kacho.cloud.operation` — контракт
 // фундамента, и ребра к платформе он не образует.
 func TestDeriveCarriesTheExemptLane(t *testing.T) {
-	m, err := catalogderive.Derive("corelib.operation")
+	m, err := catalogderive.Derive("kacho.cloud.operation")
 	require.NoError(t, err)
 
-	e, ok := m["/corelib.operation.OperationService/Get"]
+	e, ok := m["/kacho.cloud.operation.OperationService/Get"]
 	require.True(t, ok)
 	assert.True(t, e.Public)
 	assert.False(t, e.ScopeFiltered)

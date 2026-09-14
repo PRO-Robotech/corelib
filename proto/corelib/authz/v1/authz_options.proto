@@ -1,0 +1,274 @@
+// Copyright (c) PRO-Robotech
+// SPDX-License-Identifier: Apache-2.0
+
+syntax = "proto3";
+
+package corelib.authz.v1;
+
+import "google/protobuf/descriptor.proto";
+
+option go_package = "github.com/PRO-Robotech/corelib/api/corelib/authz/v1;authzv1";
+
+// Authz options — per-RPC annotations consumed by `protoc-gen-kacho-permissions`
+// to build the canonical `permission_catalog.json` and by the iam authz
+// middleware at runtime.
+//
+// ГДЕ ЭТОТ ФАЙЛ ЖИВЁТ И ПОЧЕМУ ОН ЕЩЁ ЗДЕСЬ (решение владельца 2026-09-13, kacho#2617)
+// -------------------------------------------------------------------------------
+// ДЕЙСТВУЮЩЕЕ РЕШЕНИЕ: словарь принадлежит СЛУЖБЕ ДОСТУПА и переезжает в
+// `PRO-Robotech/kaname`. Дословно: «всё, что является владельцем, живёт с
+// владельцем; это прото iam, значит все линкуют его как библиотеку».
+//
+// ПРЕЖНЕЕ РЕШЕНИЕ Р12 (2026-09-06, kacho#2089) — «словарь не принадлежит ни одному
+// продукту и живёт под нейтральным корнем» — ОТМЕНЕНО тем же решением владельца.
+// Здесь оно названо отменённым, а не стёрто: абзац, объявлявший нейтральность,
+// читался как действующее ОСНОВАНИЕ координаты каждым, кто выписывал себе оператор
+// `import`, — а таких операторов в двух деревьях 65.
+//
+// ПЕРЕЕЗД НА СЕГОДНЯ НЕ ИСПОЛНЕН. Это состояние файла, а не намерение, и координата
+// ниже ДЕЙСТВУЮЩАЯ: пакет `corelib.authz.v1`, заглушки —
+// `github.com/PRO-Robotech/corelib/api/corelib/authz/v1`, публикует их модуль
+// фундамента, и второй раз они не порождаются ни в одном дереве (`proto/buf.gen.yaml`
+// обоих репозиториев исключает этот корень из своих входов).
+//
+// ПЕРЕЕЗД АТОМАРЕН BY CONSTRUCTION, и это воспроизведено прогоном, а не выведено.
+// Номера расширений решением не меняются, поэтому двоичное, слинковавшее прежнюю и
+// новую координату разом, падает при регистрации дескрипторов:
+//
+//     panic: proto: extension number 50001 is already registered on message
+//            google.protobuf.MethodOptions
+//
+// Отказ приходит ВРЕМЕНИ ВЫПОЛНЕНИЯ и транзитивно — у потребителя, который ни одного
+// из двух путей не называл; `go build` на том же дереве даёт КОД 0. Промежуточного
+// состояния «пока обе координаты» не существует: все импортёры переключаются одним
+// изменением.
+//
+// ЧЕМ ПЕРЕЕЗД УПЁРСЯ — ЗАМЕРОМ, А НЕ МНЕНИЕМ. Два контракта, чьи заглушки публикует
+// фундамент, сами РАЗМЕЧЕНЫ этим словарём: `kacho/cloud/operation/operation_service.proto`
+// и `corelib/subscription/subscription_service.proto`. Порождённый Go-пакет неделим, а
+// собственные пакеты фундамента их линкуют — `operations/operationspb` и
+// `subscription/`. Значит фундамент обязан линковать словарь; словарь у службы
+// означает ребро `corelib -> kaname`, то есть КОЛЬЦО с пином `kaname -> corelib`,
+// запрещённое ядром правил («разрешены ровно три ребра … кольца запрещены»).
+//
+// Отдельно измерено: словарь НЕ ВПРАВЕ лечь в Go-пакет `kaname.cloud.iam.v1` даже
+// после снятия кольца — заглушки iam импортируют `api/kacho/cloud/operation`, а тот
+// импортировал бы словарь, то есть получился бы ПАКЕТНЫЙ цикл, который не собирается
+// вовсе. Словарю нужен свой Go-пакет.
+//
+// Выбор между «фундамент импортирует службу», «разметка снимается с двух контрактов
+// фундамента» и «эти два контракта тоже уезжают» — решение ВЛАДЕЛЬЦА, а не полосы;
+// предмет и три исхода — kacho#2617 §«Второе следствие».
+//
+// Файл не называет своих потребителей намеренно: перечень устаревает в тот день,
+// когда меняется.
+//
+// Usage on an RPC:
+//
+//   rpc Create(CreateNetworkRequest) returns (operation.Operation) {
+//     option (corelib.authz.v1.permission)        = "vpc.networks.create";
+//     option (corelib.authz.v1.required_relation) = "editor";
+//     option (corelib.authz.v1.scope_extractor)   = {
+//       object_type:        "project"
+//       from_request_field: "project_id"
+//     };
+//     option (corelib.authz.v1.required_acr_min)  = "2";
+//   }
+//
+// All options are emitted into the catalog. `permission`,
+// `required_relation`, `scope_extractor.object_type` and
+// `scope_extractor.from_request_field` are required. `required_acr_min` is
+// optional and defaults to "2". `hide_existence` is optional and defaults to
+// false.
+//
+// Extension field numbers occupy the reserved range `[50000, 50999]`, chosen to
+// avoid collision with `corelib.api.v1` (87334 — moved out of the platform root
+// `kacho.cloud.api` by #2395, number unchanged) and the retired
+// `kacho.cloud.validation` (101400+).
+//
+// THE NUMBERS DID NOT CHANGE WHEN THE PACKAGE MOVED, AND THAT IS LOAD-BEARING.
+// Two `extend google.protobuf.MethodOptions` blocks carrying the same numbers in
+// one image collide at DESCRIPTOR REGISTRATION — a runtime failure, not a compile
+// error. So this is a move, not a copy: no second declaration of these numbers
+// exists anywhere in the tree.
+
+// permission — canonical permission string in `<domain>.<resource>.<verb>` form,
+// or the literal `"<exempt>"` for RPCs that intentionally bypass authz
+// (e.g. `OperationService.Get` on the internal port).
+extend google.protobuf.MethodOptions {
+  string permission = 50001;
+}
+
+// required_relation — relation name of the authorization model to be checked on the scope object
+// (`viewer` / `editor` / `owner` / `admin` / domain-specific).
+extend google.protobuf.MethodOptions {
+  string required_relation = 50002;
+}
+
+// scope_extractor — how to derive the scope object from the request.
+extend google.protobuf.MethodOptions {
+  ScopeExtractor scope_extractor = 50003;
+}
+
+// required_acr_min — minimum ACR (Authentication Context Class Reference) level
+// required for this RPC. Encoded as a string for forward compatibility with
+// non-numeric ACR values. Default `"2"` when not set.
+extend google.protobuf.MethodOptions {
+  string required_acr_min = 50004;
+}
+
+// hide_existence — when true, the api-gateway authz middleware surfaces an
+// authenticated deny on this RPC as NotFound (gRPC 5 / HTTP 404) with NO deny
+// reasons, instead of PermissionDenied (gRPC 7 / HTTP 403 + `deny_reasons`).
+//
+// The gateway Check runs BEFORE the owning service, so a 403 here would both (a)
+// override the owner's hide-existence contract for a resource whose very
+// existence must stay hidden from an unauthorized caller and (b) echo the iam
+// enforcement-Check deny reason ("subject … lacks relation … ; current direct
+// relations: [...]") into the client response — a relations/existence oracle
+// (security.md #6, hardening-invariant #5). Enforcement is unchanged: the deny
+// still blocks the request; only the surfaced code/body differ.
+//
+// Set it on verb-bearing RPCs over a concrete per-resource scope whose owner
+// answers a denied caller with NotFound (reads AND mutations of a resource the
+// caller must not learn the existence of). Read `/Get` RPCs over a `v_get`
+// concrete scope are hidden by the gateway heuristic even without this flag; the
+// flag is required for the mutation verbs (`v_update` / `v_delete`), which the
+// heuristic deliberately does not cover. Default false (plain PermissionDenied).
+extend google.protobuf.MethodOptions {
+  bool hide_existence = 50005;
+}
+
+// scope_filtered — the RPC's authorization is decided BY THE OWNING SERVICE, over
+// the data it answers with, and is therefore not expressible as one
+// (relation, object) pair the edge could check before the call runs.
+//
+// Set it when there is no single object to ask about in advance: the caller names
+// the inputs (a list of instance ids, a page of bindings, an arbitrary
+// subject/resource pair) and the answer concerns many objects, each with its own
+// owner. The owning service reads its page / resolves the named object and then
+// asks the model per element — the same predicate its own `Get` is gated on.
+//
+// Contract at the api-gateway:
+//   - authentication is REQUIRED (an anonymous caller gets Unauthenticated — a
+//     service-side per-object filter is meaningless without a principal);
+//   - NO per-RPC FGA Check runs, because there is nothing single to check;
+//   - `required_acr_min` still applies (step-up is a property of the credential,
+//     not of the object).
+//
+// It is NOT `<exempt>`. `<exempt>` additionally admits an `Internal*` RPC that
+// arrived on the cluster-internal listener WITHOUT extracting a principal at all
+// — network position, which is not a credential. A scope-filtered RPC never gets
+// that admission, and it keeps a real `permission` string, so the catalog still
+// names the action it stands for.
+//
+// `required_relation` and `scope_extractor` MUST be omitted alongside it: naming a
+// relation the edge does not check is the defect this option exists to remove. In
+// particular `viewer` on the `cluster` singleton narrows NOTHING — the cluster
+// bootstrap deliberately grants that relation to `user:*` so the global reference
+// catalog (regions, zones, disk types) is readable by every tenant, so such an
+// entry means "authenticated", not "authorized".
+//
+// The owning service's per-RPC map carries the same axis
+// (`authz.RPCEntry.ScopeFiltered`). It is no longer a second declaration that
+// could disagree: the map is DERIVED from these annotations
+// (`corelib/authz/catalogderive`), so the two cannot drift by construction. The gate
+// that compared them lives in `internal/repohygiene` (catalogparity_test.go); the
+// package this sentence used to name, `corelib/authz/catalogparity`, was deleted when
+// derivation removed its subject.
+//
+// ONE MARKER, TWO READINGS — do not collapse them (recorded 2026-08-10)
+// ---------------------------------------------------------------------
+// The paragraphs above describe the marker as a CONSUMER of the model reads it:
+// "there is no single object, so narrow the page you return". That is the right
+// reading for vpc / compute / storage / nlb / registry, whose scope-filtered
+// methods return a page of their own rows and narrow it per element.
+//
+// At the MODEL OWNER (iam) the same marker means something else. It still says
+// "the edge cannot name the object" — but the reason is that the object's TYPE is
+// itself a request field (`ResourceRef.type`), or that the request names no
+// resource at all (`ListObjects` enumerates what a subject can reach). What
+// follows is not narrowing: iam takes the WHOLE authorization decision in the
+// handler — self-query ∨ cluster-admin ∨ `admin` on the resource actually named.
+//
+// The distinction is measurable, not stylistic (measured on this tree): of iam's
+// nine scope-filtered methods, three carry no pagination at all — `Check`,
+// `ExpandRelations`, `ExpandAccess` — so on those there is no page for anyone to
+// narrow. And iam has NO per-RPC map to mark, because it does not re-check the
+// end user on its own listeners: it IS the decision point. So "mark the same
+// method in your own map" has no subject there, and reading the marker as "a page
+// gets narrowed" would attribute to iam a mechanism it does not run.
+//
+// Why this is written down rather than left to be re-derived: one flag carrying
+// two meanings is exactly the kind of overload that outlives the people who knew
+// the difference. A reviewer who reads only the consumer meaning will "fix" an
+// iam row by demanding a narrower that cannot exist, or will accept a consumer
+// row that decides nothing because they think the owner decides it downstream.
+extend google.protobuf.MethodOptions {
+  bool scope_filtered = 50006;
+}
+
+// exempt_reason — ПОЧЕМУ у этого RPC снята проверка модели. Обязательна ровно
+// тогда, когда `permission = "<exempt>"`, и запрещена во всех остальных случаях.
+//
+// ЗАЧЕМ. Литерал `<exempt>` сам по себе означает «модель не спрашивают» и стоит
+// за несопоставимыми вещами: внутренний слушатель, куда попадают по сертификату;
+// список, авторизуемый сужением на данных страницы; вход, у которого объекта нет
+// by construction; глагол, чью область называет само тело запроса. Отличить их
+// можно было только прочитав реализацию каждого RPC — то есть поверхность не
+// говорила правды о себе. Причина, названная машинно, позволяет требовать по
+// разному основанию разное.
+//
+// ЗАКРЫТЫЙ СЛОВАРЬ (значение вне него — находка гейта дерева):
+//
+//   INTERNAL_LISTENER  — RPC внутреннего слушателя: mTLS плюс круг законных
+//                        отправителей. Требование: служба и вправду `Internal*`.
+//   SERVICE_SIDE_AUTHZ — решение принимает сервис-владелец над данными, которыми
+//                        отвечает: единого объекта, про который край мог бы
+//                        спросить заранее, у такого RPC нет by construction.
+//   SELF_SERVICE       — объекта нет вовсе: субъект — сам вызывающий (создание
+//                        своего аккаунта, «кто я», свои действующие пределы).
+//   HANDLER_DECIDES    — область полиморфна (тип объекта — поле запроса) либо
+//                        владение решается предикатом у владельца ресурса.
+//
+// ПОЧЕМУ В СЛОВАРЕ НЕТ «ГЛОБАЛЬНОГО СПРАВОЧНИКА». Публичное чтение справочника
+// размещения перестало быть освобождением: у отношения, которым оно гейтится,
+// есть производитель — системная выдача с подстановочным субъектом, видимая
+// перечислением выдач и отзываемая штатно. Освобождение там означало бы доступ,
+// который виден только в контракте и закрывается лишь выкаткой.
+//
+// Три причины из четырёх утверждают, что решение принимает КОД, — гейт дерева
+// требует у них живую координату этого кода, и перечень координат самоистекает.
+extend google.protobuf.MethodOptions {
+  string exempt_reason = 50007;
+}
+
+// ScopeExtractor describes how the iam authz middleware extracts an
+// scope object from an incoming RPC request.
+message ScopeExtractor {
+  // Object type of the authorization model the scope id resolves to. Either a hierarchy scope
+  // (`cluster` / `account` / `project`) or a per-resource
+  // object type registered in the authorization model (`vpc_network`,
+  // `storage_volume`, `iam_group`, `iam_role`, ...). The api-gateway authz
+  // middleware builds the FGA Check object as `<object_type>:<id>` where the
+  // id is taken from `from_request_field`. Must be non-empty.
+  string object_type = 1;
+
+  // Name of the proto request field from which the scope id is taken. Must be
+  // a top-level field on the request message and a non-empty string.
+  string from_request_field = 2;
+
+  // Name of the proto request field from which the *object type* is
+  // derived at request time (scope-polymorphic RPCs). When set + non-empty,
+  // the api-gateway authz middleware reads this top-level string field off the
+  // request and uses its value as the FGA Check object type instead of the
+  // static `object_type` above. The static `object_type` then serves only as
+  // the fallback when the field is absent/empty.
+  //
+  // Used by AccessBindingService.ListByScope, where the bound resource scope
+  // (project|account|cluster) is carried by the request `resource_type` field —
+  // a single fixed `object_type` cannot express it (a hardcoded `project` made
+  // account/cluster-scoped reads check `project:<id>` → 403). Empty for the
+  // overwhelming majority of RPCs, which have a fixed scope type.
+  string object_type_from_request_field = 3;
+}

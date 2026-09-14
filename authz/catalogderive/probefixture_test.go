@@ -15,6 +15,8 @@ import (
 	"google.golang.org/protobuf/reflect/protoregistry"
 	"google.golang.org/protobuf/types/descriptorpb"
 	"google.golang.org/protobuf/types/dynamicpb"
+
+	authzv1 "github.com/PRO-Robotech/corelib/api/corelib/authz/v1"
 )
 
 // probefixture_test.go — НЕЙТРАЛЬНЫЙ дескриптор, на котором проверяется вывод
@@ -74,13 +76,6 @@ const (
 const probeThingType = "probe_thing"
 
 func TestMain(m *testing.M) {
-	// ПОРЯДОК НЕСУЩИЙ: словарь обязан лежать в реестре ДО сборки дескриптора,
-	// который его расширениями размечен. Иначе `protodesc.NewFile` не разрешит
-	// зависимость, и отказ назовёт сборку файла, а не отсутствие словаря.
-	if err := registerProbeVocabulary(); err != nil {
-		fmt.Fprintf(os.Stderr, "словарь разметки не построен: %v\n", err)
-		os.Exit(1)
-	}
 	if err := registerProbeFile(); err != nil {
 		fmt.Fprintf(os.Stderr, "нейтральный дескриптор не построен: %v\n", err)
 		os.Exit(1)
@@ -91,9 +86,12 @@ func TestMain(m *testing.M) {
 // scoped — аннотации обычной пообъектной строки.
 func scoped(permission, relation, objectType, field string) *descriptorpb.MethodOptions {
 	o := &descriptorpb.MethodOptions{}
-	proto.SetExtension(o, vocab.permission, permission)
-	proto.SetExtension(o, vocab.requiredRelation, relation)
-	setScope(o, objectType, field, "")
+	proto.SetExtension(o, authzv1.E_Permission, permission)
+	proto.SetExtension(o, authzv1.E_RequiredRelation, relation)
+	proto.SetExtension(o, authzv1.E_ScopeExtractor, &authzv1.ScopeExtractor{
+		ObjectType:       objectType,
+		FromRequestField: field,
+	})
 	return o
 }
 
@@ -109,11 +107,11 @@ func strField(name string, number int32) *descriptorpb.FieldDescriptorProto {
 
 func registerProbeFile() error {
 	hidden := scoped("probe.things.hidden", "v_get", probeThingType, "thing_id")
-	proto.SetExtension(hidden, vocab.hideExistence, true)
+	proto.SetExtension(hidden, authzv1.E_HideExistence, true)
 
 	filtered := &descriptorpb.MethodOptions{}
-	proto.SetExtension(filtered, vocab.permission, "probe.shares.list")
-	proto.SetExtension(filtered, vocab.scopeFiltered, true)
+	proto.SetExtension(filtered, authzv1.E_Permission, "probe.shares.list")
+	proto.SetExtension(filtered, authzv1.E_ScopeFiltered, true)
 
 	fdp := &descriptorpb.FileDescriptorProto{
 		Name:       proto.String("corelib/authz/probe/v1/probe.proto"),
