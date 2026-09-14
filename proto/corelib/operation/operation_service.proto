@@ -1,0 +1,36 @@
+// Copyright (c) PRO-Robotech
+// SPDX-License-Identifier: Apache-2.0
+
+syntax = "proto3";
+
+package corelib.operation;
+
+import "google/api/annotations.proto";
+import "corelib/operation/operation.proto";
+
+option go_package = "github.com/PRO-Robotech/corelib/api/corelib/operation;operationv1";
+
+// A set of methods for managing operations for asynchronous API requests.
+service OperationService {
+  // Returns the specified Operation resource.
+  rpc Get (GetOperationRequest) returns (Operation) {
+    option (google.api.http) = { get: "/operations/{operation_id}" };
+  }
+
+  // Cancels the specified operation.
+  //
+  // Note that currently Object Storage API does not support cancelling operations.
+  rpc Cancel (CancelOperationRequest) returns (Operation) {
+    option (google.api.http) = { post: "/operations/{operation_id}:cancel" body: "*" };
+  }
+}
+
+message GetOperationRequest {
+  // ID of the Operation resource to return.
+  string operation_id = 1;
+}
+
+message CancelOperationRequest {
+  // ID of the operation to cancel.
+  string operation_id = 1;
+}

@@ -626,8 +626,8 @@ func TestCensusIsAssertedNotAssumed(t *testing.T) {
 // «у домена ноль строк» стали бы одним и тем же исходом.
 func TestDomainIsDerivedNotDeclared(t *testing.T) {
 	for method, want := range map[servicecontract.MethodFQN]string{
-		"/kacho.cloud.geo.v1.RegionService/Get":       "kacho.cloud.geo.v1",
-		"/kacho.cloud.operation.OperationService/Get": "kacho.cloud.operation",
+		"/kacho.cloud.geo.v1.RegionService/Get":   "kacho.cloud.geo.v1",
+		"/corelib.operation.OperationService/Get": "corelib.operation",
 	} {
 		got, err := domainOf(method)
 		if err != nil {

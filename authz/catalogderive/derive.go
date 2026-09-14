@@ -49,7 +49,6 @@ import (
 	"google.golang.org/protobuf/reflect/protoregistry"
 	"google.golang.org/protobuf/types/descriptorpb"
 
-	authzv1 "github.com/PRO-Robotech/corelib/api/corelib/authz/v1"
 	"github.com/PRO-Robotech/corelib/authz"
 )
 
@@ -77,7 +76,7 @@ const (
 // interceptor ("/kacho.cloud.storage.v1.VolumeService/Get").
 //
 // A service names the packages whose services it registers: its own domain plus
-// `kacho.cloud.operation` for the LRO envelope. That list is the service's
+// `corelib.operation` for the LRO envelope. That list is the service's
 // identity, not a second statement of its permissions — the permissions come from
 // the annotations, one per method, with no place left for the two to disagree.
 //
@@ -185,43 +184,126 @@ func (a Annotations) Exempt() bool {
 	return a.Permission == ExemptPermission || (a.RequiredRelation == "" && !a.ScopeFiltered)
 }
 
+// MethodKey — полное имя метода в той форме, в какой grpc-go передаёт его звену
+// решения: с ведущей косой (`/corelib.operation.OperationService/Get`).
+//
+// Собирается ОДНОЙ функцией, а не склейкой в каждом месте чтения: форм записи
+// полного имени в дереве две (с косой и без), и место, собравшее вторую,
+// разошлось бы с ключом перечня полос молча — то есть полоса просто не нашлась
+// бы, и метод получил бы отказ «нет разметки» вместо своей записи.
+func MethodKey(md protoreflect.MethodDescriptor) string {
+	sd, ok := md.Parent().(protoreflect.ServiceDescriptor)
+	if !ok {
+		return ""
+	}
+	return "/" + string(sd.FullName()) + "/" + string(md.Name())
+}
+
 // AnnotationsOf reads the authz options off a method descriptor.
-func AnnotationsOf(md protoreflect.MethodDescriptor) Annotations {
+//
+// # Источников у полосы ДВА, и они взаимоисключающи
+//
+// Обычный метод несёт разметку в СВОЁМ контракте, и она читается из дескриптора.
+// Метод фундамента разметки не несёт вовсе — словарь принадлежит службе доступа,
+// а фундамент лист графа (`foundationlanes.go`), — и его полоса объявлена
+// ПЕРЕЧНЕМ. Оба источника читаются здесь, в одном месте: и карта прав процесса,
+// и строки каталога берут ответ отсюда, поэтому расходиться им нечем.
+//
+// Метод, несущий И разметку, И запись перечня, — ОТКАЗ, а не слияние: это два
+// объявления об одном предмете, и молчаливое предпочтение одного из них есть
+// решение о доступе, принятое никем.
+//
+// # Почему ошибка, а не пустая разметка
+//
+// Пустая разметка читается `Exempt()` как «проверки нет». Значит словарь,
+// не приехавший в двоичное, объявил бы освобождённым КАЖДЫЙ метод — отказ
+// обязан быть именованным и приходить при построении карты.
+func AnnotationsOf(md protoreflect.MethodDescriptor) (Annotations, error) {
+	key := MethodKey(md)
+	lane, lanePresent := FoundationLaneOf(key)
+
 	opts, _ := md.Options().(*descriptorpb.MethodOptions)
 	if opts == nil {
-		return Annotations{}
+		if lanePresent {
+			return annotationsOfLane(lane), nil
+		}
+		return Annotations{}, nil
 	}
+
+	v, err := loadVocabulary()
+	if err != nil {
+		// Словарь не резолвится. Если полоса метода объявлена перечнем, читать
+		// дескриптор не надо вовсе — ответ уже есть, и отказывать не за что.
+		if lanePresent {
+			return annotationsOfLane(lane), nil
+		}
+		return Annotations{}, err
+	}
+
 	a := Annotations{
-		Permission:       proto.GetExtension(opts, authzv1.E_Permission).(string),
-		RequiredRelation: proto.GetExtension(opts, authzv1.E_RequiredRelation).(string),
-		HideExistence:    proto.GetExtension(opts, authzv1.E_HideExistence).(bool),
-		ScopeFiltered:    proto.GetExtension(opts, authzv1.E_ScopeFiltered).(bool),
+		Permission:       readString(opts, v.permission),
+		RequiredRelation: readString(opts, v.requiredRelation),
+		HideExistence:    readBool(opts, v.hideExistence),
+		ScopeFiltered:    readBool(opts, v.scopeFiltered),
 	}
-	if se, ok := proto.GetExtension(opts, authzv1.E_ScopeExtractor).(*authzv1.ScopeExtractor); ok && se != nil {
-		a.ScopeObjectType = se.GetObjectType()
-		a.ScopeFromRequestField = se.GetFromRequestField()
-		a.ScopeObjectTypeFromRequest = se.GetObjectTypeFromRequestField()
+	a.ScopeObjectType, a.ScopeFromRequestField, a.ScopeObjectTypeFromRequest =
+		readScope(opts, v.scopeExtractor)
+
+	if lanePresent {
+		if a != (Annotations{}) {
+			return Annotations{}, fmt.Errorf("метод несёт И разметку в контракте, И запись перечня "+
+				"полос фундамента (%s): два объявления об одном предмете. Снимите одно — либо "+
+				"разметку из контракта, либо запись перечня", VocabularyPackage)
+		}
+		return annotationsOfLane(lane), nil
 	}
-	return a
+	return a, nil
+}
+
+// annotationsOfLane — полоса перечня в форме разметки.
+//
+// Перевод объявлен ЗДЕСЬ и один раз: два места, переводящие полосу в разметку,
+// разошлись бы на первом же новом поле.
+func annotationsOfLane(l FoundationLane) Annotations {
+	return Annotations{
+		Permission:    l.Permission,
+		ScopeFiltered: l.ScopeFiltered,
+	}
 }
 
 // RangeAnnotated walks every RPC of the named proto packages and calls fn with
 // the gRPC full method and its annotations. Used by the gates that compare the
 // annotations against the generated catalog.
-func RangeAnnotated(protoPackages []string, fn func(fullMethod string, md protoreflect.MethodDescriptor, a Annotations)) {
+//
+// Возвращает ошибку, потому что её возвращает чтение разметки: словарь, не
+// приехавший в двоичное, даёт КАЖДОМУ методу пустую разметку, а пустая разметка
+// читается как «проверки нет». Молчаливый пропуск такой строки означал бы обход,
+// объявивший освобождённым всё, что он прочитал.
+func RangeAnnotated(protoPackages []string, fn func(fullMethod string, md protoreflect.MethodDescriptor, a Annotations)) error {
 	for _, pkg := range protoPackages {
+		var rangeErr error
 		protoregistry.GlobalFiles.RangeFilesByPackage(protoreflect.FullName(pkg),
 			func(fd protoreflect.FileDescriptor) bool {
 				for i := 0; i < fd.Services().Len(); i++ {
 					sd := fd.Services().Get(i)
 					for j := 0; j < sd.Methods().Len(); j++ {
 						md := sd.Methods().Get(j)
-						fn("/"+string(sd.FullName())+"/"+string(md.Name()), md, AnnotationsOf(md))
+						key := "/" + string(sd.FullName()) + "/" + string(md.Name())
+						a, err := AnnotationsOf(md)
+						if err != nil {
+							rangeErr = fmt.Errorf("catalogderive: %s: %w", key, err)
+							return false
+						}
+						fn(key, md, a)
 					}
 				}
 				return true
 			})
+		if rangeErr != nil {
+			return rangeErr
+		}
 	}
+	return nil
 }
 
 // entryFor turns one method's annotations into the RPCEntry the interceptor
@@ -229,7 +311,10 @@ func RangeAnnotated(protoPackages []string, fn func(fullMethod string, md protor
 // fourth, and a method that fits none of them is an error rather than a default,
 // because every default here is a decision about access taken by nobody.
 func entryFor(md protoreflect.MethodDescriptor) (authz.RPCEntry, error) {
-	a := AnnotationsOf(md)
+	a, err := AnnotationsOf(md)
+	if err != nil {
+		return authz.RPCEntry{}, err
+	}
 
 	switch {
 	case a.Permission == "" && a.RequiredRelation == "" && !a.ScopeFiltered:

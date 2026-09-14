@@ -10,7 +10,6 @@
 package subscriptionv1
 
 import (
-	_ "github.com/PRO-Robotech/corelib/api/corelib/authz/v1"
 	protoreflect "google.golang.org/protobuf/reflect/protoreflect"
 	protoimpl "google.golang.org/protobuf/runtime/protoimpl"
 	reflect "reflect"
@@ -139,13 +138,13 @@ var File_corelib_subscription_subscription_service_proto protoreflect.FileDescri
 
 const file_corelib_subscription_subscription_service_proto_rawDesc = "" +
 	"\n" +
-	"/corelib/subscription/subscription_service.proto\x12\x14corelib.subscription\x1a'corelib/subscription/subscription.proto\x1a$corelib/authz/v1/authz_options.proto\"\xa5\x01\n" +
+	"/corelib/subscription/subscription_service.proto\x12\x14corelib.subscription\x1a'corelib/subscription/subscription.proto\"\xa5\x01\n" +
 	"\x13SubscriptionMessage\x12B\n" +
 	"\x06opened\x18\x01 \x01(\v2(.corelib.subscription.SubscriptionOpenedH\x00R\x06opened\x12?\n" +
 	"\x05event\x18\x02 \x01(\v2'.corelib.subscription.SubscriptionEventH\x00R\x05eventB\t\n" +
-	"\amessage2\xb1\x01\n" +
-	"\x1bInternalSubscriptionService\x12\x91\x01\n" +
-	"\tSubscribe\x12).corelib.subscription.SubscriptionRequest\x1a).corelib.subscription.SubscriptionMessage\",\x8a\xb5\x18\x1fplatform.subscription.subscribe\xa2\xb5\x18\x011\xb0\xb5\x18\x010\x01BIZGgithub.com/PRO-Robotech/corelib/api/corelib/subscription;subscriptionv1b\x06proto3"
+	"\amessage2\x82\x01\n" +
+	"\x1bInternalSubscriptionService\x12c\n" +
+	"\tSubscribe\x12).corelib.subscription.SubscriptionRequest\x1a).corelib.subscription.SubscriptionMessage0\x01BIZGgithub.com/PRO-Robotech/corelib/api/corelib/subscription;subscriptionv1b\x06proto3"
 
 var (
 	file_corelib_subscription_subscription_service_proto_rawDescOnce sync.Once
