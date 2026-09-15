@@ -22,7 +22,7 @@ import (
 	grpcstatus "google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/anypb"
 
-	operationpb "github.com/PRO-Robotech/corelib/api/kacho/cloud/operation"
+	operationpb "github.com/PRO-Robotech/corelib/api/corelib/operation"
 	"github.com/PRO-Robotech/corelib/operations"
 )
 

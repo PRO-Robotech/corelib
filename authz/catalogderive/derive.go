@@ -77,7 +77,7 @@ const (
 // interceptor ("/kacho.cloud.storage.v1.VolumeService/Get").
 //
 // A service names the packages whose services it registers: its own domain plus
-// `kacho.cloud.operation` for the LRO envelope. That list is the service's
+// `corelib.operation` for the LRO envelope. That list is the service's
 // identity, not a second statement of its permissions — the permissions come from
 // the annotations, one per method, with no place left for the two to disagree.
 //
