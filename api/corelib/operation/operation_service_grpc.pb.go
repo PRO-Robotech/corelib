@@ -5,7 +5,7 @@
 // versions:
 // - protoc-gen-go-grpc v1.6.2
 // - protoc             (unknown)
-// source: kacho/cloud/operation/operation_service.proto
+// source: corelib/operation/operation_service.proto
 
 package operationv1
 
@@ -22,8 +22,8 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	OperationService_Get_FullMethodName    = "/kacho.cloud.operation.OperationService/Get"
-	OperationService_Cancel_FullMethodName = "/kacho.cloud.operation.OperationService/Cancel"
+	OperationService_Get_FullMethodName    = "/corelib.operation.OperationService/Get"
+	OperationService_Cancel_FullMethodName = "/corelib.operation.OperationService/Cancel"
 )
 
 // OperationServiceClient is the client API for OperationService service.
@@ -157,7 +157,7 @@ func _OperationService_Cancel_Handler(srv interface{}, ctx context.Context, dec 
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
 var OperationService_ServiceDesc = grpc.ServiceDesc{
-	ServiceName: "kacho.cloud.operation.OperationService",
+	ServiceName: "corelib.operation.OperationService",
 	HandlerType: (*OperationServiceServer)(nil),
 	Methods: []grpc.MethodDesc{
 		{
@@ -170,5 +170,5 @@ var OperationService_ServiceDesc = grpc.ServiceDesc{
 		},
 	},
 	Streams:  []grpc.StreamDesc{},
-	Metadata: "kacho/cloud/operation/operation_service.proto",
+	Metadata: "corelib/operation/operation_service.proto",
 }
