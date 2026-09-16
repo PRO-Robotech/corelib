@@ -21,7 +21,6 @@
 package validate
 
 import (
-	"os"
 	"regexp"
 	"strings"
 	"unicode/utf8"
@@ -29,6 +28,7 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
+	"github.com/PRO-Robotech/corelib/envknob"
 	coreerrors "github.com/PRO-Robotech/corelib/errors"
 	"github.com/PRO-Robotech/corelib/ids"
 	"github.com/PRO-Robotech/corelib/validate/nameform"
@@ -321,7 +321,11 @@ func UpdateMask(field string, mask []string, known map[string]struct{}) error {
 // api-gateway задаёт префикс нового семейства через config/env, БЕЗ релиза
 // corelib. Базовые платформенные prefix'ы остаются захардкожены (стабильны,
 // покрыты регрессионным guard-тестом); config-путь — только расширение вперёд.
-const EnvExtraResourceIDPrefixes = "KACHO_EXTRA_RESOURCE_ID_PREFIXES"
+const EnvExtraResourceIDPrefixes = "EXTRA_RESOURCE_ID_PREFIXES"
+
+// LegacyEnvExtraResourceIDPrefixes — прежнее написание, принимаемое ОКНОМ
+// перехода (`PRO-Robotech/corelib#11`).
+const LegacyEnvExtraResourceIDPrefixes = "KACHO_EXTRA_RESOURCE_ID_PREFIXES"
 
 // baseResourceIDPrefixes — известные 3-символьные prefix'ы resource-id'ов Kachō,
 // стабильное ядро. ЕДИНЫЙ источник — ids.KnownPrefixes() (vpc/nlb/compute/apps/
@@ -366,7 +370,8 @@ func buildResourceIDPrefixes(csv string) map[string]struct{} {
 
 // resourceIDPrefixes — эффективный набор (base + config-extras), собранный один
 // раз при инициализации пакета.
-var resourceIDPrefixes = buildResourceIDPrefixes(os.Getenv(EnvExtraResourceIDPrefixes))
+var resourceIDPrefixes = buildResourceIDPrefixes(
+	envknob.Get(EnvExtraResourceIDPrefixes, LegacyEnvExtraResourceIDPrefixes))
 
 // EnvExtraResourceIDHyphenPrefixes — имя env-переменной с ДОПОЛНИТЕЛЬНЫМИ
 // hyphen-form prefix'ами (comma-separated, напр. "foo,bar" — сам prefix БЕЗ
@@ -376,7 +381,11 @@ var resourceIDPrefixes = buildResourceIDPrefixes(os.Getenv(EnvExtraResourceIDPre
 // задаёт prefix через config. Канонические platform-prefix'ы (см.
 // ids.KnownHyphenPrefixes) остаются захардкожены; config-путь — только
 // расширение вперёд.
-const EnvExtraResourceIDHyphenPrefixes = "KACHO_EXTRA_RESOURCE_ID_HYPHEN_PREFIXES"
+const EnvExtraResourceIDHyphenPrefixes = "EXTRA_RESOURCE_ID_HYPHEN_PREFIXES"
+
+// LegacyEnvExtraResourceIDHyphenPrefixes — прежнее написание, принимаемое ОКНОМ
+// перехода (`PRO-Robotech/corelib#11`).
+const LegacyEnvExtraResourceIDHyphenPrefixes = "KACHO_EXTRA_RESOURCE_ID_HYPHEN_PREFIXES"
 
 // baseHyphenPrefixes — канонические going-forward hyphen-form prefix'ы Kachō
 // (B3). ЕДИНЫЙ источник — ids.KnownHyphenPrefixes() (тот же принцип, что и
@@ -419,7 +428,8 @@ func buildHyphenPrefixes(csv string) map[string]struct{} {
 
 // hyphenResourceIDPrefixes — эффективный hyphen-набор (canon + config-extras),
 // собранный один раз при инициализации пакета.
-var hyphenResourceIDPrefixes = buildHyphenPrefixes(os.Getenv(EnvExtraResourceIDHyphenPrefixes))
+var hyphenResourceIDPrefixes = buildHyphenPrefixes(
+	envknob.Get(EnvExtraResourceIDHyphenPrefixes, LegacyEnvExtraResourceIDHyphenPrefixes))
 
 // ResourceID проверяет, что resource-id синтаксически валиден — начинается с
 // известного prefix Kachō в ОДНОЙ из двух форм (B3, redesign-2026):

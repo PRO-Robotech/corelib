@@ -36,7 +36,10 @@ type OperationServiceClient interface {
 	Get(ctx context.Context, in *GetOperationRequest, opts ...grpc.CallOption) (*Operation, error)
 	// Cancels the specified operation.
 	//
-	// Note that currently Object Storage API does not support cancelling operations.
+	// Cancellation is owner-only and atomic: a caller may cancel only an operation
+	// it started. An operation that has already reached a terminal state is
+	// refused with FAILED_PRECONDITION; an operation that does not exist, and one
+	// that belongs to another caller, are refused identically with NOT_FOUND.
 	Cancel(ctx context.Context, in *CancelOperationRequest, opts ...grpc.CallOption) (*Operation, error)
 }
 
@@ -78,7 +81,10 @@ type OperationServiceServer interface {
 	Get(context.Context, *GetOperationRequest) (*Operation, error)
 	// Cancels the specified operation.
 	//
-	// Note that currently Object Storage API does not support cancelling operations.
+	// Cancellation is owner-only and atomic: a caller may cancel only an operation
+	// it started. An operation that has already reached a terminal state is
+	// refused with FAILED_PRECONDITION; an operation that does not exist, and one
+	// that belongs to another caller, are refused identically with NOT_FOUND.
 	Cancel(context.Context, *CancelOperationRequest) (*Operation, error)
 	mustEmbedUnimplementedOperationServiceServer()
 }

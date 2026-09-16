@@ -6,14 +6,27 @@ package observability
 import (
 	"context"
 	"log/slog"
-	"os"
+
+	"github.com/PRO-Robotech/corelib/envknob"
 )
 
 // ShutdownFn — функция завершения работы провайдера телеметрии.
 type ShutdownFn func(context.Context) error
 
+// EnvOTLPEndpoint — адрес приёмника телеметрии.
+//
+// Имя — СТАНДАРТНОЕ имя спецификации OpenTelemetry, а не наша копия его с
+// приставкой платформы. Приставка здесь была не вопросом вкуса: агент и
+// библиотека сбора читают стандартное имя, поэтому переменная с приставкой не
+// настраивала НИЧЕГО, кроме нашей собственной ветки, а оператор, задавший
+// стандартную, оставался без нашей (`PRO-Robotech/corelib#11`).
+const EnvOTLPEndpoint = "OTEL_EXPORTER_OTLP_ENDPOINT"
+
+// LegacyEnvOTLPEndpoint — прежнее написание, принимаемое ОКНОМ перехода.
+const LegacyEnvOTLPEndpoint = "KACHO_OTEL_EXPORTER_OTLP_ENDPOINT"
+
 // InitOtel инициализирует экспорт телеметрии по endpoint'у из
-// KACHO_OTEL_EXPORTER_OTLP_ENDPOINT и возвращает ShutdownFn для graceful-flush.
+// [EnvOTLPEndpoint] и возвращает ShutdownFn для graceful-flush.
 //
 // Если endpoint не задан — телеметрия отключена, возвращается no-op. Если endpoint
 // задан, но OTLP-exporter в этой сборке не подключен, функция НЕ делает вид, что
@@ -22,7 +35,7 @@ type ShutdownFn func(context.Context) error
 // no-op, который ранее молча терял телеметрию при настроенном endpoint'е.
 func InitOtel(ctx context.Context, serviceName string) (ShutdownFn, error) {
 	noop := func(context.Context) error { return nil }
-	endpoint := os.Getenv("KACHO_OTEL_EXPORTER_OTLP_ENDPOINT")
+	endpoint := envknob.Get(EnvOTLPEndpoint, LegacyEnvOTLPEndpoint)
 	if endpoint == "" {
 		return noop, nil
 	}
