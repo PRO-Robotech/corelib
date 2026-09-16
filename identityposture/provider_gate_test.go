@@ -18,10 +18,26 @@
 // обычные английские слова, и обход всего дерева по ним считал бы находкой
 // каждое поле «владелец» и каждый «внешний адрес».
 //
-// Чего гейт НЕ даёт: он не поймает третьего перечисления в файле, который о
-// посадке нигде не упоминает и этот пакет не импортирует. Такой файл значений
-// поля и не разбирает — разбирать их нечем; свойство держится тем, что разбор
-// один, и обзором.
+// ОБЛАСТЬ ГЕЙТА — ЭТОТ МОДУЛЬ, и она названа числом. Обход идёт от корня
+// модуля (каталог с go.mod), а не выше: вердикт, снятый за его пределами, есть
+// свойство того, ЧТО ЛЕЖИТ РЯДОМ с рабочей копией, а не свойство коммита.
+// Замер 2026-09-16 из рабочей копии под `kacho-workspace/tmp`: корень `"../.."`
+// дал бы обход 619 413 непроверочных файлов Go и 187 объявлений словаря вместо
+// одного — 186 чужих копий этого же пакета. Корень модуля даёт 181 файл.
+// Держит это `walk_root_gate_test.go`.
+//
+// Чего гейт НЕ даёт — две границы, обе названы:
+//
+//   - он не поймает третьего перечисления в файле, который о посадке нигде не
+//     упоминает и этот пакет не импортирует. Такой файл значений поля и не
+//     разбирает — разбирать их нечем; свойство держится тем, что разбор один,
+//     и обзором;
+//   - он не видит ПОТРЕБИТЕЛЕЙ. Словарь читают два процесса — служба прав и
+//     край, — и после выноса фундамента отдельным модулем оба живут в ДРУГИХ
+//     репозиториях. Внутри фундамента знающий о посадке файл ровно один, и это
+//     само объявление: так и должно быть by construction. Второе перечисление у
+//     потребителя ловится гейтом ЕГО дерева, которого сегодня нет —
+//     PRO-Robotech/corelib#15.
 package identityposture_test
 
 import (
@@ -38,8 +54,10 @@ import (
 	"github.com/PRO-Robotech/corelib/identityposture"
 )
 
-// repoRoot — корень дерева относительно каталога этого пакета.
-const repoRoot = "../.."
+// repoRoot — корень МОДУЛЯ относительно каталога этого пакета. Пробы Go
+// исполняются с рабочим каталогом пакета, поэтому `..` — корень модуля, а
+// `../..` — то, что лежит СНАРУЖИ него. Сверяет `walk_root_gate_test.go`.
+const repoRoot = ".."
 
 // Канонические имена значений обязаны стоять строковыми литералами РОВНО в
 // одном объявлении на всё дерево.
@@ -55,6 +73,20 @@ func TestF4d03_ValueNamesAreDeclaredOnceInTheWholeTree(t *testing.T) {
 	}
 	if len(aware) == 0 {
 		t.Fatal("ни одного файла, знающего о посадке, — предикат перестал опознавать свой предмет")
+	}
+	// Предпосылка названа СОДЕРЖИМЫМ, а не числом: внутри фундамента знающий
+	// файл ровно один — само объявление, — поэтому порог `len(aware) > 0` стоит
+	// на границе беспредметности и сполз бы к нулю незамеченным. Требуем
+	// присутствия объявляющего пакета поимённо.
+	if _, ok := aware[filepath.Join(declaringPackageDir(t), "provider.go")]; !ok {
+		seen := make([]string, 0, len(aware))
+		for k := range aware {
+			seen = append(seen, k)
+		}
+		sort.Strings(seen)
+		t.Fatalf("объявляющий файл не опознан знающим о посадке (осмотрено %d, знают %d: %s) — "+
+			"обход читает не то дерево либо распознаватель перестал называть свой предмет",
+			files, len(aware), strings.Join(seen, ", "))
 	}
 
 	found := CountCanonicalNames(t, aware, names)
@@ -90,9 +122,9 @@ var ownership = []string{"own", "shared", "external"}
 	if err != nil {
 		t.Fatalf("фикстура не разобрана: %v", err)
 	}
-	if isPostureAware(f, "unrelated.go", `package other
+	if isPostureAware(f, `package other
 var ownership = []string{"own", "shared", "external"}
-`) {
+`, selfImportPath(t)) {
 		t.Fatal("файл, не знающий о посадке, опознан как знающий — гейт краснел бы на чужом словаре")
 	}
 }
@@ -180,6 +212,8 @@ func postureAwareFiles(t *testing.T, root string) (int, map[string]*ast.File) {
 	total := 0
 	aware := map[string]*ast.File{}
 	fset := token.NewFileSet()
+	self := selfImportPath(t)
+	declDir := declaringPackageDir(t)
 
 	err := filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
@@ -204,8 +238,14 @@ func postureAwareFiles(t *testing.T, root string) (int, map[string]*ast.File) {
 		if perr != nil {
 			return nil
 		}
-		if isPostureAware(f, path, string(src)) {
-			rel, _ := filepath.Rel(root, path)
+		rel, rerr2 := filepath.Rel(root, path)
+		if rerr2 != nil {
+			return nil
+		}
+		// Принадлежность объявляющему пакету судится по ПУТИ ОБХОДА, а не внутри
+		// распознавателя содержимого: у синтетической фикстуры пути нет, и общая
+		// ветвь объявила бы знающим каждого законного близнеца.
+		if filepath.Dir(rel) == declDir || isPostureAware(f, string(src), self) {
 			aware[rel] = f
 		}
 		return nil
@@ -216,20 +256,24 @@ func postureAwareFiles(t *testing.T, root string) (int, map[string]*ast.File) {
 	return total, aware
 }
 
-// isPostureAware — знает ли файл о посадке личности: импортирует этот пакет
-// либо называет поле его каноническим именем.
-func isPostureAware(f *ast.File, path, src string) bool {
-	for _, imp := range f.Imports {
-		if imp.Path == nil {
-			continue
+// isPostureAware — знает ли СОДЕРЖИМОЕ файла о посадке личности: импортирует
+// этот пакет либо называет поле его каноническим именем.
+//
+// Путь импорта ПЕРЕДАЁТСЯ, а не выписывается здесь, и сверяется ТОЧНО. Прежняя
+// редакция искала суффикс `pkg/identityposture` — раскладку платформы, из
+// которой пакет переехал в фундамент; в этом модуле такого пути нет ни у одного
+// файла, и ветвь была мёртвой. Суффиксное сравнение вдобавок опознало бы
+// `.../internal/pkg/identityposture` чужого модуля.
+func isPostureAware(f *ast.File, src, selfImport string) bool {
+	if selfImport != "" {
+		for _, imp := range f.Imports {
+			if imp.Path == nil {
+				continue
+			}
+			if p, err := strconv.Unquote(imp.Path.Value); err == nil && p == selfImport {
+				return true
+			}
 		}
-		if p, err := strconv.Unquote(imp.Path.Value); err == nil &&
-			strings.HasSuffix(p, "pkg/identityposture") {
-			return true
-		}
-	}
-	if strings.HasSuffix(path, filepath.Join("pkg", "identityposture", "provider.go")) {
-		return true
 	}
 	return strings.Contains(src, identityposture.FieldName)
 }
