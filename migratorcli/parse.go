@@ -53,10 +53,11 @@ import (
 	"flag"
 	"fmt"
 	"io"
-	"os"
 	"regexp"
 	"strconv"
 	"strings"
+
+	"github.com/PRO-Robotech/corelib/envknob"
 )
 
 // Подкоманды. Перечень закрыт: у всех семи точек наката он один и тот же.
@@ -78,7 +79,14 @@ const DialectPostgres = "postgres"
 
 // EnvDSN — переменная окружения второго приоритета. Имя одно на все сервисы:
 // оператор, знающий один, применяет знание к соседнему.
-const EnvDSN = "KACHO_MIGRATOR_DSN"
+//
+// Имя НЕЙТРАЛЬНО: накат ведут и платформа, и служба доступа, а оператор второй
+// ставит её БЕЗ платформы. Прежнее написание принимается окном — [LegacyEnvDSN].
+const EnvDSN = "MIGRATOR_DSN"
+
+// LegacyEnvDSN — прежнее написание, принимаемое ОКНОМ перехода
+// (`PRO-Robotech/corelib#11`).
+const LegacyEnvDSN = "KACHO_MIGRATOR_DSN"
 
 // ErrHelpRequested — оператор попросил форму вызова. Это не отказ: вызывающий
 // печатает [Usage] и выходит успехом, как это делает cobra у делегирующей тройки.
@@ -233,7 +241,7 @@ func ResolveDSN(flagDSN string, fromConfig func() (string, error)) (string, erro
 	if v := strings.TrimSpace(flagDSN); v != "" {
 		return v, nil
 	}
-	if v := strings.TrimSpace(os.Getenv(EnvDSN)); v != "" {
+	if v := strings.TrimSpace(envknob.Get(EnvDSN, LegacyEnvDSN)); v != "" {
 		return v, nil
 	}
 	if fromConfig == nil {

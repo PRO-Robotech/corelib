@@ -9,10 +9,11 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
-	"os"
 	"sort"
 	"strconv"
 	"strings"
+
+	"github.com/PRO-Robotech/corelib/envknob"
 )
 
 // This file is the live half of the package, and it answers a different question
@@ -110,7 +111,17 @@ func GooseApplied(ctx context.Context, db Querier) AppliedSet {
 // ApprovalEnv is where an operator writes the drops they have decided to let
 // through. It is a constant so that the reader and the refusal message that tells an
 // operator what to set cannot drift into naming two different variables.
-const ApprovalEnv = "KACHO_MIGRATOR_DROP_APPROVED"
+//
+// Имя НЕЙТРАЛЬНО: ручку фундамента читает и платформа, и служба доступа, а
+// оператор второй ставит её БЕЗ платформы. Прежнее написание с приставкой
+// платформы принимается окном — [LegacyApprovalEnv], `envknob`.
+const ApprovalEnv = "MIGRATOR_DROP_APPROVED"
+
+// LegacyApprovalEnv — прежнее написание, принимаемое ОКНОМ перехода. Оно
+// остаётся в прод-коде названным решением, а не остатком: предикат закрытия
+// окна внешний — ни один профиль потребителей его не называет
+// (`PRO-Robotech/corelib#11`).
+const LegacyApprovalEnv = "KACHO_MIGRATOR_DROP_APPROVED"
 
 // Approval is one drop an operator has decided to let through even though the table
 // is not empty.
@@ -461,7 +472,7 @@ func Gate(ctx context.Context, db Querier, service string, fsys fs.FS, out io.Wr
 		return fmt.Errorf("drop-preflight %s: could not read the migrations, so it is unknown what they drop: %w", service, err)
 	}
 
-	approvals, err := ParseApprovals(os.Getenv(ApprovalEnv))
+	approvals, err := ParseApprovals(envknob.Get(ApprovalEnv, LegacyApprovalEnv))
 	if err != nil {
 		return fmt.Errorf("drop-preflight %s: %s is set but unreadable: %w", service, ApprovalEnv, err)
 	}

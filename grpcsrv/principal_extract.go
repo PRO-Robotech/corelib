@@ -22,13 +22,13 @@ package grpcsrv
 import (
 	"context"
 	"log/slog"
-	"os"
 	"strings"
 	"sync"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/metadata"
 
+	"github.com/PRO-Robotech/corelib/envknob"
 	"github.com/PRO-Robotech/corelib/operations"
 	"github.com/PRO-Robotech/corelib/principalwire"
 )
@@ -72,13 +72,25 @@ func SetPrincipalDisplayMD(md metadata.MD, displayName string) {
 // envDebugPrincipal читает KACHO_DEBUG_PRINCIPAL лениво (не при package-init) и
 // кеширует результат. Дефолтное значение debug-флага для extractor'ов, построенных
 // без явной опции. Composition root может переопределить через WithPrincipalDebug.
+
+// EnvDebugPrincipal — ручка отладочного журнала извлечения личности. Имя
+// НЕЙТРАЛЬНО: фундамент читают оба продукта, и приставку одного из них он
+// выбирать не вправе. Прежнее написание принимается ОКНОМ перехода
+// (`PRO-Robotech/corelib#11`).
+const EnvDebugPrincipal = "GRPC_DEBUG_PRINCIPAL"
+
+// LegacyEnvDebugPrincipal — прежнее написание, принимаемое окном.
+const LegacyEnvDebugPrincipal = "KACHO_DEBUG_PRINCIPAL"
+
 var (
 	envDebugOnce sync.Once
 	envDebugFlag bool
 )
 
 func envDebugPrincipal() bool {
-	envDebugOnce.Do(func() { envDebugFlag = os.Getenv("KACHO_DEBUG_PRINCIPAL") == "1" })
+	envDebugOnce.Do(func() {
+		envDebugFlag = envknob.Get(EnvDebugPrincipal, LegacyEnvDebugPrincipal) == "1"
+	})
 	return envDebugFlag
 }
 

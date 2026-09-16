@@ -36,6 +36,8 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/PRO-Robotech/corelib/envknob"
 )
 
 // DefaultPoolCloseBound — сколько закрытие пула ждёт, прежде чем сдаться.
@@ -54,10 +56,14 @@ const DefaultPoolCloseBound = 45 * time.Second
 // PoolCloseBoundEnv — ручка на случай, когда конвейеру нужен другой предел.
 // Значение читается как `time.ParseDuration`; негодное игнорируется молча по
 // умолчанию было бы неверно, поэтому оно печатается и предел остаётся штатным.
-const PoolCloseBoundEnv = "KACHO_PGTEST_POOL_CLOSE_BOUND"
+const PoolCloseBoundEnv = "PGTEST_POOL_CLOSE_BOUND"
+
+// LegacyPoolCloseBoundEnv — прежнее написание, принимаемое ОКНОМ перехода
+// (`PRO-Robotech/corelib#11`).
+const LegacyPoolCloseBoundEnv = "KACHO_PGTEST_POOL_CLOSE_BOUND"
 
 func poolCloseBound() time.Duration {
-	raw := os.Getenv(PoolCloseBoundEnv)
+	raw := envknob.Get(PoolCloseBoundEnv, LegacyPoolCloseBoundEnv)
 	if raw == "" {
 		return DefaultPoolCloseBound
 	}
