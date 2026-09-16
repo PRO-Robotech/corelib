@@ -24,6 +24,14 @@ import (
 // moduleRoot — корень модуля относительно каталога этого пакета.
 const moduleRoot = ".."
 
+// platformPrefix — приставка платформы, которую фундамент носить не вправе.
+//
+// Живёт В ПРОБЕ, а не в разбираемом пакете, и это НЕСУЩЕЕ: проверочные файлы
+// обход пропускает, поэтому здесь имя платформы законно, а в прод-коде
+// фундамента — то самое, что гейт и ловит. Стояло оно прежде константой
+// `envknob.BrandedPrefix`, и гейт нашёл её сам: вердикт был справедлив.
+const platformPrefix = "KACHO_"
+
 func TestFoundationKnobsCarryNoPlatformBrandOutsideTheWindow(t *testing.T) {
 	t.Parallel()
 
@@ -54,7 +62,7 @@ func TestFoundationKnobsCarryNoPlatformBrandOutsideTheWindow(t *testing.T) {
 		if serr != nil {
 			t.Fatalf("файл %s не прочитан: %v — обход неполон", rel, serr)
 		}
-		found, lits, perr := envknob.ScanBrandedKnobs(rel, src)
+		found, lits, perr := envknob.ScanBrandedKnobs(rel, src, platformPrefix)
 		if perr != nil {
 			continue // не-Go по расширению не бывает; неразбираемое — предмет компилятора
 		}
@@ -72,7 +80,7 @@ func TestFoundationKnobsCarryNoPlatformBrandOutsideTheWindow(t *testing.T) {
 
 	t.Logf("перепись: непроверочных файлов Go разобрано %d; строковых литералов осмотрено %d; "+
 		"с приставкой %q — %d, из них объявлены окном перехода %d",
-		parsed, literals, envknob.BrandedPrefix, len(all), inWindow)
+		parsed, literals, platformPrefix, len(all), inWindow)
 
 	if parsed == 0 || literals == 0 {
 		t.Fatalf("обход пуст (файлов %d, литералов %d) — «ноль находок» здесь означало бы "+

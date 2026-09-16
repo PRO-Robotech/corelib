@@ -11,6 +11,7 @@
 package envknob_test
 
 import (
+	"errors"
 	"strings"
 	"testing"
 
@@ -45,7 +46,7 @@ func nothing() {}
 
 func TestBrandedKnobInjection_ABrandedNameOutsideTheWindowIsFound(t *testing.T) {
 	t.Parallel()
-	found, literals, err := envknob.ScanBrandedKnobs("migratorcli/parse.go", []byte(injBefore))
+	found, literals, err := envknob.ScanBrandedKnobs("migratorcli/parse.go", []byte(injBefore), platformPrefix)
 	if err != nil {
 		t.Fatalf("фикстура не разобрана: %v", err)
 	}
@@ -72,7 +73,7 @@ func TestBrandedKnobInjection_ABrandedNameOutsideTheWindowIsFound(t *testing.T) 
 
 func TestBrandedKnobInjection_TheWindowIsSilent(t *testing.T) {
 	t.Parallel()
-	found, literals, err := envknob.ScanBrandedKnobs("migratorcli/parse.go", []byte(injAfter))
+	found, literals, err := envknob.ScanBrandedKnobs("migratorcli/parse.go", []byte(injAfter), platformPrefix)
 	if err != nil {
 		t.Fatalf("фикстура не разобрана: %v", err)
 	}
@@ -93,7 +94,7 @@ func TestBrandedKnobInjection_TheWindowIsSilent(t *testing.T) {
 
 func TestBrandedKnobInjection_ProseIsNotAFinding(t *testing.T) {
 	t.Parallel()
-	found, _, err := envknob.ScanBrandedKnobs("migratorcli/doc.go", []byte(injProse))
+	found, _, err := envknob.ScanBrandedKnobs("migratorcli/doc.go", []byte(injProse), platformPrefix)
 	if err != nil {
 		t.Fatalf("фикстура не разобрана: %v", err)
 	}
@@ -115,7 +116,7 @@ const suffix = "MIGRATOR_DSN"
 
 var name = "KACHO_" + suffix
 `
-	found, _, err := envknob.ScanBrandedKnobs("x/x.go", []byte(src))
+	found, _, err := envknob.ScanBrandedKnobs("x/x.go", []byte(src), platformPrefix)
 	if err != nil {
 		t.Fatalf("фикстура не разобрана: %v", err)
 	}
@@ -124,7 +125,47 @@ var name = "KACHO_" + suffix
 	if len(found) != 1 || found[0].Name != "KACHO_" {
 		t.Fatalf("граница разбора изменилась: %v — перечитайте её объявление в шапке", found)
 	}
-	if !strings.HasPrefix(found[0].Name, envknob.BrandedPrefix) {
+	if !strings.HasPrefix(found[0].Name, platformPrefix) {
 		t.Fatal("приставка не опознана")
+	}
+}
+
+// TestBrandedKnobInjection_TheAnalyserItselfIsJudged — приставка стоит в
+// ПРОД-ФАЙЛЕ фундамента обычной константой, и неважно, что файл этот —
+// собственный разбор. Ось заведена потому, что ровно эта форма и была найдена:
+// `const BrandedPrefix = "KACHO_"` в `envknob/brandedknob.go`. Исключения по
+// имени файла нет намеренно — оно не истекло бы само.
+func TestBrandedKnobInjection_TheAnalyserItselfIsJudged(t *testing.T) {
+	t.Parallel()
+	src := `package envknob
+
+// BrandedPrefix — приставка платформы, которую фундамент носить не вправе.
+const BrandedPrefix = "KACHO_"
+`
+	found, _, err := envknob.ScanBrandedKnobs("envknob/brandedknob.go", []byte(src), platformPrefix)
+	if err != nil {
+		t.Fatalf("фикстура не разобрана: %v", err)
+	}
+	bad := envknob.UnwindowedBrandedKnobs(found)
+	if len(bad) != 1 {
+		t.Fatalf("находок %d, ожидалась 1 — разбор освободил собственный файл, "+
+			"и приставка вернулась бы в фундамент незамеченной", len(bad))
+	}
+	if bad[0].Const != "BrandedPrefix" {
+		t.Fatalf("находка не называет константу-владельца: %q", bad[0].Const)
+	}
+}
+
+// TestBrandedKnobInjection_EmptyPrefixIsRefused — законный близнец наоборот:
+// приставка не названа. Пустая сделала бы находкой КАЖДЫЙ литерал дерева, то
+// есть «не сужаем» означало бы «всё подряд». Отказ явный, не молчаливый.
+func TestBrandedKnobInjection_EmptyPrefixIsRefused(t *testing.T) {
+	t.Parallel()
+	found, literals, err := envknob.ScanBrandedKnobs("x/x.go", []byte(injBefore), "")
+	if !errors.Is(err, envknob.ErrNoPrefix) {
+		t.Fatalf("пустая приставка принята (ошибка %v) — разбор судил бы каждый литерал", err)
+	}
+	if len(found) != 0 || literals != 0 {
+		t.Fatalf("при отказе вернулись данные: находок %d, литералов %d", len(found), literals)
 	}
 }
