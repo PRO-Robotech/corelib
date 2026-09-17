@@ -10,6 +10,7 @@ from pathlib import Path
 import zipfile
 
 from .catalogue import Catalogue
+from .carriers import CarrierWalk, text_bytes
 from .common import (decode, encode, field_count, integer, open_directory,
                      read_file, require, sha256, shape)
 from .projection import check_log, log_projection, report_projection
@@ -37,14 +38,21 @@ def entry_metadata(section, index, data, catalogue):
 def project_members(catalogue, result):
     members = {}
     public = public_manifest(catalogue)
+    walker = CarrierWalk(catalogue.limits, result, detect=False)
+    input_bytes = 0
+    require(result["files_declared"] + 1 <= catalogue.limits["zip_entries"], "LIMIT_EXCEEDED")
     for section in ("reports", "logs"):
         for entry in catalogue.manifest[section]:
             index = entry["index"]
+            data = catalogue.input_bytes(entry["report" if section == "reports" else "path"])
+            input_bytes += len(data)
+            require(input_bytes <= catalogue.limits["expanded_bytes"], "LIMIT_EXCEEDED")
             if section == "reports":
-                data = catalogue.input_bytes(entry["report"])
-                document = report_projection(decode(data), catalogue.collections[index])
+                raw = decode(data)
+                walker.walk(raw)
+                document = report_projection(raw, catalogue.collections[index])
             else:
-                data = catalogue.input_bytes(entry["path"])
+                walker.walk(text_bytes(data))
                 document = log_projection(data, index)
             projected = encode(document)
             require(len(projected) <= catalogue.limits["document_bytes"], "LIMIT_EXCEEDED")
@@ -144,6 +152,8 @@ def check(manifest, archive_path, stdin, limits, result):
             require(info.file_size <= limits["document_bytes"], "LIMIT_EXCEEDED")
         check_envelope(data, infos)
         public = decode(archive.read("manifest.json"))
+        walker = CarrierWalk(limits, result, detect=False)
+        walker.walk(public)
         shape(public, ("schema_version", "run", "reports", "logs", "verdicts"))
         require(type(public["schema_version"]) is int and public["schema_version"] == 1)
         require(public["run"] == catalogue.manifest["run"] and public["verdicts"] == [], "SOURCE_MISMATCH")
@@ -154,6 +164,7 @@ def check(manifest, archive_path, stdin, limits, result):
                 content = archive.read(member_name(section, index))
                 require(entry == entry_metadata(section, index, content, catalogue), "SOURCE_MISMATCH")
                 document = decode(content)
+                walker.walk(document)
                 if section == "reports":
                     # Повторная проекция обязана быть тождественной: opaque поля,
                     # даже не похожие на секрет, не входят в эту схему.
