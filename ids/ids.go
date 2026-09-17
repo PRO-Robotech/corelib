@@ -343,6 +343,19 @@ const (
 	// то есть одиночное чтение членства отвечало бы `INVALID_ARGUMENT` на всяком
 	// входе (тот же класс, что уже ловили на пределе арендатора выше).
 	PrefixMembershipHyphen = "mbr"
+	// PrefixAccessKeyHyphen — iam AccessKey (`ak-…`): ключ доступа человека
+	// (WebAuthn), ресурс со своей строкой, своими глаголами и своим потолком
+	// (iam Ф7, PRO-Robotech/kacho#1273; приёмка `access-keys-are-ours.md`, Р10).
+	// NewHyphenID("ak") → "ak-<17-base32>" (20 символов): двухсимвольный prefix,
+	// как `ic`.
+	//
+	// Идентификатор удостоверения WebAuthn адресом НЕ является — это байты
+	// нормы, которые выбирает аутентификатор; наружу ключ назван только этим
+	// `id`. Запись здесь обязательна по тому же классу, что у `lim` и `mbr`:
+	// без неё `validate.ResourceID` отвергал бы корректный `id`, который сама
+	// служба и выдала, и снятие ключа отвечало бы `INVALID_ARGUMENT` на всяком
+	// входе.
+	PrefixAccessKeyHyphen = "ak"
 )
 
 // hyphenFormPrefixes — going-forward hyphen-form id prefixes (B3, redesign-2026
@@ -373,6 +386,9 @@ var hyphenFormPrefixes = []string{
 	// iam: Membership — принадлежность человека аккаунту. Именованная константа:
 	// единый источник истины с SQL-чеканкой (см. объявление выше).
 	PrefixMembershipHyphen,
+	// iam: AccessKey — ключ доступа человека (WebAuthn). Именованная константа:
+	// единый источник истины с NewHyphenID-генерацией (Ф7, Р10).
+	PrefixAccessKeyHyphen,
 	// compute: Instance/MachineType/PlacementGroup/VolumeType (ins/mt — именованные
 	// константы: единый источник истины с NewHyphenID-генерацией).
 	PrefixInstanceHyphen, PrefixMachineTypeHyphen, "plg", "vt",
