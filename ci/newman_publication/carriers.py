@@ -25,13 +25,18 @@ ASSIGNMENT = re.compile(
     r'''(?=(?<![\w-])([A-Za-z][A-Za-z0-9_-]*)["']?\s*([:=])\s*'''
     r'''("(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|[^\s,;}&\]"']+))''')
 BEARER = re.compile(r"\bBearer[ \t]+([^\s,;\"'<>]+)", re.IGNORECASE)
-BASIC = re.compile(r"\bBasic[ \t]+([A-Za-z0-9+/]+={0,2})", re.IGNORECASE)
+BASIC = re.compile(r"\bBasic[ \t]+([^\s]+)", re.IGNORECASE)
+AUTH_NAMES = frozenset(("authorization", "proxyauthorization"))
+HEADER = re.compile(r"(?=(?<![\w-])([A-Za-z][A-Za-z0-9_-]*)[ \t]*:[ \t]*([^\r\n]*))")
+BASIC_SCHEME = re.compile(r"^Basic(?:[ \t]|$)", re.IGNORECASE)
+BASIC_VALUE = re.compile(r"Basic[ \t]+([^\s]+)[ \t]*\Z", re.IGNORECASE)
 PRIVATE_KEY = re.compile(r"-----BEGIN (?:[A-Z0-9]+ )*PRIVATE KEY-----")
 URL = re.compile(r"[A-Za-z][A-Za-z0-9+.-]*://[^\s\"'<>]+")
 PERCENT = re.compile(r"%[0-9A-Fa-f]{2}")
 BASE64 = re.compile(r"[A-Za-z0-9+/_-]+={0,2}\Z")
 BASE64_TOKEN = re.compile(r"(?<![A-Za-z0-9+/_-])[A-Za-z0-9+/_-]{4,}={0,2}(?![A-Za-z0-9+/_=-])")
 JSON_START = re.compile(r'^\s*(?:\{\s*(?:"|})|\[\s*(?:\]|[\[\{"\d-]|true\b|false\b|null\b)|")')
+JSON_OBJECT_START = re.compile(r'^\{[ \t\r\n]*"')
 
 
 def normalized(name):
@@ -109,10 +114,32 @@ def _url_bytes(text):
 def _typed(data):
     """Parse object/array/string JSON внутри того же unwrap, без промежуточного node."""
     text = text_bytes(data)
-    stripped = text.strip()
+    stripped = text.strip(" \t\r\n")
     if stripped.startswith(("{", "[", '"')):
-        return decode(data)
+        try:
+            value, end = json.JSONDecoder().raw_decode(stripped)
+        except (ValueError, RecursionError):
+            require(not JSON_OBJECT_START.match(stripped), "MALFORMED_INPUT")
+        else:
+            if end == len(stripped) and type(value) in (dict, list, str):
+                return decode(stripped)
     return text
+
+
+def _basic_candidate(token):
+    """Discovery may locate credential bytes, but never validates a token prefix."""
+    prefix = re.match(r"[A-Za-z0-9+/]+={0,2}", token)
+    if prefix is None:
+        return None
+    try:
+        raw = _base64(prefix.group(), canonical=False)
+        material = text_bytes(raw)
+    except Refusal:
+        return None
+    if ":" not in material:
+        return None
+    # The *original whole token*, including any junk suffix, must be canonical.
+    return _base64(token)
 
 
 class CarrierWalk:
@@ -188,6 +215,9 @@ class CarrierWalk:
                 self.finding()
             self.walk(key, depth, context, node=False)
             child_context = context
+            if name in AUTH_NAMES or (key == "value" and type(field) is str
+                                      and normalized(field) in AUTH_NAMES):
+                child_context = "authorization"
             if value.get("type") in ("bearer", "basic") and key == value["type"]:
                 child_context = value["type"]
             # Явный envelope декодируется ровно один раз после базового обхода.
@@ -202,11 +232,75 @@ class CarrierWalk:
             self.representation(data, depth, context)
 
     def text(self, text, depth, context, *, unwrap=True):
-        decoded_spans = []
-        if PRIVATE_KEY.search(text) or BEARER.search(text):
-            self.finding()
+        # Locate complete JSON spans before inspecting their lexical surroundings.
+        # Their original bytes are strictly decoded below; permissive discovery
+        # cannot erase duplicate keys, non-finite values, or the remaining text.
+        json_spans = []
+        introduced_error = False
+        if unwrap:
+            decoder = json.JSONDecoder()
+            position = 0
+            while position < len(text):
+                if text[position] not in '{["':
+                    position += 1
+                    continue
+                try:
+                    value, end = decoder.raw_decode(text, position)
+                except (ValueError, RecursionError):
+                    introduced_error |= bool(JSON_OBJECT_START.match(text[position:]))
+                    position += 1
+                    continue
+                if type(value) in (dict, list, str):
+                    json_spans.append((position, end))
+                position = end
+        decoded_spans = list(json_spans)
+
+        def inside(position, spans=json_spans):
+            return any(start <= position < end for start, end in spans)
+
+        for recognizer in (PRIVATE_KEY, BEARER):
+            if any(not inside(match.start()) for match in recognizer.finditer(text)):
+                self.finding()
+
+        def basic(token):
+            raw = _base64(token)
+            material = text_bytes(raw)
+            require(":" in material, "MALFORMED_INPUT")
+            if unwrap:
+                self.representation(raw, depth, context)
+            if present(material.split(":", 1)[1]):
+                self.finding()
+
+        declared_spans = []
+        header_starts = set()
+        for match in HEADER.finditer(text):
+            if normalized(match.group(1)) not in AUTH_NAMES or inside(match.start(1)):
+                continue
+            header_starts.add(match.start(1))
+            value = match.group(2).strip(" \t")
+            if present(value):
+                self.finding()
+            if BASIC_SCHEME.match(value):
+                parsed = BASIC_VALUE.fullmatch(value)
+                require(parsed is not None, "MALFORMED_INPUT")
+                basic(parsed.group(1))
+                declared_spans.append(match.span(2))
+                decoded_spans.append(match.span(2))
+
+        # Structured header declarations apply only to the actual value subtree.
+        # A raw header ends at CR/LF; its generic assignment recognizer cannot
+        # cross that boundary and claim the following line as a header value.
+        value = text.strip(" \t")
+        if context == "authorization" and BASIC_SCHEME.match(value):
+            parsed = BASIC_VALUE.fullmatch(value)
+            require(parsed is not None, "MALFORMED_INPUT")
+            basic(parsed.group(1))
+            declared_spans.append((0, len(text)))
+            decoded_spans.append((0, len(text)))
+
         for match in ASSIGNMENT.finditer(text):
-            if normalized(match.group(1)) not in SECRET_NAMES:
+            if (inside(match.start(1)) or match.start(1) in header_starts
+                    or normalized(match.group(1)) not in SECRET_NAMES):
                 continue
             token = match.group(3)
             if token.startswith('"'):
@@ -221,15 +315,17 @@ class CarrierWalk:
             if present(material):
                 self.finding()
         for match in BASIC.finditer(text):
-            raw = _base64(match.group(1))
-            material = text_bytes(raw)
-            require(":" in material, "MALFORMED_INPUT")
-            if unwrap:
-                self.representation(raw, depth, context)
-                decoded_spans.append(match.span(1))
-            if present(material.split(":", 1)[1]):
-                self.finding()
+            if inside(match.start()) or inside(match.start(), declared_spans):
+                continue
+            token = match.group(1)
+            raw = _base64(token) if context == "basic" else _basic_candidate(token)
+            if raw is None:
+                continue
+            basic(token)
+            decoded_spans.append(match.span(1))
         for match in URL.finditer(text):
+            if inside(match.start()):
+                continue
             try:
                 url = urlsplit(match.group())
             except ValueError:
@@ -239,57 +335,26 @@ class CarrierWalk:
         if not unwrap or not text:
             return
 
-        # JSON strings и фрагменты в скриптах/именах/журналах. Парсер читает
-        # следующий объект целиком; произвольный синтаксис JS за JSON не выдаётся.
-        stripped = text.strip()
-        decoder = json.JSONDecoder()
-        if stripped.startswith(("{", "[", '"')):
-            try:
-                fragment, end = decoder.raw_decode(stripped)
-            except (ValueError, RecursionError):
-                require(not JSON_START.match(stripped), "MALFORMED_INPUT")
-            else:
-                if end == len(stripped) and type(fragment) in (dict, list, str):
-                    # raw_decode определяет span, но не решает корректность:
-                    # strict decode сохраняет отказ на duplicate keys и NaN.
-                    self.walk(decode(stripped), self.next_depth(depth), context)
-                    return
+        require(not introduced_error, "MALFORMED_INPUT")
+        if len(json_spans) == 1:
+            start, end = json_spans[0]
+            if not text[:start].strip(" \t\r\n") and not text[end:].strip(" \t\r\n"):
+                self.walk(decode(text[start:end]), self.next_depth(depth), context)
+                return
         if PERCENT.search(text):
-            # Для неявного URL unwrap malformed/binary последовательность не
-            # игнорируется после распознанного percent carrier.
+            # A recognized URL carrier still cannot hide malformed/binary bytes.
             data = _url_bytes(text)
             decoded_text = text_bytes(data)
             if decoded_text != text:
-                # Координата может иметь суффикс расширения после JSON fragment.
-                try:
-                    typed = _typed(data)
-                except Refusal as error:
-                    if error.code != "MALFORMED_INPUT":
-                        raise
-                    typed = decoded_text
-                self.walk(typed, self.next_depth(depth), context)
+                self.walk(_typed(data), self.next_depth(depth), context)
                 return
-        raw = _implicit_base64(stripped)
+        raw = _implicit_base64(text.strip())
         if raw is not None:
             self.representation(raw, depth, context)
             return
-        position = 0
-        while position < len(text):
-            if text[position] not in '{["':
-                position += 1
-                continue
-            try:
-                fragment, end = decoder.raw_decode(text, position)
-            except (ValueError, RecursionError):
-                require(not JSON_START.match(text[position:]), "MALFORMED_INPUT")
-                position += 1
-                continue
-            if type(fragment) in (dict, list, str):
-                self.walk(decode(text[position:end]), self.next_depth(depth), context)
-                decoded_spans.append((position, end))
-            position = end
-        # Распознанный base64 остаётся carrier в имени с расширением либо в
-        # тексте журнала. Уже прочитанные JSON/Basic spans повторно не считаются.
+        for start, end in json_spans:
+            self.walk(decode(text[start:end]), self.next_depth(depth), context)
+        # Full original-text traversal continues after every JSON/Basic span.
         for token in BASE64_TOKEN.finditer(text):
             if any(start <= token.start() and token.end() <= end for start, end in decoded_spans):
                 continue
