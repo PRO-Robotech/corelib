@@ -1,8 +1,9 @@
 """Полное покрытие байтов ZIP, который производит локальный projector.
 
-Поддержан обычный однодисковый ZIP без ZIP64, descriptors, extras и comments.
-Эти расширения writer не производит; чтение произвольного исторического ZIP
-не входит в final check. Разметка: PKWARE APPNOTE 6.3.10, §4.3.7/12/16.
+Final check принимает обычный однодисковый ZIP без ZIP64, descriptors,
+extras и comments. Historical scan дополнительно читает измеренный streaming
+профиль: DEFLATE, нулевые local sizes/CRC и подписанный descriptor 16 bytes.
+Разметка: PKWARE APPNOTE 6.3.10, §4.3.7/8/12/16.
 https://pkware.cachefly.net/webdocs/casestudies/APPNOTE.TXT
 """
 from __future__ import annotations
@@ -18,6 +19,7 @@ from .common import require
 END = struct.Struct("<4s4H2IH")
 CENTRAL = struct.Struct("<4s6H3I5H2I")
 LOCAL = struct.Struct("<4s5H3I2H")
+DESCRIPTOR = struct.Struct("<4s3I")
 
 
 def _record(layout, data, offset, stop):
@@ -78,8 +80,11 @@ def check_envelope(data, infos, *, historical_comment=None):
          internal_attributes, external_attributes, local_offset) = header
         require(signature == b"PK\x01\x02", "MALFORMED_INPUT")
         require(start_disk == internal_attributes == 0
-                and flags in ((0, 0x800) if historical else (0,)) and needed <= 20
+                and flags in ((0, 0x800, 8) if historical else (0,)) and needed <= 20
                 and method in (zipfile.ZIP_STORED, zipfile.ZIP_DEFLATED), "UNSUPPORTED_INPUT")
+        descriptor = historical and flags == 8
+        if descriptor:
+            require(method == zipfile.ZIP_DEFLATED, "UNSUPPORTED_INPUT")
         if historical:
             # Старые ZIP writers могли не проставить Unix file-type bits.
             require(made_by >> 8 in (0, 3) and not external_attributes & 0x10
@@ -104,7 +109,11 @@ def check_envelope(data, infos, *, historical_comment=None):
         require(local[0] == b"PK\x03\x04", "MALFORMED_INPUT")
         # Общие поля от version-needed до extra-size совпадают побайтно по смыслу:
         # local extra нельзя спрятать за пустым central extra.
-        require(local[1:10] == header[2:11], "MALFORMED_INPUT")
+        if descriptor:
+            require(local[1:6] == header[2:7] and local[6:9] == (0, 0, 0)
+                    and local[9] == name_size, "MALFORMED_INPUT")
+        else:
+            require(local[1:10] == header[2:11], "MALFORMED_INPUT")
         if not historical:
             require(local[10] == extra_size, "MALFORMED_INPUT")
         local_name_start = local_offset + LOCAL.size
@@ -113,18 +122,26 @@ def check_envelope(data, infos, *, historical_comment=None):
         payload_end = payload_start + compressed
         require(payload_end <= directory_offset
                 and data[local_name_start:local_name_end] == name, "MALFORMED_INPUT")
+        member_end = payload_end
+        if descriptor:
+            # Central задаёт compressed span; конец DEFLATE проверяется отдельно.
+            # Descriptor занимает ровно следующие 16 bytes без поиска signature.
+            require(_record(DESCRIPTOR, data, payload_end, directory_offset)
+                    == (b"PK\x07\x08", crc, compressed, size), "MALFORMED_INPUT")
+            member_end += DESCRIPTOR.size
         if historical:
             metadata.extend(_extra_fields(data[name_end:extra_end]))
             metadata.append(data[extra_end:central_position])
             metadata.extend(_extra_fields(data[local_name_end:payload_start]))
-        spans.append((local_offset, payload_start, payload_end, method, size))
+        spans.append((local_offset, payload_start, payload_end, member_end, method, size))
 
     require(central_position == end_offset, "MALFORMED_INPUT")
     position = 0
-    for start, payload_start, stop, method, size in sorted(spans):
+    for start, payload_start, payload_end, member_end, method, size in sorted(spans):
         # Равенство, а не <=: ни наложений, ни префикса, ни дыр между members.
         require(start == position, "MALFORMED_INPUT")
-        _payload(data, payload_start, stop, method, size)
-        position = stop
+        _payload(data, payload_start, payload_end, method, size)
+        # CRC фактических распакованных bytes проверяет zipfile при чтении member.
+        position = member_end
     require(position == directory_offset, "MALFORMED_INPUT")
     return metadata

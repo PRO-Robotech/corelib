@@ -25,7 +25,8 @@ def scan(path, limits, result):
             member_path(info.filename)
             require(not info.is_dir() and info.orig_filename == info.filename, "UNSAFE_PATH")
             require(info.file_size <= limits["document_bytes"], "LIMIT_EXCEEDED")
-            require(PurePosixPath(info.filename).suffix.lower() in (".json", ".log", ".txt"), "UNSUPPORTED_INPUT")
+            require(PurePosixPath(info.filename).suffix.lower()
+                    in (".json", ".log", ".txt", ".cli", ".rc"), "UNSUPPORTED_INPUT")
         metadata = check_envelope(data, infos, historical_comment=archive.comment)
         walker = CarrierWalk(limits, result)
         for value in metadata:
