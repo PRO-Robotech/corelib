@@ -1,6 +1,6 @@
 // Run the unchanged candidate action in a private snapshot with genuine pinned dependencies.
 import assert from 'node:assert/strict';
-import {cpSync,existsSync,mkdirSync,readFileSync,symlinkSync,writeFileSync} from 'node:fs';
+import {cpSync,copyFileSync,existsSync,mkdirSync,readFileSync,symlinkSync,writeFileSync} from 'node:fs';
 import {spawnSync} from 'node:child_process';
 import path from 'node:path';
 import {fileURLToPath} from 'node:url';
@@ -22,12 +22,13 @@ export function fixedMain({root,base,sdkHome,fixture,mode='lawful',override={},w
   assert.equal(declaration.runs.using,'node24');assert.equal(path.resolve(action,declaration.runs.main),main);
   assert.deepEqual(Object.keys(declaration.inputs).sort(),Object.keys(inputs).sort());
   const record=path.join(base,'boundary.jsonl');writeFileSync(record,'');
+  const inputArchive=path.join(base,'input.zip');copyFileSync(fixture.archivePath,inputArchive);
   const environment={PATH:process.env.PATH,LANG:'C.UTF-8',TMPDIR:process.env.TMPDIR,GOWORK:'off',PYTHONDONTWRITEBYTECODE:'1',
     CI_NP_SDK_ROOT:sdkHome,CI_NP_UPLOAD_RECORD:record,CI_NP_UPLOAD_MODE:mode,
     ACTIONS_RUNTIME_TOKEN:token,ACTIONS_RESULTS_URL:'https://example.invalid/'+CANARY,
     GITHUB_TOKEN:CANARY+'-github',GH_TOKEN:CANARY+'-gh',AWS_SECRET_ACCESS_KEY:CANARY+'-aws',
     NODE_OPTIONS:'--import='+fileURLToPath(new URL('./preload.mjs',import.meta.url))};
-  for(const [name,value]of Object.entries({...inputs,'archive-path':fixture.archivePath,'manifest-path':fixture.manifestPath,...override}))environment['INPUT_'+name.toUpperCase()]=value;
+  for(const [name,value]of Object.entries({...inputs,'archive-path':inputArchive,'manifest-path':fixture.manifestPath,...override}))environment['INPUT_'+name.toUpperCase()]=value;
   if(withoutToken)delete environment.ACTIONS_RUNTIME_TOKEN;
   const result=spawnSync(process.execPath,[main],{cwd:stage,env:environment,encoding:'utf8',timeout:15000,killSignal:'SIGKILL',maxBuffer:1024*1024});
   const rows=readFileSync(record,'utf8').trim().split('\n').filter(Boolean).map(JSON.parse);

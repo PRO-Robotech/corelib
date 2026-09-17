@@ -6,6 +6,7 @@ import {createRequire} from 'node:module';
 import {createHash} from 'node:crypto';
 import {Readable} from 'node:stream';
 import path from 'node:path';
+import net from 'node:net';
 
 export const LOCK_SHA = 'fcb99bf7fb824e8ddb93269eca3f3537427fdbd13c2e556383d3bda2e39f422c';
 export const BLOB_SHA = '08cfc257f4a0b488bb0bfcf046c10902119e79fa0fcbfe1df95ea7b690333366';
@@ -59,7 +60,9 @@ export async function installRecordingNetwork(home, record, mode = 'lawful') {
   return {sdk, restore:()=>{sdk.BlobClient.prototype.getBlockBlobClient=oldBlob;sdk.HttpClient.prototype.post=oldPost;}};
 }
 export async function sdkPrerequisite(home, bytes) {
-  const records=[];const oldToken=process.env.ACTIONS_RUNTIME_TOKEN;const oldURL=process.env.ACTIONS_RESULTS_URL;
+  const records=[];let networkCalls=0;const oldConnect=net.Socket.prototype.connect;
+  net.Socket.prototype.connect=function(){networkCalls++;throw new Error('UNEXPECTED_PREREQUISITE_NETWORK');};
+  const oldToken=process.env.ACTIONS_RUNTIME_TOKEN;const oldURL=process.env.ACTIONS_RESULTS_URL;
   process.env.ACTIONS_RUNTIME_TOKEN=token;process.env.ACTIONS_RESULTS_URL='https://example.invalid';
   const {sdk,restore}=await installRecordingNetwork(home, r=>records.push(r));
   try {
@@ -75,6 +78,6 @@ export async function sdkPrerequisite(home, bytes) {
     const blob=records.find(r=>r.kind==='blob');assert.deepEqual(blob.bytes,bytes);
     assert.equal(result.sha256Hash,digest(bytes));assert.equal(result.uploadSize,bytes.length);
     assert.deepEqual(records.map(r=>r.kind==='request'?r.method:r.kind),['CreateArtifact','blob','FinalizeArtifact']);
-    return {sdk:'@actions/artifact@6.2.1',node:process.version,bytes:bytes.length,digest:digest(bytes),calls:3,networkCalls:0};
-  } finally {restore();for(const [name,value]of [['ACTIONS_RUNTIME_TOKEN',oldToken],['ACTIONS_RESULTS_URL',oldURL]]){if(value===undefined)delete process.env[name];else process.env[name]=value;}}
+    return {sdk:'@actions/artifact@6.2.1',node:process.version,bytes:bytes.length,digest:digest(bytes),calls:records.length,networkCalls};
+  } finally {restore();net.Socket.prototype.connect=oldConnect;for(const [name,value]of [['ACTIONS_RUNTIME_TOKEN',oldToken],['ACTIONS_RESULTS_URL',oldURL]]){if(value===undefined)delete process.env[name];else process.env[name]=value;}}
 }

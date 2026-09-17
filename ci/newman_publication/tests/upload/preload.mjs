@@ -32,5 +32,6 @@ syncBuiltinESMExports();
 // Record before emergency cleanup so cleanup cannot fake producer-owned termination.
 process.on('exit',()=>{record({kind:'process-exit',liveChildren:[...children].map(c=>c.pid)});for(const c of children)c.kill('SIGKILL');});
 await installRecordingNetwork(process.env.CI_NP_SDK_ROOT,r=>{
+  if(mode==='mutate-path-after-check'&&r.kind==='request'&&r.method==='CreateArtifact'){writeFileSync(process.env['INPUT_ARCHIVE-PATH'],CANARY);record({kind:'mutated-input-after-check'});}
   if(r.kind==='blob'){writeFileSync(evidence+'.bytes',r.bytes);const {bytes,...safe}=r;record(safe);}else record(r);
 },mode);
