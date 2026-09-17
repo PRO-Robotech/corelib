@@ -168,7 +168,7 @@ class RecognizerBoundaries(unittest.TestCase):
                     row['errors'].append('cursor_fact_changed')
             if (raw.get('response') or {}).get('code') != (out.get('response') or {}).get('code'):
                 row['errors'].append('http_fact_changed')
-        after = f.reader_verdict(projected, 'public')
+        after = f.reader_verdict(projected, 'public-' + row['id'])
         dependent.update(reader_after_executed=True, reader_after=after, status='EXECUTED')
         if after != before:
             row['errors'].append('actual_reader_verdict_changed')
