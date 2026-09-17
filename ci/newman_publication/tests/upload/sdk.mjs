@@ -13,6 +13,17 @@ export const BLOB_SHA = '08cfc257f4a0b488bb0bfcf046c10902119e79fa0fcbfe1df95ea7b
 export const digest = b => createHash('sha256').update(b).digest('hex');
 export const token = `${Buffer.from('{"alg":"none"}').toString('base64url')}.${Buffer.from(JSON.stringify({scp:'Actions.Results:11111111-1111-1111-1111-111111111111:22222222-2222-2222-2222-222222222222'})).toString('base64url')}.synthetic`;
 export const CANARY = 'synthetic-np-upload-apricot';
+export function assertArtifactRequests(records, bytes) {
+  const requests=records.filter(r=>r.kind==='request');
+  assert.deepEqual(requests.map(r=>r.method),['CreateArtifact','FinalizeArtifact']);
+  for(const {body} of requests) {
+    assert.equal(body.name,'newman-publication-17-2-0');
+    assert.equal(body.workflow_run_backend_id,'11111111-1111-1111-1111-111111111111');
+    assert.equal(body.workflow_job_run_backend_id,'22222222-2222-2222-2222-222222222222');
+  }
+  assert.equal(requests[1].body.size,String(bytes.length));
+  assert.equal(requests[1].body.hash,'sha256:'+digest(bytes));
+}
 export async function sdkImports(home) {
   const pkg = path.join(home, 'node_modules/@actions/artifact');
   assert.equal(JSON.parse(readFileSync(path.join(pkg, 'package.json'))).version, '6.2.1');
@@ -78,6 +89,7 @@ export async function sdkPrerequisite(home, bytes) {
     const blob=records.find(r=>r.kind==='blob');assert.deepEqual(blob.bytes,bytes);
     assert.equal(result.sha256Hash,digest(bytes));assert.equal(result.uploadSize,bytes.length);
     assert.deepEqual(records.map(r=>r.kind==='request'?r.method:r.kind),['CreateArtifact','blob','FinalizeArtifact']);
+    assertArtifactRequests(records,bytes);
     return {sdk:'@actions/artifact@6.2.1',node:process.version,bytes:bytes.length,digest:digest(bytes),calls:records.length,networkCalls};
   } finally {restore();net.Socket.prototype.connect=oldConnect;for(const [name,value]of [['ACTIONS_RUNTIME_TOKEN',oldToken],['ACTIONS_RESULTS_URL',oldURL]]){if(value===undefined)delete process.env[name];else process.env[name]=value;}}
 }

@@ -6,7 +6,7 @@ import {spawnSync} from 'node:child_process';
 import {fileURLToPath,pathToFileURL} from 'node:url';
 import path from 'node:path';
 import {tmpdir} from 'node:os';
-import {digest,CANARY} from './upload/sdk.mjs';
+import {digest,CANARY,assertArtifactRequests} from './upload/sdk.mjs';
 import {fixedMain,inputs} from './upload/main-driver.mjs';
 
 const ROOT=path.resolve(fileURLToPath(new URL('../../../',import.meta.url)));
@@ -124,8 +124,8 @@ for(const [mode,override,withoutToken]of mainCases)define('fixed-main-'+mode,'fi
   assert.equal(r.rows.filter(x=>x.kind==='unexpected-network'||x.kind==='unexpected-child').length,0);
   const children=r.rows.filter(x=>x.kind==='child');for(const child of children){assert.equal(child.canonical,true);assert.equal(child.credentialValues,0);assert.equal(child.hasSignal,true);}
   assert.ok(r.rows.filter(x=>x.kind==='process-exit').every(x=>x.liveChildren.length===0),'producer must terminate own child before exit');
-  if(mode==='lawful'||(mode==='mutate-path-after-check'&&answer.status==='PUBLISHED')){output(answer,'PUBLISHED','COMPLETE',readFileSync(fixture.fixtures[0].archivePath));assert.equal(r.process.status,0);assert.deepEqual(r.received,readFileSync(fixture.fixtures[0].archivePath));assert.equal(children.length,1);assert.deepEqual(r.rows.filter(x=>x.kind==='request').map(x=>x.method),['CreateArtifact','FinalizeArtifact']);}
-  else {assert.equal(r.process.status,3);output(answer,'NOT_EXECUTED',['INVALID_REQUEST','CHECKER_TIMEOUT','CHECKER_INVALID','CHECKER_INCOMPLETE','TRANSPORT_UNAVAILABLE','TRANSPORT_MISMATCH']);if(['stall-checker','malformed-checker','bad-integer','bad-budget','missing-runtime'].includes(mode))assert.equal(r.rows.filter(x=>x.kind==='blob').length,0);}
+  if(mode==='lawful'||(mode==='mutate-path-after-check'&&answer.status==='PUBLISHED')){output(answer,'PUBLISHED','COMPLETE',readFileSync(fixture.fixtures[0].archivePath));assert.equal(r.process.status,0);assert.deepEqual(r.received,readFileSync(fixture.fixtures[0].archivePath));assert.equal(children.length,1);assertArtifactRequests(r.rows,readFileSync(fixture.fixtures[0].archivePath));}
+  else {assert.equal(r.process.status,3);output(answer,'NOT_EXECUTED',['INVALID_REQUEST','CHECKER_TIMEOUT','CHECKER_INVALID','CHECKER_INCOMPLETE','TRANSPORT_UNAVAILABLE','TRANSPORT_MISMATCH']);if(['stall-checker','malformed-checker','bad-integer','bad-budget','missing-runtime'].includes(mode))assert.equal(r.rows.filter(x=>x.kind==='blob'||x.kind==='request').length,0,'refusal before transport must have zero CreateArtifact, blob, and FinalizeArtifact calls');}
   if(mode==='stall-checker'){assert.equal(answer.code,'CHECKER_TIMEOUT');assert.equal(children.length,1);const closed=r.rows.filter(x=>x.kind==='child-closed');assert.equal(closed.length,1);assert.ok(closed[0].signal||closed[0].code!==null);}
   if(mode==='mutate-path-after-check'){if(r.received!==null)assert.deepEqual(r.received,readFileSync(fixture.fixtures[0].archivePath));assert.equal(r.rows.filter(x=>x.kind==='mutated-input-after-check').length,1);assert.ok(r.rows.findIndex(x=>x.kind==='child-closed')<r.rows.findIndex(x=>x.kind==='mutated-input-after-check'));}
   row.boundary=r.rows;row.changed=mode==='lawful'?[]:[mode];
