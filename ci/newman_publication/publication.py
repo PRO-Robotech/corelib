@@ -13,6 +13,7 @@ from .catalogue import Catalogue
 from .common import (decode, encode, field_count, integer, open_directory,
                      read_file, require, sha256, shape)
 from .projection import check_log, log_projection, report_projection
+from .zip_envelope import check_envelope
 
 
 def member_name(section, index):
@@ -141,6 +142,7 @@ def check(manifest, archive_path, stdin, limits, result):
             require(not info.extra and not info.comment and not info.flag_bits & 1
                     and info.compress_type in (zipfile.ZIP_STORED, zipfile.ZIP_DEFLATED), "UNSUPPORTED_INPUT")
             require(info.file_size <= limits["document_bytes"], "LIMIT_EXCEEDED")
+        check_envelope(data, infos)
         public = decode(archive.read("manifest.json"))
         shape(public, ("schema_version", "run", "reports", "logs", "verdicts"))
         require(type(public["schema_version"]) is int and public["schema_version"] == 1)
