@@ -52,8 +52,8 @@ class Catalogue:
                 seen.add(path_value)
         result["files_declared"] = sum(len(doc[key]) for key in ("reports", "logs", "verdicts"))
         require(doc["reports"], "EMPTY_INPUT")
-        # Этот этап не реализует ещё не получивший независимый RED shard adapter.
-        require(not doc["verdicts"], "UNSUPPORTED_INPUT")
+        for entry in doc["verdicts"]:
+            require(entry["kind"] == "kacho-shard-v1", "UNSUPPORTED_INPUT")
         require(git(self.source, "rev-parse", "--show-toplevel").rstrip(b"\n")
                 == os.fsencode(self.source), "SOURCE_MISMATCH")
         require(git(self.source, "rev-parse", "HEAD").strip() == commit.encode(), "SOURCE_MISMATCH")
@@ -65,14 +65,27 @@ class Catalogue:
             seen_collections.add(name)
             digest = entry["collection_sha256"]
             require(type(digest) is str and re.fullmatch(r"[a-f0-9]{64}", digest))
-            tracked = git(self.source, "ls-tree", "-z", commit, "--", name)
-            require(tracked.startswith((b"100644 blob ", b"100755 blob "))
-                    and tracked.count(b"\x00") == 1, "SOURCE_MISMATCH")
-            blob = git(self.source, "show", commit + ":" + name)
-            checkout = read_file(self.source / name, limits["document_bytes"])
-            require(len(blob) <= limits["document_bytes"], "LIMIT_EXCEEDED")
-            require(sha256(blob) == digest == sha256(checkout), "SOURCE_MISMATCH")
+            blob = self.source_bytes(name)
+            require(sha256(blob) == digest, "SOURCE_MISMATCH")
             self.collections.append(decode(blob))
+
+    def source_bytes(self, name):
+        """Коллекции и shard catalogue имеют одну границу доверия к Git blob."""
+        name = str(member_path(name))
+        commit = self.manifest["source_commit"]
+        tracked = git(self.source, "ls-tree", "-z", commit, "--", name)
+        require(tracked.startswith((b"100644 blob ", b"100755 blob "))
+                and tracked.count(b"\x00") == 1, "SOURCE_MISMATCH")
+        blob = git(self.source, "show", commit + ":" + name)
+        checkout = read_file(self.source / name, self.limits["document_bytes"])
+        require(len(blob) <= self.limits["document_bytes"], "LIMIT_EXCEEDED")
+        require(sha256(blob) == sha256(checkout), "SOURCE_MISMATCH")
+        return blob
+
+    def tracked_paths(self, prefix):
+        raw = git(self.source, "ls-tree", "-r", "--name-only", "-z",
+                  self.manifest["source_commit"], "--", prefix)
+        return [name.decode("utf-8") for name in raw.split(b"\x00") if name]
 
     def input_bytes(self, relative):
         return read_file(self.input / member_path(relative), self.limits["document_bytes"])

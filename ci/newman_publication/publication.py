@@ -14,11 +14,12 @@ from .carriers import CarrierWalk, text_bytes
 from .common import (decode, encode, field_count, integer, open_directory,
                      read_file, require, sha256, shape)
 from .projection import check_log, log_projection, report_projection
+from .verdicts import Verdicts
 from .zip_envelope import check_envelope
 
 
 def member_name(section, index):
-    singular = {"reports": "report", "logs": "log"}[section]
+    singular = {"reports": "report", "logs": "log", "verdicts": "verdict"}[section]
     return f"{section}/{singular}-{index + 1:06d}.json"
 
 
@@ -39,9 +40,11 @@ def project_members(catalogue, result):
     members = {}
     public = public_manifest(catalogue)
     walker = CarrierWalk(catalogue.limits, result, detect=False)
+    verdicts = Verdicts(catalogue)
+    reports = []
     input_bytes = 0
     require(result["files_declared"] + 1 <= catalogue.limits["zip_entries"], "LIMIT_EXCEEDED")
-    for section in ("reports", "logs"):
+    for section in ("reports", "logs", "verdicts"):
         for entry in catalogue.manifest[section]:
             index = entry["index"]
             data = catalogue.input_bytes(entry["report" if section == "reports" else "path"])
@@ -51,15 +54,21 @@ def project_members(catalogue, result):
                 raw = decode(data)
                 walker.walk(raw)
                 document = report_projection(raw, catalogue.collections[index])
-            else:
+                reports.append(document)
+            elif section == "logs":
                 walker.walk(text_bytes(data))
                 document = log_projection(data, index)
+            else:
+                raw = decode(data)
+                walker.walk(raw)
+                document = verdicts.project(raw, index, reports)
             projected = encode(document)
             require(len(projected) <= catalogue.limits["document_bytes"], "LIMIT_EXCEEDED")
             public[section].append(entry_metadata(section, index, projected, catalogue))
             members[member_name(section, index)] = projected
             result["files_checked"] += 1
             result["fields_checked"] += field_count(document)
+    verdicts.finish()
     members["manifest.json"] = encode(public)
     result["fields_checked"] += field_count(public)
     return members
@@ -136,13 +145,15 @@ def check(manifest, archive_path, stdin, limits, result):
         data = read_file(archive_path, limits["archive_bytes"])
     bind_bytes(result, data)
     catalogue = Catalogue(manifest, limits, result)
+    verdicts = Verdicts(catalogue)
+    reports = []
     with zipfile.ZipFile(io.BytesIO(data)) as archive:
         infos = archive.infolist()
         require(len(infos) <= limits["zip_entries"], "LIMIT_EXCEEDED")
         require(not archive.comment, "UNSUPPORTED_INPUT")
         require(len({info.filename for info in infos}) == len(infos), "UNSAFE_PATH")
         expected = {"manifest.json"}
-        for section in ("reports", "logs"):
+        for section in ("reports", "logs", "verdicts"):
             expected.update(member_name(section, index) for index in range(len(catalogue.manifest[section])))
         require({info.filename for info in infos} == expected, "UNSUPPORTED_INPUT")
         require(sum(info.file_size for info in infos) <= limits["expanded_bytes"], "LIMIT_EXCEEDED")
@@ -156,8 +167,8 @@ def check(manifest, archive_path, stdin, limits, result):
         walker.walk(public)
         shape(public, ("schema_version", "run", "reports", "logs", "verdicts"))
         require(type(public["schema_version"]) is int and public["schema_version"] == 1)
-        require(public["run"] == catalogue.manifest["run"] and public["verdicts"] == [], "SOURCE_MISMATCH")
-        for section in ("reports", "logs"):
+        require(public["run"] == catalogue.manifest["run"], "SOURCE_MISMATCH")
+        for section in ("reports", "logs", "verdicts"):
             require(type(public[section]) is list
                     and len(public[section]) == len(catalogue.manifest[section]))
             for index, entry in enumerate(public[section]):
@@ -170,9 +181,13 @@ def check(manifest, archive_path, stdin, limits, result):
                     # даже не похожие на секрет, не входят в эту схему.
                     require(document == report_projection(document, catalogue.collections[index]),
                             "UNSUPPORTED_INPUT")
-                else:
+                    reports.append(document)
+                elif section == "logs":
                     check_log(document, index)
+                else:
+                    verdicts.project(document, index, reports, final=True)
                 result["files_checked"] += 1
                 result["fields_checked"] += field_count(document)
+        verdicts.finish()
         result["fields_checked"] += field_count(public)
     result.update(status="CLEAN", code="COMPLETE")
