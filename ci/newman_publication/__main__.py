@@ -20,18 +20,17 @@ class Parser(argparse.ArgumentParser):
 
 def main(argv=None):
     argv = sys.argv[1:] if argv is None else argv
-    operation = argv[0] if argv and argv[0] in ("project", "check", "scan") else "project"
+    operation = argv[0] if argv and argv[0] in ("project", "check") else "project"
     result = {"schema_version": 1, "operation": operation, "status": "NOT_EXECUTED",
               "code": "INTERNAL_ERROR", "files_declared": 0, "files_checked": 0,
               "fields_checked": 0, "findings": 0, "archive_bytes": 0, "archive_sha256": None}
     try:
         parser = Parser(add_help=False, allow_abbrev=False)
         commands = parser.add_subparsers(dest="operation", required=True)
-        for name in ("project", "check", "scan"):
+        for name in ("project", "check"):
             command = commands.add_parser(name, add_help=False, allow_abbrev=False)
             command.add_argument("--limits")
-            if name != "scan":
-                command.add_argument("--manifest", required=True)
+            command.add_argument("--manifest", required=True)
             if name == "project":
                 command.add_argument("--output-dir", required=True)
             else:
@@ -42,9 +41,6 @@ def main(argv=None):
             project(args.manifest, args.output_dir, limits, result)
         elif args.operation == "check":
             check(args.manifest, args.archive, sys.stdin.buffer, limits, result)
-        else:
-            # Исторический scanner получит отдельный независимый RED и переход.
-            raise Refusal("CHECKER_UNAVAILABLE")
     except Refusal as error:
         result.update(status="NOT_EXECUTED", code=error.code)
     except OSError as error:
