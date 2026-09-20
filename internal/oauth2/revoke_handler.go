@@ -9,7 +9,7 @@ import (
 	"fmt"
 	"net/http"
 
-	"github.com/PRO-Robotech/corelib/internal/oauth2/otelx"
+	"github.com/PRO-Robotech/corelib/internal/otelx"
 	"github.com/ory/x/errorsx"
 	"go.opentelemetry.io/otel/trace"
 

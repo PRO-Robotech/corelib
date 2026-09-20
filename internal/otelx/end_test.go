@@ -17,7 +17,7 @@ import (
 	"go.opentelemetry.io/otel/trace"
 	"go.opentelemetry.io/otel/trace/embedded"
 
-	"github.com/PRO-Robotech/corelib/internal/oauth2/otelx"
+	"github.com/PRO-Robotech/corelib/internal/otelx"
 )
 
 // recordingSpan — САМОДЕЛЬНЫЙ держатель, а не мок из комплекта: он и есть

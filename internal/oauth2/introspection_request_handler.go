@@ -12,7 +12,7 @@ import (
 	"go.opentelemetry.io/otel/trace"
 	"golang.org/x/text/language"
 
-	"github.com/PRO-Robotech/corelib/internal/oauth2/otelx"
+	"github.com/PRO-Robotech/corelib/internal/otelx"
 	"github.com/ory/x/errorsx"
 )
 
