@@ -6,8 +6,8 @@ package fosite
 import (
 	"context"
 
+	"github.com/PRO-Robotech/corelib/internal/oauth2/otelx"
 	"github.com/ory/x/errorsx"
-	"github.com/ory/x/otelx"
 	"go.opentelemetry.io/otel/trace"
 
 	"github.com/pkg/errors"

@@ -9,8 +9,8 @@ import (
 	"strings"
 
 	"github.com/PRO-Robotech/corelib/internal/oauth2/i18n"
+	"github.com/PRO-Robotech/corelib/internal/oauth2/otelx"
 	"github.com/ory/x/errorsx"
-	"github.com/ory/x/otelx"
 	"go.opentelemetry.io/otel/trace"
 
 	"github.com/pkg/errors"
