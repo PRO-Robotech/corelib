@@ -44,7 +44,11 @@ type AuthorizeJWTGrantRequestHandlerTestSuite struct {
 
 // Setup before each test in the suite.
 func (s *AuthorizeJWTGrantRequestHandlerTestSuite) SetupSuite() {
-	privateKey, err := rsa.GenerateKey(rand.Reader, 512) // fast RSA for testing
+	// Правка Kacho: было 512 бит. crypto/rsa начиная с Go 1.24 отказывает ключам
+	// короче 1024 бит («512-bit keys are insecure»), и SetupTest падал ДО первой
+	// проверки. 2048 — та же длина, что у остальных фикстур этого же файла
+	// (строки 784 и 823) и у integration/helper_setup_test.go.
+	privateKey, err := rsa.GenerateKey(rand.Reader, 2048)
 	if err != nil {
 		s.FailNowf("failed to setup test suite", "failed to generate RSA private key: %s", err.Error())
 	}
