@@ -1,0 +1,655 @@
+// Copyright (c) PRO-Robotech
+// SPDX-License-Identifier: Apache-2.0
+
+// ceremony_test.go — пробы ГРАНИЦЫ, а не движка.
+//
+// Пробы движка внесены целиком вместе с ним и прогоняются отдельно; повторять
+// их здесь значило бы завести второе место об одном предмете. Здесь
+// проверяется ровно то, что принадлежит нам: перевод наших типов в типы
+// движка и обратно, перевод отказов, контракт портов и отсутствие следов
+// поставщика в том, что уезжает наружу.
+package oauthceremony_test
+
+import (
+	"context"
+	"crypto/sha256"
+	"encoding/base64"
+	"errors"
+	"strings"
+	"testing"
+	"time"
+
+	"golang.org/x/crypto/bcrypt"
+
+	"github.com/PRO-Robotech/corelib/oauthceremony"
+)
+
+const (
+	testIssuer      = "https://iam.example.net"
+	testClientID    = "svc-console"
+	testSecret      = "correct-horse-battery-staple"
+	testRedirectURI = "https://console.example.net/oauth2/callback"
+	testSubject     = "usr-7f3c9a1e"
+	testState       = "s6BhdRkqt3s6BhdRkqt3s6BhdRkqt3xx"
+	testVerifier    = "dBjftJeZ4CVPmB92K27uhbUJU1p1r_wW1gFWFOEjXkQ"
+)
+
+// newTestCeremony собирает церемонию с полным набором настроек. Ни одно поле
+// не опущено: New отвергает неназванное, и это здесь проверяется заодно.
+func newTestCeremony(t *testing.T, ports oauthceremony.Ports, tweaks ...func(*oauthceremony.Config)) *oauthceremony.Ceremony {
+	t.Helper()
+
+	cfg := oauthceremony.Config{
+		Issuer:                          testIssuer,
+		SigningSecret:                   []byte("0123456789abcdef0123456789abcdef"),
+		AccessTokenLifespan:             time.Hour,
+		RefreshTokenLifespan:            24 * time.Hour,
+		AuthorizationCodeLifespan:       10 * time.Minute,
+		ScopeMatching:                   oauthceremony.ScopeMatchingExact,
+		RefreshTokenIssuance:            oauthceremony.RefreshTokenIssuanceOnScope,
+		RefreshTokenScopes:              []string{"offline"},
+		RequireProofKey:                 true,
+		RequireProofKeyForPublicClients: true,
+		SecretHashCost:                  10,
+		MinParameterEntropy:             8,
+		PortTimeout:                     2 * time.Second,
+		OperationTimeout:                5 * time.Second,
+	}
+	for _, tweak := range tweaks {
+		tweak(&cfg)
+	}
+
+	ceremony, err := oauthceremony.New(cfg, ports)
+	if err != nil {
+		t.Fatalf("New не собрал церемонию: %v", err)
+	}
+	return ceremony
+}
+
+func registerTestClient(t *testing.T, store *memoryPorts) {
+	t.Helper()
+
+	hash, err := bcrypt.GenerateFromPassword([]byte(testSecret), 10)
+	if err != nil {
+		t.Fatalf("хеш секрета клиента не собран: %v", err)
+	}
+	store.clients[testClientID] = oauthceremony.ClientRegistration{
+		ClientID:     testClientID,
+		HashedSecret: hash,
+		RedirectURIs: []string{testRedirectURI},
+		GrantKinds: []oauthceremony.GrantKind{
+			oauthceremony.GrantAuthorizationCode,
+			oauthceremony.GrantRefreshToken,
+		},
+		ResponseKinds: []string{"code"},
+		Scopes:        []string{"openid", "profile", "offline"},
+	}
+}
+
+func proofKeyChallenge(verifier string) string {
+	sum := sha256.Sum256([]byte(verifier))
+	return base64.RawURLEncoding.EncodeToString(sum[:])
+}
+
+func authorizeRequest() oauthceremony.AuthorizationRequest {
+	return oauthceremony.AuthorizationRequest{
+		ClientID:      testClientID,
+		RedirectURI:   testRedirectURI,
+		ResponseKinds: []oauthceremony.ResponseKind{oauthceremony.ResponseKindCode},
+		Scopes:        []string{"openid", "offline"},
+		State:         testState,
+		Additional: map[string][]string{
+			"code_challenge":        {proofKeyChallenge(testVerifier)},
+			"code_challenge_method": {"S256"},
+		},
+	}
+}
+
+// issueCode проходит точку авторизации до выданного кода.
+func issueCode(t *testing.T, ceremony *oauthceremony.Ceremony) (string, oauthceremony.AuthorizationResult) {
+	t.Helper()
+
+	intent, err := ceremony.Authorize(context.Background(), authorizeRequest())
+	if err != nil {
+		t.Fatalf("Authorize отказал: %v", err)
+	}
+	if intent.ClientID() != testClientID {
+		t.Fatalf("намерение называет клиента %q, ожидался %q", intent.ClientID(), testClientID)
+	}
+
+	result, err := ceremony.CompleteAuthorization(context.Background(), intent, oauthceremony.AuthorizationGrant{
+		Subject:       testSubject,
+		Username:      "console-operator",
+		GrantedScopes: []string{"openid", "offline"},
+		Claims:        map[string]any{"tenant": "b1g0000000000000a"},
+	})
+	if err != nil {
+		t.Fatalf("CompleteAuthorization отказал: %v", err)
+	}
+
+	codes := result.Parameters["code"]
+	if len(codes) != 1 || codes[0] == "" {
+		t.Fatalf("в ответе точки авторизации нет кода: параметры %v", result.Parameters)
+	}
+	return codes[0], result
+}
+
+// TestAuthorizationCodeCeremonyRoundTrip — полный проход границы: запрос
+// авторизации, согласие, обмен кода, интроспекция, отзыв.
+func TestAuthorizationCodeCeremonyRoundTrip(t *testing.T) {
+	store := newMemoryPorts()
+	registerTestClient(t, store)
+	ceremony := newTestCeremony(t, store.ports())
+
+	code, result := issueCode(t, ceremony)
+
+	if got := result.Parameters["state"]; len(got) != 1 || got[0] != testState {
+		t.Errorf("state не вернулся клиенту: %v", result.Parameters["state"])
+	}
+	if !strings.HasPrefix(result.RedirectURI, testRedirectURI) {
+		t.Errorf("перенаправление ведёт не на зарегистрированный адрес: %q", result.RedirectURI)
+	}
+	if result.Delivery != oauthceremony.DeliveryQuery {
+		t.Errorf("доставка ответа %q, ожидалась %q", result.Delivery, oauthceremony.DeliveryQuery)
+	}
+
+	tokens, err := ceremony.Exchange(context.Background(), oauthceremony.TokenRequest{
+		Grant:        oauthceremony.GrantAuthorizationCode,
+		ClientID:     testClientID,
+		ClientSecret: testSecret,
+		AuthMethod:   oauthceremony.ClientAuthBasic,
+		Code:         code,
+		RedirectURI:  testRedirectURI,
+		CodeVerifier: testVerifier,
+	})
+	if err != nil {
+		t.Fatalf("Exchange отказал: %v", err)
+	}
+	if tokens.AccessToken == "" {
+		t.Fatal("обмен не выдал токена доступа")
+	}
+	if tokens.RefreshToken == "" {
+		t.Fatal("обмен не выдал токена обновления при выданной области offline")
+	}
+	if tokens.TokenType != "bearer" {
+		t.Errorf("тип токена %q, ожидался \"bearer\"", tokens.TokenType)
+	}
+	if tokens.ExpiresIn != time.Hour {
+		t.Errorf("срок токена доступа %v, ожидался %v", tokens.ExpiresIn, time.Hour)
+	}
+
+	introspection, err := ceremony.Introspect(context.Background(), oauthceremony.IntrospectionRequest{
+		Token:        tokens.AccessToken,
+		KindHint:     oauthceremony.TokenKindAccess,
+		ClientID:     testClientID,
+		ClientSecret: testSecret,
+		AuthMethod:   oauthceremony.ClientAuthBasic,
+	})
+	if err != nil {
+		t.Fatalf("Introspect отказал: %v", err)
+	}
+	if !introspection.Active {
+		t.Fatal("только что выданный токен доступа назван негодным")
+	}
+	if introspection.Subject != testSubject {
+		t.Errorf("интроспекция назвала субъекта %q, ожидался %q", introspection.Subject, testSubject)
+	}
+	if introspection.Claims["tenant"] != "b1g0000000000000a" {
+		t.Errorf("утверждения сеанса не пережили обмен: %v", introspection.Claims)
+	}
+
+	if err := ceremony.Revoke(context.Background(), oauthceremony.RevocationRequest{
+		Token:        tokens.AccessToken,
+		KindHint:     oauthceremony.TokenKindAccess,
+		ClientID:     testClientID,
+		ClientSecret: testSecret,
+		AuthMethod:   oauthceremony.ClientAuthBasic,
+	}); err != nil {
+		t.Fatalf("Revoke отказал: %v", err)
+	}
+
+	afterRevocation, err := ceremony.Introspect(context.Background(), oauthceremony.IntrospectionRequest{
+		Token:        tokens.AccessToken,
+		KindHint:     oauthceremony.TokenKindAccess,
+		ClientID:     testClientID,
+		ClientSecret: testSecret,
+		AuthMethod:   oauthceremony.ClientAuthBasic,
+	})
+	if err != nil {
+		t.Fatalf("Introspect после отзыва отказал: %v", err)
+	}
+	if afterRevocation.Active {
+		t.Error("отозванный токен доступа назван годным")
+	}
+}
+
+// TestRedeemingAuthorizationCodeTwiceIsDistinguishableByValue — ГЛАВНАЯ проба
+// атомарности на нашей стороне.
+//
+// Движок читает код снаружи транзакции, а гасит внутри; значит второе
+// предъявление обязано быть отвергнуто ПОРТОМ, и отказ обязан быть различим
+// ПО ЗНАЧЕНИЮ, а не по тексту подсказки.
+func TestRedeemingAuthorizationCodeTwiceIsDistinguishableByValue(t *testing.T) {
+	store := newMemoryPorts()
+	registerTestClient(t, store)
+	ceremony := newTestCeremony(t, store.ports())
+
+	code, _ := issueCode(t, ceremony)
+	exchange := oauthceremony.TokenRequest{
+		Grant:        oauthceremony.GrantAuthorizationCode,
+		ClientID:     testClientID,
+		ClientSecret: testSecret,
+		AuthMethod:   oauthceremony.ClientAuthBasic,
+		Code:         code,
+		RedirectURI:  testRedirectURI,
+		CodeVerifier: testVerifier,
+	}
+
+	first, err := ceremony.Exchange(context.Background(), exchange)
+	if err != nil {
+		t.Fatalf("первый обмен отказал: %v", err)
+	}
+
+	_, err = ceremony.Exchange(context.Background(), exchange)
+	if err == nil {
+		t.Fatal("второй обмен тем же кодом прошёл — код погашен не был")
+	}
+	if !errors.Is(err, oauthceremony.ErrAuthorizationCodeConsumed) {
+		t.Fatalf("второй обмен отказал случаем %v, ожидался %v",
+			oauthceremony.CodeOf(err), oauthceremony.CodeAuthorizationCodeConsumed)
+	}
+
+	// Повторное предъявление кода обязано снять всё, что по нему выдано
+	// (RFC 6749 §4.1.2, замечание о безопасности).
+	after, err := ceremony.Introspect(context.Background(), oauthceremony.IntrospectionRequest{
+		Token:        first.AccessToken,
+		KindHint:     oauthceremony.TokenKindAccess,
+		ClientID:     testClientID,
+		ClientSecret: testSecret,
+		AuthMethod:   oauthceremony.ClientAuthBasic,
+	})
+	if err != nil {
+		t.Fatalf("интроспекция после повторного предъявления отказала: %v", err)
+	}
+	if after.Active {
+		t.Error("артефакты гранта пережили повторное предъявление кода")
+	}
+}
+
+// TestIssuedArtifactsCarryNoVendorPrefix — предикат того, что имя поставщика
+// движка не уезжает наружу В ТЕКСТЕ АРТЕФАКТА.
+//
+// Движок предлагает стратегию выпуска, штампующую `ory_at_`, `ory_rt_`,
+// `ory_ac_` в начало каждого артефакта. Такая приставка — привязка в самом
+// видном месте: она попадает в журналы клиента и в его код разбора, и снять
+// её потом нельзя, не сломав всех, кто на неё смотрит.
+func TestIssuedArtifactsCarryNoVendorPrefix(t *testing.T) {
+	store := newMemoryPorts()
+	registerTestClient(t, store)
+	ceremony := newTestCeremony(t, store.ports())
+
+	code, _ := issueCode(t, ceremony)
+	tokens, err := ceremony.Exchange(context.Background(), oauthceremony.TokenRequest{
+		Grant:        oauthceremony.GrantAuthorizationCode,
+		ClientID:     testClientID,
+		ClientSecret: testSecret,
+		AuthMethod:   oauthceremony.ClientAuthBasic,
+		Code:         code,
+		RedirectURI:  testRedirectURI,
+		CodeVerifier: testVerifier,
+	})
+	if err != nil {
+		t.Fatalf("Exchange отказал: %v", err)
+	}
+
+	// Перечень приставок взят из стратегии движка дословно.
+	vendorPrefixes := []string{"ory_", "ory_at_", "ory_rt_", "ory_ac_"}
+	artifacts := map[string]string{
+		"код авторизации":  code,
+		"токен доступа":    tokens.AccessToken,
+		"токен обновления": tokens.RefreshToken,
+	}
+	for name, artifact := range artifacts {
+		if artifact == "" {
+			t.Fatalf("артефакт %q пуст — проверять нечего", name)
+		}
+		for _, prefix := range vendorPrefixes {
+			if strings.HasPrefix(artifact, prefix) {
+				t.Errorf("%s начинается с приставки поставщика %q: %q", name, prefix, artifact)
+			}
+		}
+	}
+}
+
+// TestRefreshTokenRotationRejectsSecondPresentation — оборот токена
+// обновления держится тем же одноинструкционным правилом, что и погашение
+// кода.
+func TestRefreshTokenRotationRejectsSecondPresentation(t *testing.T) {
+	store := newMemoryPorts()
+	registerTestClient(t, store)
+	ceremony := newTestCeremony(t, store.ports())
+
+	code, _ := issueCode(t, ceremony)
+	first, err := ceremony.Exchange(context.Background(), oauthceremony.TokenRequest{
+		Grant:        oauthceremony.GrantAuthorizationCode,
+		ClientID:     testClientID,
+		ClientSecret: testSecret,
+		AuthMethod:   oauthceremony.ClientAuthBasic,
+		Code:         code,
+		RedirectURI:  testRedirectURI,
+		CodeVerifier: testVerifier,
+	})
+	if err != nil {
+		t.Fatalf("Exchange отказал: %v", err)
+	}
+
+	refresh := oauthceremony.TokenRequest{
+		Grant:        oauthceremony.GrantRefreshToken,
+		ClientID:     testClientID,
+		ClientSecret: testSecret,
+		AuthMethod:   oauthceremony.ClientAuthBasic,
+		RefreshToken: first.RefreshToken,
+		Scopes:       []string{"openid", "offline"},
+	}
+
+	if _, err := ceremony.Exchange(context.Background(), refresh); err != nil {
+		t.Fatalf("первый оборот токена обновления отказал: %v", err)
+	}
+	if _, err := ceremony.Exchange(context.Background(), refresh); err == nil {
+		t.Fatal("второй оборот тем же токеном обновления прошёл")
+	}
+}
+
+// TestDenialTravelsBackAsRedirect — отказ в согласии уезжает клиенту
+// перенаправлением с полем `error`, а не телом ответа (RFC 6749 §4.1.2.1).
+func TestDenialTravelsBackAsRedirect(t *testing.T) {
+	store := newMemoryPorts()
+	registerTestClient(t, store)
+	ceremony := newTestCeremony(t, store.ports())
+
+	intent, err := ceremony.Authorize(context.Background(), authorizeRequest())
+	if err != nil {
+		t.Fatalf("Authorize отказал: %v", err)
+	}
+
+	result, err := ceremony.DenyAuthorization(context.Background(), intent, oauthceremony.ErrAccessDenied)
+	if err != nil {
+		t.Fatalf("DenyAuthorization отказал: %v", err)
+	}
+	if got := result.Parameters["error"]; len(got) != 1 || got[0] != "access_denied" {
+		t.Errorf("в отказе нет поля error=access_denied: %v", result.Parameters)
+	}
+	if got := result.Parameters["state"]; len(got) != 1 || got[0] != testState {
+		t.Errorf("state не вернулся вместе с отказом: %v", result.Parameters)
+	}
+	if len(result.Parameters["code"]) != 0 {
+		t.Error("отказ в согласии вернул код авторизации")
+	}
+}
+
+// TestIntentFromAnotherCeremonyIsRejected — намерение годно ровно одной
+// церемонии. Иначе настройки одной («срок кода 10 минут») молча применялись бы
+// в другой.
+func TestIntentFromAnotherCeremonyIsRejected(t *testing.T) {
+	store := newMemoryPorts()
+	registerTestClient(t, store)
+	first := newTestCeremony(t, store.ports())
+	second := newTestCeremony(t, store.ports())
+
+	intent, err := first.Authorize(context.Background(), authorizeRequest())
+	if err != nil {
+		t.Fatalf("Authorize отказал: %v", err)
+	}
+
+	_, err = second.CompleteAuthorization(context.Background(), intent, oauthceremony.AuthorizationGrant{
+		Subject:       testSubject,
+		GrantedScopes: []string{"openid"},
+	})
+	if !errors.Is(err, oauthceremony.ErrCeremonyMisuse) {
+		t.Fatalf("чужое намерение принято: %v", err)
+	}
+
+	var zero oauthceremony.AuthorizationIntent
+	if _, err := first.CompleteAuthorization(context.Background(), zero, oauthceremony.AuthorizationGrant{
+		Subject: testSubject,
+	}); !errors.Is(err, oauthceremony.ErrCeremonyMisuse) {
+		t.Fatalf("нулевое намерение принято: %v", err)
+	}
+}
+
+// TestAdditionalCannotRestateANamedParameter — у значения ровно одно место.
+func TestAdditionalCannotRestateANamedParameter(t *testing.T) {
+	store := newMemoryPorts()
+	registerTestClient(t, store)
+	ceremony := newTestCeremony(t, store.ports())
+
+	request := authorizeRequest()
+	request.Additional["state"] = []string{"another-state-value-32-characters"}
+
+	if _, err := ceremony.Authorize(context.Background(), request); !errors.Is(err, oauthceremony.ErrCeremonyMisuse) {
+		t.Fatalf("дубль именованного поля в Additional принят: %v", err)
+	}
+
+	exchange := oauthceremony.TokenRequest{
+		Grant:        oauthceremony.GrantAuthorizationCode,
+		ClientID:     testClientID,
+		ClientSecret: testSecret,
+		AuthMethod:   oauthceremony.ClientAuthBasic,
+		Code:         "irrelevant",
+		RedirectURI:  testRedirectURI,
+		Additional:   map[string][]string{"client_secret": {"smuggled"}},
+	}
+	if _, err := ceremony.Exchange(context.Background(), exchange); !errors.Is(err, oauthceremony.ErrCeremonyMisuse) {
+		t.Fatalf("секрет клиента окольным путём принят: %v", err)
+	}
+}
+
+// TestUnknownClientIsAnInvalidClientNotAServerError — отсутствие клиента
+// переводится в отказ протокола, а не в «внутреннюю ошибку».
+func TestUnknownClientIsAnInvalidClientNotAServerError(t *testing.T) {
+	store := newMemoryPorts()
+	registerTestClient(t, store)
+	ceremony := newTestCeremony(t, store.ports())
+
+	request := authorizeRequest()
+	request.ClientID = "svc-that-was-never-registered"
+
+	_, err := ceremony.Authorize(context.Background(), request)
+	if err == nil {
+		t.Fatal("запрос от незарегистрированного клиента прошёл")
+	}
+	if errors.Is(err, oauthceremony.ErrServerError) {
+		t.Fatalf("отсутствие клиента названо внутренней ошибкой: %v", err)
+	}
+	if !errors.Is(err, oauthceremony.ErrInvalidClient) {
+		t.Fatalf("отказ по случаю %v, ожидался %v",
+			oauthceremony.CodeOf(err), oauthceremony.CodeInvalidClient)
+	}
+}
+
+// TestNewRejectsEveryUnnamedSetting — негодная сборка отвергается ДО первого
+// запроса, и отвергается поимённо.
+func TestNewRejectsEveryUnnamedSetting(t *testing.T) {
+	store := newMemoryPorts()
+	valid := oauthceremony.Config{
+		Issuer:                    testIssuer,
+		SigningSecret:             []byte("0123456789abcdef0123456789abcdef"),
+		AccessTokenLifespan:       time.Hour,
+		RefreshTokenLifespan:      24 * time.Hour,
+		AuthorizationCodeLifespan: 10 * time.Minute,
+		ScopeMatching:             oauthceremony.ScopeMatchingExact,
+		RefreshTokenIssuance:      oauthceremony.RefreshTokenIssuanceAlways,
+		SecretHashCost:            10,
+		MinParameterEntropy:       8,
+		PortTimeout:               time.Second,
+		OperationTimeout:          time.Second,
+	}
+	if _, err := oauthceremony.New(valid, store.ports()); err != nil {
+		t.Fatalf("годная сборка отвергнута: %v", err)
+	}
+
+	cases := map[string]func(*oauthceremony.Config){
+		"Issuer пуст":                   func(c *oauthceremony.Config) { c.Issuer = "" },
+		"Issuer не абсолютный":          func(c *oauthceremony.Config) { c.Issuer = "/oauth2" },
+		"SigningSecret короток":         func(c *oauthceremony.Config) { c.SigningSecret = []byte("short") },
+		"AccessTokenLifespan не назван": func(c *oauthceremony.Config) { c.AccessTokenLifespan = 0 },
+		"RefreshTokenLifespan не назван": func(c *oauthceremony.Config) {
+			c.RefreshTokenLifespan = 0
+		},
+		"AuthorizationCodeLifespan не назван": func(c *oauthceremony.Config) {
+			c.AuthorizationCodeLifespan = 0
+		},
+		"ScopeMatching не назван": func(c *oauthceremony.Config) {
+			c.ScopeMatching = oauthceremony.ScopeMatchingUnspecified
+		},
+		"RefreshTokenIssuance не назван": func(c *oauthceremony.Config) {
+			c.RefreshTokenIssuance = oauthceremony.RefreshTokenIssuanceUnspecified
+		},
+		"RefreshTokenScopes при Always": func(c *oauthceremony.Config) {
+			c.RefreshTokenScopes = []string{"offline"}
+		},
+		"RefreshTokenScopes пуст при OnScope": func(c *oauthceremony.Config) {
+			c.RefreshTokenIssuance = oauthceremony.RefreshTokenIssuanceOnScope
+		},
+		"SecretHashCost ниже предела": func(c *oauthceremony.Config) { c.SecretHashCost = 4 },
+		"SecretHashCost выше предела": func(c *oauthceremony.Config) { c.SecretHashCost = 31 },
+		"MinParameterEntropy занижен": func(c *oauthceremony.Config) { c.MinParameterEntropy = 4 },
+		"PortTimeout не назван":       func(c *oauthceremony.Config) { c.PortTimeout = 0 },
+		"OperationTimeout не назван":  func(c *oauthceremony.Config) { c.OperationTimeout = 0 },
+		"OperationTimeout короче порта": func(c *oauthceremony.Config) {
+			c.PortTimeout = 2 * time.Second
+			c.OperationTimeout = time.Second
+		},
+	}
+	for name, spoil := range cases {
+		t.Run(name, func(t *testing.T) {
+			cfg := valid
+			spoil(&cfg)
+			if _, err := oauthceremony.New(cfg, store.ports()); !errors.Is(err, oauthceremony.ErrCeremonyMisuse) {
+				t.Fatalf("негодная сборка принята: %v", err)
+			}
+		})
+	}
+}
+
+// TestNewRejectsEveryMissingPort — порт, которого нет, называется поимённо.
+func TestNewRejectsEveryMissingPort(t *testing.T) {
+	store := newMemoryPorts()
+	cfg := oauthceremony.Config{
+		Issuer:                    testIssuer,
+		SigningSecret:             []byte("0123456789abcdef0123456789abcdef"),
+		AccessTokenLifespan:       time.Hour,
+		RefreshTokenLifespan:      24 * time.Hour,
+		AuthorizationCodeLifespan: 10 * time.Minute,
+		ScopeMatching:             oauthceremony.ScopeMatchingExact,
+		RefreshTokenIssuance:      oauthceremony.RefreshTokenIssuanceAlways,
+		SecretHashCost:            10,
+		MinParameterEntropy:       8,
+		PortTimeout:               time.Second,
+		OperationTimeout:          time.Second,
+	}
+
+	cases := map[string]func(*oauthceremony.Ports){
+		"Clients":            func(p *oauthceremony.Ports) { p.Clients = nil },
+		"AuthorizationCodes": func(p *oauthceremony.Ports) { p.AuthorizationCodes = nil },
+		"AccessTokens":       func(p *oauthceremony.Ports) { p.AccessTokens = nil },
+		"RefreshTokens":      func(p *oauthceremony.Ports) { p.RefreshTokens = nil },
+		"Grants":             func(p *oauthceremony.Ports) { p.Grants = nil },
+		"ProofKeys":          func(p *oauthceremony.Ports) { p.ProofKeys = nil },
+		"Assertions":         func(p *oauthceremony.Ports) { p.Assertions = nil },
+	}
+	for name, drop := range cases {
+		t.Run(name, func(t *testing.T) {
+			ports := store.ports()
+			drop(&ports)
+			if _, err := oauthceremony.New(cfg, ports); !errors.Is(err, oauthceremony.ErrCeremonyMisuse) {
+				t.Fatalf("набор без порта %s принят: %v", name, err)
+			}
+		})
+	}
+}
+
+// TestIntrospectingAnInventedTokenIsNotAnError — RFC 7662 §2.2: на выдуманный
+// артефакт отвечают `active: false`, а не отказом.
+//
+// Отвечай церемония отказом, поверхность отвечала бы разными кодами HTTP на
+// годный и негодный артефакт — то есть стала бы прибором для перебора.
+func TestIntrospectingAnInventedTokenIsNotAnError(t *testing.T) {
+	store := newMemoryPorts()
+	registerTestClient(t, store)
+	ceremony := newTestCeremony(t, store.ports())
+
+	for name, token := range map[string]string{
+		"выдуманный":           "this-token-was-never-issued",
+		"похожий на настоящий": "MTIzNDU2Nzg5MA.MTIzNDU2Nzg5MDEyMzQ1Njc4OTA",
+		"с приставкой чужака":  "ory_at_MTIzNDU2Nzg5MA.MTIzNDU2Nzg5MDEyMzQ1Njc4OTA",
+	} {
+		t.Run(name, func(t *testing.T) {
+			result, err := ceremony.Introspect(context.Background(), oauthceremony.IntrospectionRequest{
+				Token:        token,
+				ClientID:     testClientID,
+				ClientSecret: testSecret,
+				AuthMethod:   oauthceremony.ClientAuthBasic,
+			})
+			if err != nil {
+				t.Fatalf("интроспекция негодного артефакта отказала: %v", err)
+			}
+			if result.Active {
+				t.Error("выдуманный артефакт назван годным")
+			}
+			if result.Subject != "" || result.ClientID != "" || len(result.Scopes) != 0 {
+				t.Errorf("ответ о негодном артефакте несёт подробности: %+v", result)
+			}
+		})
+	}
+}
+
+// TestRevokingAnInventedTokenSucceeds — RFC 7009 §2.2: отзыв
+// несуществующего артефакта успешен.
+func TestRevokingAnInventedTokenSucceeds(t *testing.T) {
+	store := newMemoryPorts()
+	registerTestClient(t, store)
+	ceremony := newTestCeremony(t, store.ports())
+
+	if err := ceremony.Revoke(context.Background(), oauthceremony.RevocationRequest{
+		Token:        "this-token-was-never-issued",
+		ClientID:     testClientID,
+		ClientSecret: testSecret,
+		AuthMethod:   oauthceremony.ClientAuthBasic,
+	}); err != nil {
+		t.Fatalf("отзыв несуществующего артефакта отказал: %v", err)
+	}
+}
+
+// TestClientSecretNeverLeavesTheCeremonyInAFailure — секрет клиента не
+// оседает в отказе.
+//
+// Отказ уезжает в журнал службы целиком; попади туда секрет, оборот секретов
+// перестал бы быть оборотом.
+func TestClientSecretNeverLeavesTheCeremonyInAFailure(t *testing.T) {
+	store := newMemoryPorts()
+	registerTestClient(t, store)
+	ceremony := newTestCeremony(t, store.ports())
+
+	_, err := ceremony.Exchange(context.Background(), oauthceremony.TokenRequest{
+		Grant:        oauthceremony.GrantAuthorizationCode,
+		ClientID:     testClientID,
+		ClientSecret: testSecret,
+		AuthMethod:   oauthceremony.ClientAuthBasic,
+		Code:         "a-code-that-was-never-issued",
+		RedirectURI:  testRedirectURI,
+		CodeVerifier: testVerifier,
+	})
+	if err == nil {
+		t.Fatal("обмен выдуманного кода прошёл")
+	}
+
+	rendered := err.Error()
+	var protocolErr *oauthceremony.ProtocolError
+	if errors.As(err, &protocolErr) {
+		rendered += "\x00" + protocolErr.Description + "\x00" + protocolErr.Hint + "\x00" + protocolErr.Debug
+	}
+	if strings.Contains(rendered, testSecret) {
+		t.Errorf("секрет клиента оказался в отказе: %s", rendered)
+	}
+}
