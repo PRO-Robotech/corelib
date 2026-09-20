@@ -3,56 +3,42 @@
 
 package storage
 
-import "context"
+import (
+	"context"
 
-// A storage provider that has support for transactions should implement this interface to ensure atomicity for certain flows
-// that require transactional semantics. Fosite will call these methods (when atomicity is required) if and only if the storage
-// provider has implemented `Transactional`. It is expected that the storage provider will examine context for an existing transaction
-// each time a database operation is to be performed.
-//
-// An implementation of `BeginTX` should attempt to initiate a new transaction and store that under a unique key
-// in the context that can be accessible by `Commit` and `Rollback`. The "transactional aware" context will then be
-// returned for further propagation, eventually to be consumed by `Commit` or `Rollback` to finish the transaction.
-//
-// Implementations for `Commit` & `Rollback` should look for the transaction object inside the supplied context using the same
-// key used by `BeginTX`. If these methods have been called, it is expected that a txn object should be available in the provided
-// context.
-type Transactional interface {
-	BeginTX(ctx context.Context) (context.Context, error)
-	Commit(ctx context.Context) error
-	Rollback(ctx context.Context) error
-}
+	"github.com/PRO-Robotech/corelib/internal/oauth2/storage/tx"
+)
 
-// MaybeBeginTx is a helper function that can be used to initiate a transaction if the supplied storage
-// implements the `Transactional` interface.
+// ПРАВКА KACHO: сами помощники транзакции переехали в лист
+// `internal/oauth2/storage/tx`, а здесь остались ПСЕВДОНИМЫ.
+//
+// Причина переезда: `handler/oauth2` импортировал этот пакет ради трёх функций
+// на чистой стандартной библиотеке, а получал вместе с ними соседний
+// `memory.go` — эталонное хранилище в памяти, которое импортирует `internal`
+// (моки gomock) и утаскивало gomock и testify в производственный граф сборки
+// любого потребителя движка.
+//
+// Псевдонимы оставлены НАМЕРЕННО: чужой код, встраивающий `storage.Transactional`
+// или зовущий `storage.MaybeBeginTx`, и пробы апстрима продолжают
+// компилироваться без единой правки. Объявлены функциями, а не переменными: у
+// переменной значение можно подменить на ходу, и поведение движка стало бы
+// свойством того, кто успел присвоить последним.
+
+// Transactional — псевдоним типа `tx.Transactional`. Встраивание и приведение
+// типов работают через него без различий.
+type Transactional = tx.Transactional
+
+// MaybeBeginTx начинает транзакцию, если хранилище реализует Transactional.
 func MaybeBeginTx(ctx context.Context, storage interface{}) (context.Context, error) {
-	// the type assertion checks whether the dynamic type of `storage` implements `Transactional`
-	txnStorage, transactional := storage.(Transactional)
-	if transactional {
-		return txnStorage.BeginTX(ctx)
-	} else {
-		return ctx, nil
-	}
+	return tx.MaybeBeginTx(ctx, storage)
 }
 
-// MaybeCommitTx is a helper function that can be used to commit a transaction if the supplied storage
-// implements the `Transactional` interface.
+// MaybeCommitTx фиксирует транзакцию, если хранилище реализует Transactional.
 func MaybeCommitTx(ctx context.Context, storage interface{}) error {
-	txnStorage, transactional := storage.(Transactional)
-	if transactional {
-		return txnStorage.Commit(ctx)
-	} else {
-		return nil
-	}
+	return tx.MaybeCommitTx(ctx, storage)
 }
 
-// MaybeRollbackTx is a helper function that can be used to rollback a transaction if the supplied storage
-// implements the `Transactional` interface.
+// MaybeRollbackTx откатывает транзакцию, если хранилище реализует Transactional.
 func MaybeRollbackTx(ctx context.Context, storage interface{}) error {
-	txnStorage, transactional := storage.(Transactional)
-	if transactional {
-		return txnStorage.Rollback(ctx)
-	} else {
-		return nil
-	}
+	return tx.MaybeRollbackTx(ctx, storage)
 }

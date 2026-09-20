@@ -14,7 +14,7 @@ import (
 	"github.com/pkg/errors"
 
 	fosite "github.com/PRO-Robotech/corelib/internal/oauth2"
-	"github.com/PRO-Robotech/corelib/internal/oauth2/storage"
+	"github.com/PRO-Robotech/corelib/internal/oauth2/storage/tx"
 )
 
 var _ fosite.TokenEndpointHandler = (*RefreshTokenGrantHandler)(nil)
@@ -132,7 +132,7 @@ func (c *RefreshTokenGrantHandler) PopulateTokenEndpointResponse(ctx context.Con
 
 	signature := c.RefreshTokenStrategy.RefreshTokenSignature(ctx, requester.GetRequestForm().Get("refresh_token"))
 
-	ctx, err = storage.MaybeBeginTx(ctx, c.TokenRevocationStorage)
+	ctx, err = tx.MaybeBeginTx(ctx, c.TokenRevocationStorage)
 	if err != nil {
 		return errorsx.WithStack(fosite.ErrServerError.WithWrap(err).WithDebug(err.Error()))
 	}
@@ -159,7 +159,7 @@ func (c *RefreshTokenGrantHandler) PopulateTokenEndpointResponse(ctx context.Con
 	responder.SetScopes(requester.GetGrantedScopes())
 	responder.SetExtra("refresh_token", refreshToken)
 
-	if err = storage.MaybeCommitTx(ctx, c.TokenRevocationStorage); err != nil {
+	if err = tx.MaybeCommitTx(ctx, c.TokenRevocationStorage); err != nil {
 		return c.handleRefreshTokenEndpointStorageError(ctx, err)
 	}
 
@@ -176,7 +176,7 @@ func (c *RefreshTokenGrantHandler) PopulateTokenEndpointResponse(ctx context.Con
 //	attempt the valid refresh token and the access authorization
 //	associated with it are both revoked.
 func (c *RefreshTokenGrantHandler) handleRefreshTokenReuse(ctx context.Context, signature string, req fosite.Requester) (err error) {
-	ctx, err = storage.MaybeBeginTx(ctx, c.TokenRevocationStorage)
+	ctx, err = tx.MaybeBeginTx(ctx, c.TokenRevocationStorage)
 	if err != nil {
 		return errorsx.WithStack(fosite.ErrServerError.WithWrap(err).WithDebug(err.Error()))
 	}
@@ -196,7 +196,7 @@ func (c *RefreshTokenGrantHandler) handleRefreshTokenReuse(ctx context.Context, 
 		return err
 	}
 
-	if err = storage.MaybeCommitTx(ctx, c.TokenRevocationStorage); err != nil {
+	if err = tx.MaybeCommitTx(ctx, c.TokenRevocationStorage); err != nil {
 		return err
 	}
 
@@ -209,7 +209,7 @@ func (c *RefreshTokenGrantHandler) handleRefreshTokenEndpointStorageError(ctx co
 	}
 
 	defer func() {
-		if rollBackTxnErr := storage.MaybeRollbackTx(ctx, c.TokenRevocationStorage); rollBackTxnErr != nil {
+		if rollBackTxnErr := tx.MaybeRollbackTx(ctx, c.TokenRevocationStorage); rollBackTxnErr != nil {
 			err = errorsx.WithStack(fosite.ErrServerError.WithWrap(err).WithDebugf("error: %s; rollback error: %s", err, rollBackTxnErr))
 		}
 	}()
