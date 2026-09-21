@@ -54,7 +54,7 @@ import (
 //
 // Применение:
 //
-//	func Divide(ctx context.Context, numerator, denominator int) (ratio int, err error) {
+//	func Divide(ctx context.Context, a, b int) (ratio int, err error) {
 //		ctx, span := tracer.Start(ctx, "Divide")
 //		defer otelx.End(span, &err)
 //		...
@@ -99,7 +99,7 @@ func setErrorStatusPanic(span trace.Span, recovered any) {
 	default:
 		span.SetStatus(codes.Error, "panic")
 	case nil:
-		// nothing
+		// ничего
 	}
 }
 

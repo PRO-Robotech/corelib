@@ -55,8 +55,8 @@ const (
 	ResponseKindCode ResponseKind = "code"
 )
 
-// ResponseDelivery — способ доставки ответа точки авторизации
-// (OAuth 2.0 Multiple Response Type Encoding Practices).
+// ResponseDelivery — способ доставки ответа точки авторизации; спецификация
+// `OAuth 2.0 Multiple Response Type Encoding Practices`.
 type ResponseDelivery string
 
 // Способы доставки. DeliveryDefault означает «выбирает движок по типу
