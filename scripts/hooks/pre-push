@@ -1,0 +1,126 @@
+#!/usr/bin/env bash
+# Copyright (c) PRO-Robotech
+# SPDX-License-Identifier: Apache-2.0
+#
+# Хук отправки: то же, что первым делом проверяет ci.yml — локально, ДО конвейера.
+#
+# ЭКЗЕМПЛЯР СВОЙ, НЕ КОПИЯ. Идея переходника — общая с kacho и kaname (см.
+# scripts/hooks/install.sh), но состав проверок здесь свой: фундамент — один
+# Go-модуль без Makefile, и ci.yml сам объявляет, что взял форму у конвейера
+# kaname «не скопировав» её. Этот файл продолжает тот же принцип для хука.
+#
+# ЧТО ГОНИТСЯ: build · vet · gofmt · golangci-lint (пин v2.12.2, тот же, что
+# объявлен в ci.yml — расхождение версии дало бы другой вердикт об одном и том
+# же дереве). ЧТО НЕ ГОНИТСЯ: go test (юниты дерева поднимают немного, но не
+# отделены от интеграционных тегом сборки — `git ls-files '*_test.go' | xargs
+# grep -lE '^//go:build' | wc -l` → 0, см. ci.yml; разделяет `-short`, а не тег,
+# и решить со стороны хука, какие пакеты быстрые, нечем без самого прогона),
+# gosec (ci.yml ставит его пином и гоняет отдельным заданием — здесь это же
+# заняло бы четвёртую по счёту установку инструмента ради хука, который обязан
+# быть быстрым) и govulncheck (сверяет базу уязвимостей, а не дерево — вердикт
+# меняется без единой правки кода, это работа конвейера, а не локального хука).
+#
+# КАК ОБОЙТИ. `git push --no-verify` либо `CORELIB_SKIP_PREPUSH=1`.
+#
+# Установка: `bash scripts/hooks/install.sh install` кладёт в `.git/hooks`
+# переходник, исполняющий ЭТОТ файл из той рабочей копии, из которой идёт
+# отправка. Проверить: `bash scripts/hooks/install.sh check`.
+set -uo pipefail
+
+if [ "${CORELIB_SKIP_PREPUSH:-0}" = "1" ]; then
+    echo "pre-push: пропущен по CORELIB_SKIP_PREPUSH=1 — локальные проверки НЕ выполнялись" >&2
+    exit 0
+fi
+
+ROOT="$(git rev-parse --show-toplevel)"
+unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_OBJECT_DIRECTORY \
+      GIT_ALTERNATE_OBJECT_DIRECTORIES GIT_COMMON_DIR GIT_PREFIX
+
+branch="$(git rev-parse --abbrev-ref HEAD)"
+case "$branch" in
+    wip/*|tmp/*)
+        echo "pre-push: ветка «$branch» объявлена черновиком — проверки пропущены" >&2
+        exit 0
+        ;;
+esac
+
+cd "$ROOT" || exit 1
+
+GOLANGCI_LINT_VERSION="v2.12.2"
+
+echo "== pre-push (corelib): локальные проверки перед отправкой ветки «$branch»"
+echo "   (обойти: git push --no-verify — но тогда конвейер станет первым читателем)"
+echo "   гонится: build · vet · gofmt · golangci-lint (пин $GOLANGCI_LINT_VERSION)"
+echo "   не гонится здесь: go test, gosec, govulncheck — их предмет назван в шапке файла"
+
+fails=()
+
+run() {
+    local name="$1"; shift
+    echo ""
+    echo "-- $name --"
+    if "$@"; then
+        echo "ok"
+    else
+        fails+=("$name")
+        echo "КРАСНОЕ: $name"
+    fi
+}
+
+run "go build" go build ./...
+run "go vet" go vet ./...
+
+files=$(git ls-files '*.go')
+if [ -z "$files" ]; then
+    echo ""
+    echo "-- gofmt --"
+    echo "ОТКАЗ: обход пуст — ни одного файла Go не прочитано." >&2
+    fails+=("gofmt (обход пуст)")
+else
+    echo ""
+    echo "-- gofmt --"
+    unformatted=$(gofmt -l $files || true)
+    if [ -n "$unformatted" ]; then
+        echo "требуется gofmt:"; echo "$unformatted"
+        fails+=("gofmt")
+    else
+        echo "ok ($(printf '%s\n' "$files" | wc -l) файлов прочитано)"
+    fi
+fi
+
+echo ""
+echo "-- golangci-lint --"
+have="$(golangci-lint version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)"
+want="$(printf '%s' "$GOLANGCI_LINT_VERSION" | sed 's/^v//')"
+if [ -z "$have" ]; then
+    echo "УСЛОВИЕ НЕ СОЗДАНО: golangci-lint не найден. Конвейер ставит его пином:" >&2
+    echo "  go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$GOLANGCI_LINT_VERSION" >&2
+    echo "  (не находка — отправка НЕ останавливается по этой строке одной)"
+elif [ "$have" != "$want" ]; then
+    echo "УСЛОВИЕ НЕ СОЗДАНО: в PATH golangci-lint $have, пин конвейера $want." >&2
+    echo "Вердикты разных версий расходятся молча — поставьте пин:" >&2
+    echo "  go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$GOLANGCI_LINT_VERSION" >&2
+else
+    if golangci-lint run --timeout=5m --config=.github/golangci.yml ./...; then
+        echo "ok"
+    else
+        fails+=("golangci-lint")
+        echo "КРАСНОЕ: golangci-lint"
+    fi
+fi
+
+echo ""
+echo "== итог: отказов ${#fails[@]}"
+echo "   Здесь НЕ проверялось: go test, gosec, govulncheck, интеграция с Postgres."
+if [ "${#fails[@]}" -gt 0 ]; then
+    cat >&2 <<MSG
+
+pre-push ОТКАЗ: локальные проверки красные — отправка остановлена: ${fails[*]}
+
+Почините найденное либо отправьте черновик явно — git push --no-verify, зная,
+что конвейер станет первым читателем.
+MSG
+    exit 1
+fi
+
+echo "== pre-push (corelib): локальные проверки зелёные — отправляю"
