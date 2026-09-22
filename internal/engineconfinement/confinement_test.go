@@ -24,12 +24,21 @@ const subtreeRoot = "internal/oauth2"
 
 // engineStackRule — правило фундамента. Пути собраны из частей, чтобы строка
 // правила не читалась поиском по образцу как импорт.
+//
+// Набор — КАЖДЫЙ опубликованный путь библиотеки, а не один нынешний: go-jose
+// публиковалась под четырьмя (`github.com/square/go-jose` →
+// `gopkg.in/square/go-jose.vN` → `github.com/go-jose/go-jose` и
+// `gopkg.in/go-jose/go-jose.vN`), и подписант на любом из них вне поддерева —
+// второй путь подписи. Перечень выведен опросом прокси модулей; предикат его
+// полноты — forms_test.go.
 func engineStackRule() treehygiene.ImportConfinement {
 	return treehygiene.ImportConfinement{
 		Name: "стек JOSE движка",
 		Set: []string{
 			"github.com/go-jose/" + "go-jose",
+			"gopkg.in/go-jose/" + "go-jose",
 			"gopkg.in/square/" + "go-jose",
+			"github.com/square/" + "go-jose",
 			"github.com/cristalhq/" + "jwt",
 		},
 		Homes:           []string{subtreeRoot},
