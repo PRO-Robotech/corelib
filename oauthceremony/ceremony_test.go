@@ -414,6 +414,40 @@ func TestClientAssertionIsRefused(t *testing.T) {
 	t.Logf("отказ: %v", err)
 }
 
+// TestRequestObjectIsRefused — объект запроса OpenID Connect (OIDC Core §6)
+// церемония не обслуживает: у записи клиента нет ни набора ключей, ни адресов
+// объектов запроса, и движок отвечает «не поддерживается», а не разбирает
+// объект чужим ключом и не ходит за ним по адресу.
+//
+// Близнец — тот же запрос без объекта (issueCode): он проходит; отличие —
+// одно поле.
+func TestRequestObjectIsRefused(t *testing.T) {
+	store := newMemoryPorts()
+	registerTestClient(t, store)
+	ceremony := newTestCeremony(t, store.ports())
+
+	for name, field := range map[string]string{"по значению": "request", "по адресу": "request_uri"} {
+		t.Run(name, func(t *testing.T) {
+			request := authorizeRequest()
+			request.Additional[field] = []string{"https://console.example.net/request-object.jwt"}
+			if field == "request" {
+				request.Additional[field] = []string{"eyJhbGciOiJSUzI1NiJ9.eyJzY29wZSI6Im9wZW5pZCJ9.c2ln"}
+			}
+			_, err := ceremony.Authorize(context.Background(), request)
+			if err == nil {
+				t.Fatalf("запрос с объектом запроса (%s) прошёл", field)
+			}
+			want := oauthceremony.ErrRequestNotSupported
+			if field == "request_uri" {
+				want = oauthceremony.ErrRequestURINotSupported
+			}
+			if !errors.Is(err, want) {
+				t.Fatalf("случай %v, ожидался %v", oauthceremony.CodeOf(err), oauthceremony.CodeOf(want))
+			}
+		})
+	}
+}
+
 // TestDenialTravelsBackAsRedirect — отказ в согласии уезжает клиенту
 // перенаправлением с полем `error`, а не телом ответа (RFC 6749 §4.1.2.1).
 func TestDenialTravelsBackAsRedirect(t *testing.T) {

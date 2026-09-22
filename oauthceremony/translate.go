@@ -255,8 +255,9 @@ func (c *clientView) GetResponseModes() []engine.ResponseModeType {
 // ним сняты способы, которым он нужен: утверждение клиента (RFC 7523 §2.2),
 // объекты запроса (OIDC Core §6) и закрепление способа за записью клиента.
 // Движок, не найдя у клиента этого интерфейса, отвергает утверждение клиента
-// и объект запроса РАНЬШЕ, чем обратится к хранилищу (предикат — проба
-// TestClientAssertionIsRefused).
+// раньше, чем спросит хранилище о `jti` (предикат — проба
+// TestClientAssertionIsRefused), а объект запроса — случаем «не
+// поддерживается» (предикат — проба TestRequestObjectIsRefused).
 
 // clientViewOf собирает представление клиента для движка.
 func clientViewOf(reg ClientRegistration) engine.Client {
