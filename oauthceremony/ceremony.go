@@ -7,6 +7,7 @@ import (
 	"context"
 	"net/http"
 	"net/url"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -491,6 +492,9 @@ func (c *Ceremony) CompleteAuthorization(ctx context.Context, intent Authorizati
 	if strings.TrimSpace(grant.Subject) == "" {
 		return AuthorizationResult{}, misuse("AuthorizationGrant.Subject is not named; a grant without a subject is not a grant")
 	}
+	if err := c.checkGrantWithinRequest(intent, grant); err != nil {
+		return AuthorizationResult{}, err
+	}
 
 	for _, scope := range grant.GrantedScopes {
 		intent.requester.GrantScope(scope)
@@ -538,6 +542,40 @@ func (c *Ceremony) DenyAuthorization(ctx context.Context, intent AuthorizationIn
 	sink := newResponseSink()
 	c.provider.WriteAuthorizeError(ctx, sink, intent.requester, toEngine(reason))
 	return sink.authorizationResult(intent.Delivery()), nil
+}
+
+// checkGrantWithinRequest отвергает выдачу шире запроса.
+//
+// # Почему здесь, а не в движке
+//
+// Движок сверяет с записью клиента только ЗАПРОШЕННОЕ (при разборе запроса
+// авторизации), а выданное копирует в артефакты без сверки — и при выдаче
+// кода, и при обмене. Проверка на обороте токена обновления есть, но лишь
+// против записи клиента и лишь с первого оборота: первый токен доступа жил бы
+// весь свой срок с правом, которого клиент не просил. Согласие давалось на
+// запрошенное; выдача шире — ошибка службы, и отказ ей — ErrCeremonyMisuse,
+// до того как хоть что-то выпущено.
+//
+// Область сверяется по правилу Config.ScopeMatching (запрошенное `tenant.*`
+// при правиле с образцом покрывает `tenant.read`); получатель — точным
+// совпадением с запрошенным: у получателя правила с образцом нет.
+func (c *Ceremony) checkGrantWithinRequest(intent AuthorizationIntent, grant AuthorizationGrant) error {
+	requested := intent.RequestedScopes()
+	covers := scopeStrategyOf(c.cfg.ScopeMatching)
+	for _, scope := range grant.GrantedScopes {
+		if !covers(requested, scope) {
+			return misuse("AuthorizationGrant.GrantedScopes carries " + strconv.Quote(scope) +
+				", which the authorization request did not ask for; a grant may narrow the request, never widen it")
+		}
+	}
+	audiences := intent.RequestedAudiences()
+	for _, audience := range grant.GrantedAudiences {
+		if !slices.Contains(audiences, audience) {
+			return misuse("AuthorizationGrant.GrantedAudiences carries " + strconv.Quote(audience) +
+				", which the authorization request did not ask for; a grant may narrow the request, never widen it")
+		}
+	}
+	return nil
 }
 
 func (c *Ceremony) checkIntent(intent AuthorizationIntent) error {
