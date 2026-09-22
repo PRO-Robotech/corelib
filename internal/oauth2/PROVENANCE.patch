@@ -1,0 +1,469 @@
+# Copyright (c) PRO-Robotech
+# SPDX-License-Identifier: Apache-2.0
+#
+# PROVENANCE.patch — ВСЯ правка фундамента во внесённом поддереве, одним файлом.
+#
+# Накладывается на github.com/ory/fosite@v0.49.0, с которого сняли обвязку,
+# переписали пути импорта и прогнали gofmt (точный рецепт —
+# .github/scripts/oauth2-provenance.sh). После наложения дерево обязано
+# совпасть с internal/oauth2/ ПОБАЙТОВО; проверяется тем же сценарием.
+#
+# Это НЕ описание правки, а её вход: разойдётся файл с деревом — гейт
+# происхождения краснеет. Метки времени в заголовках обнулены намеренно, чтобы
+# повторная выработка файла давала тот же текст.
+#
+diff -ruN a/access_request_handler.go b/access_request_handler.go
+--- a/access_request_handler.go
++++ b/access_request_handler.go
+@@ -10,7 +10,7 @@
+ 
+ 	"github.com/PRO-Robotech/corelib/internal/oauth2/i18n"
+ 	"github.com/PRO-Robotech/corelib/internal/oauth2deps/errorsx"
+-	"github.com/ory/x/otelx"
++	"github.com/PRO-Robotech/corelib/internal/otelx"
+ 	"go.opentelemetry.io/otel/trace"
+ 
+ 	"github.com/pkg/errors"
+diff -ruN a/access_response_writer.go b/access_response_writer.go
+--- a/access_response_writer.go
++++ b/access_response_writer.go
+@@ -7,7 +7,7 @@
+ 	"context"
+ 
+ 	"github.com/PRO-Robotech/corelib/internal/oauth2deps/errorsx"
+-	"github.com/ory/x/otelx"
++	"github.com/PRO-Robotech/corelib/internal/otelx"
+ 	"go.opentelemetry.io/otel/trace"
+ 
+ 	"github.com/pkg/errors"
+diff -ruN a/authorize_request_handler.go b/authorize_request_handler.go
+--- a/authorize_request_handler.go
++++ b/authorize_request_handler.go
+@@ -16,7 +16,7 @@
+ 	"github.com/PRO-Robotech/corelib/internal/oauth2/i18n"
+ 	"github.com/PRO-Robotech/corelib/internal/oauth2/token/jwt"
+ 	"github.com/PRO-Robotech/corelib/internal/oauth2deps/errorsx"
+-	"github.com/ory/x/otelx"
++	"github.com/PRO-Robotech/corelib/internal/otelx"
+ 
+ 	"github.com/pkg/errors"
+ 
+diff -ruN a/authorize_response_writer.go b/authorize_response_writer.go
+--- a/authorize_response_writer.go
++++ b/authorize_response_writer.go
+@@ -9,7 +9,7 @@
+ 	"net/url"
+ 
+ 	"github.com/PRO-Robotech/corelib/internal/oauth2deps/errorsx"
+-	"github.com/ory/x/otelx"
++	"github.com/PRO-Robotech/corelib/internal/otelx"
+ 	"go.opentelemetry.io/otel/trace"
+ )
+ 
+diff -ruN a/client_authentication_jwks_strategy.go b/client_authentication_jwks_strategy.go
+--- a/client_authentication_jwks_strategy.go
++++ b/client_authentication_jwks_strategy.go
+@@ -8,7 +8,7 @@
+ 	"encoding/json"
+ 	"time"
+ 
+-	"github.com/dgraph-io/ristretto"
++	"github.com/dgraph-io/ristretto/v2"
+ 	"github.com/hashicorp/go-retryablehttp"
+ 
+ 	"github.com/PRO-Robotech/corelib/internal/oauth2deps/errorsx"
+diff -ruN a/client_authentication_jwks_strategy_test.go b/client_authentication_jwks_strategy_test.go
+--- a/client_authentication_jwks_strategy_test.go
++++ b/client_authentication_jwks_strategy_test.go
+@@ -11,7 +11,7 @@
+ 	"testing"
+ 	"time"
+ 
+-	"github.com/dgraph-io/ristretto"
++	"github.com/dgraph-io/ristretto/v2"
+ 	"github.com/hashicorp/go-retryablehttp"
+ 	"github.com/pkg/errors"
+ 
+diff -ruN a/handler/oauth2/flow_authorize_code_token.go b/handler/oauth2/flow_authorize_code_token.go
+--- a/handler/oauth2/flow_authorize_code_token.go
++++ b/handler/oauth2/flow_authorize_code_token.go
+@@ -9,7 +9,7 @@
+ 
+ 	"github.com/PRO-Robotech/corelib/internal/oauth2deps/errorsx"
+ 
+-	"github.com/PRO-Robotech/corelib/internal/oauth2/storage"
++	"github.com/PRO-Robotech/corelib/internal/oauth2/storage/tx"
+ 
+ 	"github.com/pkg/errors"
+ 
+@@ -152,13 +152,13 @@
+ 		}
+ 	}
+ 
+-	ctx, err = storage.MaybeBeginTx(ctx, c.CoreStorage)
++	ctx, err = tx.MaybeBeginTx(ctx, c.CoreStorage)
+ 	if err != nil {
+ 		return errorsx.WithStack(fosite.ErrServerError.WithWrap(err).WithDebug(err.Error()))
+ 	}
+ 	defer func() {
+ 		if err != nil {
+-			if rollBackTxnErr := storage.MaybeRollbackTx(ctx, c.CoreStorage); rollBackTxnErr != nil {
++			if rollBackTxnErr := tx.MaybeRollbackTx(ctx, c.CoreStorage); rollBackTxnErr != nil {
+ 				err = errorsx.WithStack(fosite.ErrServerError.WithWrap(err).WithDebugf("error: %s; rollback error: %s", err, rollBackTxnErr))
+ 			}
+ 		}
+@@ -183,7 +183,7 @@
+ 		responder.SetExtra("refresh_token", refresh)
+ 	}
+ 
+-	if err = storage.MaybeCommitTx(ctx, c.CoreStorage); err != nil {
++	if err = tx.MaybeCommitTx(ctx, c.CoreStorage); err != nil {
+ 		return errorsx.WithStack(fosite.ErrServerError.WithWrap(err).WithDebug(err.Error()))
+ 	}
+ 
+diff -ruN a/handler/oauth2/flow_refresh.go b/handler/oauth2/flow_refresh.go
+--- a/handler/oauth2/flow_refresh.go
++++ b/handler/oauth2/flow_refresh.go
+@@ -14,7 +14,7 @@
+ 	"github.com/pkg/errors"
+ 
+ 	fosite "github.com/PRO-Robotech/corelib/internal/oauth2"
+-	"github.com/PRO-Robotech/corelib/internal/oauth2/storage"
++	"github.com/PRO-Robotech/corelib/internal/oauth2/storage/tx"
+ )
+ 
+ var _ fosite.TokenEndpointHandler = (*RefreshTokenGrantHandler)(nil)
+@@ -132,7 +132,7 @@
+ 
+ 	signature := c.RefreshTokenStrategy.RefreshTokenSignature(ctx, requester.GetRequestForm().Get("refresh_token"))
+ 
+-	ctx, err = storage.MaybeBeginTx(ctx, c.TokenRevocationStorage)
++	ctx, err = tx.MaybeBeginTx(ctx, c.TokenRevocationStorage)
+ 	if err != nil {
+ 		return errorsx.WithStack(fosite.ErrServerError.WithWrap(err).WithDebug(err.Error()))
+ 	}
+@@ -159,7 +159,7 @@
+ 	responder.SetScopes(requester.GetGrantedScopes())
+ 	responder.SetExtra("refresh_token", refreshToken)
+ 
+-	if err = storage.MaybeCommitTx(ctx, c.TokenRevocationStorage); err != nil {
++	if err = tx.MaybeCommitTx(ctx, c.TokenRevocationStorage); err != nil {
+ 		return c.handleRefreshTokenEndpointStorageError(ctx, err)
+ 	}
+ 
+@@ -176,7 +176,7 @@
+ //	attempt the valid refresh token and the access authorization
+ //	associated with it are both revoked.
+ func (c *RefreshTokenGrantHandler) handleRefreshTokenReuse(ctx context.Context, signature string, req fosite.Requester) (err error) {
+-	ctx, err = storage.MaybeBeginTx(ctx, c.TokenRevocationStorage)
++	ctx, err = tx.MaybeBeginTx(ctx, c.TokenRevocationStorage)
+ 	if err != nil {
+ 		return errorsx.WithStack(fosite.ErrServerError.WithWrap(err).WithDebug(err.Error()))
+ 	}
+@@ -196,7 +196,7 @@
+ 		return err
+ 	}
+ 
+-	if err = storage.MaybeCommitTx(ctx, c.TokenRevocationStorage); err != nil {
++	if err = tx.MaybeCommitTx(ctx, c.TokenRevocationStorage); err != nil {
+ 		return err
+ 	}
+ 
+@@ -209,21 +209,21 @@
+ 	}
+ 
+ 	defer func() {
+-		if rollBackTxnErr := storage.MaybeRollbackTx(ctx, c.TokenRevocationStorage); rollBackTxnErr != nil {
++		if rollBackTxnErr := tx.MaybeRollbackTx(ctx, c.TokenRevocationStorage); rollBackTxnErr != nil {
+ 			err = errorsx.WithStack(fosite.ErrServerError.WithWrap(err).WithDebugf("error: %s; rollback error: %s", err, rollBackTxnErr))
+ 		}
+ 	}()
+ 
+ 	if errors.Is(storageErr, fosite.ErrSerializationFailure) {
+ 		return errorsx.WithStack(fosite.ErrInvalidRequest.
+-			WithDebugf(storageErr.Error()).
++			WithDebug(storageErr.Error()).
+ 			WithWrap(storageErr).
+ 			WithHint("Failed to refresh token because of multiple concurrent requests using the same token. Please retry the request."))
+ 	}
+ 
+ 	if errors.Is(storageErr, fosite.ErrNotFound) || errors.Is(storageErr, fosite.ErrInactiveToken) {
+ 		return errorsx.WithStack(fosite.ErrInvalidRequest.
+-			WithDebugf(storageErr.Error()).
++			WithDebug(storageErr.Error()).
+ 			WithWrap(storageErr).
+ 			WithHint("Failed to refresh token. Please retry the request."))
+ 	}
+diff -ruN a/handler/rfc7523/handler_test.go b/handler/rfc7523/handler_test.go
+--- a/handler/rfc7523/handler_test.go
++++ b/handler/rfc7523/handler_test.go
+@@ -44,7 +44,11 @@
+ 
+ // Setup before each test in the suite.
+ func (s *AuthorizeJWTGrantRequestHandlerTestSuite) SetupSuite() {
+-	privateKey, err := rsa.GenerateKey(rand.Reader, 512) // fast RSA for testing
++	// Правка Kacho: было 512 бит. crypto/rsa начиная с Go 1.24 отказывает ключам
++	// короче 1024 бит («512-bit keys are insecure»), и SetupTest падал ДО первой
++	// проверки. 2048 — та же длина, что у остальных фикстур этого же файла
++	// (строки 784 и 823) и у integration/helper_setup_test.go.
++	privateKey, err := rsa.GenerateKey(rand.Reader, 2048)
+ 	if err != nil {
+ 		s.FailNowf("failed to setup test suite", "failed to generate RSA private key: %s", err.Error())
+ 	}
+diff -ruN a/introspect.go b/introspect.go
+--- a/introspect.go
++++ b/introspect.go
+@@ -9,7 +9,7 @@
+ 	"strings"
+ 
+ 	"github.com/PRO-Robotech/corelib/internal/oauth2deps/errorsx"
+-	"github.com/ory/x/otelx"
++	"github.com/PRO-Robotech/corelib/internal/otelx"
+ 	"go.opentelemetry.io/otel/trace"
+ 
+ 	"github.com/pkg/errors"
+diff -ruN a/introspection_request_handler.go b/introspection_request_handler.go
+--- a/introspection_request_handler.go
++++ b/introspection_request_handler.go
+@@ -13,7 +13,7 @@
+ 	"golang.org/x/text/language"
+ 
+ 	"github.com/PRO-Robotech/corelib/internal/oauth2deps/errorsx"
+-	"github.com/ory/x/otelx"
++	"github.com/PRO-Robotech/corelib/internal/otelx"
+ )
+ 
+ // NewIntrospectionRequest initiates token introspection as defined in
+diff -ruN a/pushed_authorize_request_handler.go b/pushed_authorize_request_handler.go
+--- a/pushed_authorize_request_handler.go
++++ b/pushed_authorize_request_handler.go
+@@ -10,7 +10,7 @@
+ 
+ 	"github.com/PRO-Robotech/corelib/internal/oauth2/i18n"
+ 	"github.com/PRO-Robotech/corelib/internal/oauth2deps/errorsx"
+-	"github.com/ory/x/otelx"
++	"github.com/PRO-Robotech/corelib/internal/otelx"
+ 	"go.opentelemetry.io/otel/trace"
+ )
+ 
+diff -ruN a/pushed_authorize_response_writer.go b/pushed_authorize_response_writer.go
+--- a/pushed_authorize_response_writer.go
++++ b/pushed_authorize_response_writer.go
+@@ -10,7 +10,7 @@
+ 	"net/http"
+ 
+ 	"github.com/PRO-Robotech/corelib/internal/oauth2deps/errorsx"
+-	"github.com/ory/x/otelx"
++	"github.com/PRO-Robotech/corelib/internal/otelx"
+ 	"go.opentelemetry.io/otel/trace"
+ )
+ 
+diff -ruN a/revoke_handler.go b/revoke_handler.go
+--- a/revoke_handler.go
++++ b/revoke_handler.go
+@@ -10,7 +10,7 @@
+ 	"net/http"
+ 
+ 	"github.com/PRO-Robotech/corelib/internal/oauth2deps/errorsx"
+-	"github.com/ory/x/otelx"
++	"github.com/PRO-Robotech/corelib/internal/otelx"
+ 	"go.opentelemetry.io/otel/trace"
+ 
+ 	"github.com/pkg/errors"
+diff -ruN a/storage/memory_test.go b/storage/memory_test.go
+--- a/storage/memory_test.go
++++ b/storage/memory_test.go
+@@ -6,16 +6,18 @@
+ import (
+ 	"context"
+ 	"errors"
+-	"sync"
+ 	"testing"
+ 
+ 	fosite "github.com/PRO-Robotech/corelib/internal/oauth2"
+ )
+ 
+ func TestMemoryStore_Authenticate(t *testing.T) {
++	// Правка Kacho: поле `usersMutex sync.RWMutex` убрано из таблицы. Во всех её
++	// случаях оно нулевое, а хранение мьютекса ПО ЗНАЧЕНИЮ заставляло `go vet`
++	// (copylocks) краснеть дважды: на копии в `range` и на копии в литерале
++	// `MemoryStore`. Нулевой мьютекс у `MemoryStore` и так готов к работе.
+ 	type fields struct {
+-		Users      map[string]MemoryUserRelation
+-		usersMutex sync.RWMutex
++		Users map[string]MemoryUserRelation
+ 	}
+ 	type args struct {
+ 		in0    context.Context
+@@ -49,8 +51,7 @@
+ 	for _, tt := range tests {
+ 		t.Run(tt.name, func(t *testing.T) {
+ 			s := &MemoryStore{
+-				Users:      tt.fields.Users,
+-				usersMutex: tt.fields.usersMutex,
++				Users: tt.fields.Users,
+ 			}
+ 			if _, err := s.Authenticate(tt.args.in0, tt.args.name, tt.args.secret); err == nil || !errors.Is(err, tt.wantErr) {
+ 				t.Errorf("Authenticate() error = %v, wantErr %v", err, tt.wantErr)
+diff -ruN a/storage/transactional.go b/storage/transactional.go
+--- a/storage/transactional.go
++++ b/storage/transactional.go
+@@ -3,56 +3,42 @@
+ 
+ package storage
+ 
+-import "context"
++import (
++	"context"
+ 
+-// A storage provider that has support for transactions should implement this interface to ensure atomicity for certain flows
+-// that require transactional semantics. Fosite will call these methods (when atomicity is required) if and only if the storage
+-// provider has implemented `Transactional`. It is expected that the storage provider will examine context for an existing transaction
+-// each time a database operation is to be performed.
++	"github.com/PRO-Robotech/corelib/internal/oauth2/storage/tx"
++)
++
++// ПРАВКА KACHO: сами помощники транзакции переехали в лист
++// `internal/oauth2/storage/tx`, а здесь остались ПСЕВДОНИМЫ.
+ //
+-// An implementation of `BeginTX` should attempt to initiate a new transaction and store that under a unique key
+-// in the context that can be accessible by `Commit` and `Rollback`. The "transactional aware" context will then be
+-// returned for further propagation, eventually to be consumed by `Commit` or `Rollback` to finish the transaction.
++// Причина переезда: `handler/oauth2` импортировал этот пакет ради трёх функций
++// на чистой стандартной библиотеке, а получал вместе с ними соседний
++// `memory.go` — эталонное хранилище в памяти, которое импортирует `internal`
++// (моки gomock) и утаскивало gomock и testify в производственный граф сборки
++// любого потребителя движка.
+ //
+-// Implementations for `Commit` & `Rollback` should look for the transaction object inside the supplied context using the same
+-// key used by `BeginTX`. If these methods have been called, it is expected that a txn object should be available in the provided
+-// context.
+-type Transactional interface {
+-	BeginTX(ctx context.Context) (context.Context, error)
+-	Commit(ctx context.Context) error
+-	Rollback(ctx context.Context) error
+-}
++// Псевдонимы оставлены НАМЕРЕННО: чужой код, встраивающий `storage.Transactional`
++// или зовущий `storage.MaybeBeginTx`, и пробы апстрима продолжают
++// компилироваться без единой правки. Объявлены функциями, а не переменными: у
++// переменной значение можно подменить на ходу, и поведение движка стало бы
++// свойством того, кто успел присвоить последним.
++
++// Transactional — псевдоним типа `tx.Transactional`. Встраивание и приведение
++// типов работают через него без различий.
++type Transactional = tx.Transactional
+ 
+-// MaybeBeginTx is a helper function that can be used to initiate a transaction if the supplied storage
+-// implements the `Transactional` interface.
++// MaybeBeginTx начинает транзакцию, если хранилище реализует Transactional.
+ func MaybeBeginTx(ctx context.Context, storage interface{}) (context.Context, error) {
+-	// the type assertion checks whether the dynamic type of `storage` implements `Transactional`
+-	txnStorage, transactional := storage.(Transactional)
+-	if transactional {
+-		return txnStorage.BeginTX(ctx)
+-	} else {
+-		return ctx, nil
+-	}
++	return tx.MaybeBeginTx(ctx, storage)
+ }
+ 
+-// MaybeCommitTx is a helper function that can be used to commit a transaction if the supplied storage
+-// implements the `Transactional` interface.
++// MaybeCommitTx фиксирует транзакцию, если хранилище реализует Transactional.
+ func MaybeCommitTx(ctx context.Context, storage interface{}) error {
+-	txnStorage, transactional := storage.(Transactional)
+-	if transactional {
+-		return txnStorage.Commit(ctx)
+-	} else {
+-		return nil
+-	}
++	return tx.MaybeCommitTx(ctx, storage)
+ }
+ 
+-// MaybeRollbackTx is a helper function that can be used to rollback a transaction if the supplied storage
+-// implements the `Transactional` interface.
++// MaybeRollbackTx откатывает транзакцию, если хранилище реализует Transactional.
+ func MaybeRollbackTx(ctx context.Context, storage interface{}) error {
+-	txnStorage, transactional := storage.(Transactional)
+-	if transactional {
+-		return txnStorage.Rollback(ctx)
+-	} else {
+-		return nil
+-	}
++	return tx.MaybeRollbackTx(ctx, storage)
+ }
+diff -ruN a/storage/tx/transactional.go b/storage/tx/transactional.go
+--- a/storage/tx/transactional.go
++++ b/storage/tx/transactional.go
+@@ -0,0 +1,71 @@
++// Copyright © 2024 Ory Corp
++// SPDX-License-Identifier: Apache-2.0
++
++// Package tx — лист транзакционных помощников движка. СОДЕРЖИМОЕ АПСТРИМНОЕ И
++// ПЕРЕНЕСЕНО ДОСЛОВНО из `storage/transactional.go`; правка Kacho — только место.
++//
++// ЗАЧЕМ ПЕРЕЕХАЛО. `handler/oauth2` импортировал пакет `storage` ради этих трёх
++// помощников, живущих на чистой стандартной библиотеке. Весь вес пакета даёт
++// СОСЕДНИЙ файл `storage/memory.go` — эталонное хранилище в памяти, нужное
++// только примерам и пробам: оно импортирует `internal`, то есть моки gomock, и
++// через них тащило gomock и testify в ПРОИЗВОДСТВЕННЫЙ граф сборки любого
++// потребителя движка. Лист зависит ровно от `context` и ни от чего больше.
++//
++// На прежнем месте (`storage.Transactional`, `storage.MaybeBeginTx`,
++// `storage.MaybeCommitTx`, `storage.MaybeRollbackTx`) оставлены псевдонимы,
++// чтобы чужой код и пробы апстрима продолжали компилироваться без правки.
++package tx
++
++import "context"
++
++// A storage provider that has support for transactions should implement this interface to ensure atomicity for certain flows
++// that require transactional semantics. Fosite will call these methods (when atomicity is required) if and only if the storage
++// provider has implemented `Transactional`. It is expected that the storage provider will examine context for an existing transaction
++// each time a database operation is to be performed.
++//
++// An implementation of `BeginTX` should attempt to initiate a new transaction and store that under a unique key
++// in the context that can be accessible by `Commit` and `Rollback`. The "transactional aware" context will then be
++// returned for further propagation, eventually to be consumed by `Commit` or `Rollback` to finish the transaction.
++//
++// Implementations for `Commit` & `Rollback` should look for the transaction object inside the supplied context using the same
++// key used by `BeginTX`. If these methods have been called, it is expected that a txn object should be available in the provided
++// context.
++type Transactional interface {
++	BeginTX(ctx context.Context) (context.Context, error)
++	Commit(ctx context.Context) error
++	Rollback(ctx context.Context) error
++}
++
++// MaybeBeginTx is a helper function that can be used to initiate a transaction if the supplied storage
++// implements the `Transactional` interface.
++func MaybeBeginTx(ctx context.Context, storage interface{}) (context.Context, error) {
++	// the type assertion checks whether the dynamic type of `storage` implements `Transactional`
++	txnStorage, transactional := storage.(Transactional)
++	if transactional {
++		return txnStorage.BeginTX(ctx)
++	} else {
++		return ctx, nil
++	}
++}
++
++// MaybeCommitTx is a helper function that can be used to commit a transaction if the supplied storage
++// implements the `Transactional` interface.
++func MaybeCommitTx(ctx context.Context, storage interface{}) error {
++	txnStorage, transactional := storage.(Transactional)
++	if transactional {
++		return txnStorage.Commit(ctx)
++	} else {
++		return nil
++	}
++}
++
++// MaybeRollbackTx is a helper function that can be used to rollback a transaction if the supplied storage
++// implements the `Transactional` interface.
++func MaybeRollbackTx(ctx context.Context, storage interface{}) error {
++	txnStorage, transactional := storage.(Transactional)
++	if transactional {
++		return txnStorage.Rollback(ctx)
++	} else {
++		return nil
++	}
++}
