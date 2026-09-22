@@ -48,6 +48,12 @@
 #   6. Остаток расхождения — РОВНО файл правки записи, и после его наложения
 #      расхождений НЕТ НИ ОДНОГО. Свои файлы происхождения исключены из
 #      сравнения ровно по своим ПУТЯМ, а не по базовому имени (F1-47).
+#   7. Заголовок файла — по его КЛАССУ, и класс берётся из перечня, а не из
+#      заголовка (F1-48): файл источника сохраняет строку копирайта и
+#      идентификатор лицензии источника; наш файл (манифест и файл правки)
+#      несёт наш заголовок; файл, которого у источника нет, назван в блоке
+#      «```added-files» манифеста — перенесённым из названного файла источника
+#      (заголовок того файла) либо написанным для фундамента (наш заголовок).
 #
 # То есть «наша правка» — не список в документе, а файл, который обязан
 # наложиться и обязан исчерпать разницу. Разъехалось одно с другим — красный.
@@ -177,6 +183,42 @@ for ((i = 0; i < PIN_COUNT; i++)); do
 done
 echo "исключено из сравнения по пути: ${#own_paths[@]} (${own_paths[*]})"
 
+# --- класс файла и его заголовок (F1-48) ---------------------------------------
+# Заголовок — первая строка копирайта и первый идентификатор SPDX в первых 1024
+# байтах (та же мерка, что у гейта заголовков платформы).
+OUR_HEADER="Copyright (c) PRO-Robotech|SPDX-License-Identifier: Apache-2.0"
+header_of() {
+    local head cr spdx
+    head=$(head -c 1024 -- "$1" 2>/dev/null | tr -d '\r')
+    cr=$(printf '%s\n' "$head" | grep -m1 -o 'Copyright.*' || true)
+    spdx=$(printf '%s\n' "$head" | grep -m1 -oE 'SPDX-License-Identifier: [A-Za-z0-9.+-]+' || true)
+    printf '%s|%s' "$cr" "$spdx"
+}
+
+# Блок «```added-files» манифеста: по строке на файл, которого у источника нет.
+# Форма закрыта — `<путь от корня> moved-from <путь от корня>` либо
+# `<путь от корня> written`; иная строка — «проверка не состоялась», а не пропуск.
+declare -A added_class=() added_from=() added_seen=()
+in_block=0
+while IFS= read -r line || [ -n "$line" ]; do
+    if [ "$in_block" -eq 0 ]; then
+        [ "$line" = '```added-files' ] && in_block=1
+        continue
+    fi
+    [ "$line" = '```' ] && { in_block=2; break; }
+    [ -z "$line" ] && continue
+    read -r a_path a_class a_from a_extra <<<"$line"
+    case "$a_class" in
+        moved-from) { [ -n "$a_from" ] && [ -z "${a_extra:-}" ]; } || die_unavailable "блок added-files: строка не той формы: $line" ;;
+        written)    { [ -z "${a_from:-}" ] && [ -z "${a_extra:-}" ]; } || die_unavailable "блок added-files: строка не той формы: $line" ;;
+        *)          die_unavailable "блок added-files: класс не из перечня (moved-from, written): $line" ;;
+    esac
+    [ -z "${added_class[$a_path]+set}" ] || die_unavailable "блок added-files: файл назван дважды: $a_path"
+    added_class["$a_path"]="$a_class"; added_from["$a_path"]="${a_from:-}"
+done < "$PROVENANCE_FILE"
+[ "$in_block" -eq 2 ] || die_unavailable "в $PROVENANCE_FILE нет закрытого блока «\`\`\`added-files»"
+echo "файлов, которых нет у источника, названо в манифесте: ${#added_class[@]}"
+
 verified=0
 for ((i = 0; i < PIN_COUNT; i++)); do
     m="${PIN_MODULE[$i]}"; v="${PIN_VERSION[$i]}"; sub="${PIN_SUBDIR[$i]}"
@@ -279,6 +321,11 @@ for ((i = 0; i < PIN_COUNT; i++)); do
       gofmt -l -w . >/dev/null 2>&1
     ) || die_unavailable "преобразование апстрима $m не выполнилось"
 
+    # Снимок ИСТОЧНИКА до правки: по нему судится, какой файл пришёл от
+    # источника, а какого у источника нет (шаг 7).
+    source_snap="$work/source-$i"
+    cp -r "$rebuilt" "$source_snap" 2>/dev/null || die_unavailable "не снять снимок источника $m"
+
     patch_file="${PIN_PATCH[$i]}"
     if [ "$patch_file" != "none" ]; then
         [ -f "$patch_file" ] || die_unavailable "нет файла правки $patch_file"
@@ -327,6 +374,46 @@ for ((i = 0; i < PIN_COUNT; i++)); do
     fi
     echo "   дерево   : восстановлено из апстрима и совпало ПОБАЙТОВО ($(git ls-files -- "$local_path" | wc -l) файлов в индексе)"
     verified=$((verified + 1))
+
+    # --- 7. заголовок по классу файла --------------------------------------
+    from_source=0; ours=0; added=0
+    while IFS= read -r f; do
+        rel="${f#"$local_path"/}"
+        is_own=0
+        for own in "${own_paths[@]}"; do [ "$own" = "$f" ] && is_own=1; done
+        if [ "$is_own" -eq 1 ]; then
+            ours=$((ours + 1))
+            [ "$(header_of "$f")" = "$OUR_HEADER" ] \
+                || red "$f — наш файл происхождения, а заголовок не наш: $(header_of "$f")"
+        elif [ -e "$source_snap/$rel" ]; then
+            from_source=$((from_source + 1))
+            [ "$(header_of "$f")" = "$(header_of "$source_snap/$rel")" ] \
+                || red "$f пришёл от источника, а заголовок не источника: $(header_of "$f") вместо $(header_of "$source_snap/$rel") — смена заголовка файла поставки есть перелицензирование либо присвоение текста источника"
+        else
+            added=$((added + 1))
+            added_seen["$f"]=1
+            case "${added_class[$f]:-}" in
+                moved-from)
+                    src_rel="${added_from[$f]#"$local_path"/}"
+                    if [ ! -e "$source_snap/$src_rel" ]; then
+                        red "$f назван перенесённым из ${added_from[$f]}, а такого файла у источника нет"
+                    elif [ "$(header_of "$f")" != "$(header_of "$source_snap/$src_rel")" ]; then
+                        red "$f перенесён из ${added_from[$f]}, а заголовок не источника: $(header_of "$f")"
+                    fi ;;
+                written)
+                    [ "$(header_of "$f")" = "$OUR_HEADER" ] \
+                        || red "$f назван написанным для фундамента, а заголовок не наш: $(header_of "$f")" ;;
+                *)
+                    red "$f у источника нет, и в блоке added-files манифеста класса у него нет" ;;
+            esac
+        fi
+    done < <(git ls-files -- "$local_path")
+    echo "   заголовки: от источника $from_source · наших $ours · добавленных по перечню $added"
+done
+
+for f in "${!added_class[@]}"; do
+    [ -n "${added_seen[$f]+set}" ] \
+        || red "блок added-files называет $f, а такого добавленного файла в поддереве нет — исключение без предмета"
 done
 
 echo

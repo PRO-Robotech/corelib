@@ -10,6 +10,10 @@ github.com/ory/fosite
 
 Каталог `internal/oauth2/` содержит исходники движка OAuth2 / OpenID Connect
 `github.com/ory/fosite`, внесённые в это дерево поддеревом, с правками.
+Исключение — два файла того же каталога, `PROVENANCE.md` и `PROVENANCE.patch`:
+это собственная работа PRO-Robotech, и они несут заголовок PRO-Robotech.
+Файл `storage/tx/transactional.go`, которого у источника нет, перенесён из
+файла источника `storage/transactional.go` и несёт его уведомление о правах.
 
     Источник      github.com/ory/fosite
     Версия        v0.49.0
