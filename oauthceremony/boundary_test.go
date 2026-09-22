@@ -164,12 +164,11 @@ func runtimeRoster() map[string]reflect.Type {
 		"ClientDirectory":      reflect.TypeOf((*oauthceremony.ClientDirectory)(nil)).Elem(),
 		"AuthorizationCodeVault": reflect.TypeOf(
 			(*oauthceremony.AuthorizationCodeVault)(nil)).Elem(),
-		"AccessTokenVault":     reflect.TypeOf((*oauthceremony.AccessTokenVault)(nil)).Elem(),
-		"RefreshTokenVault":    reflect.TypeOf((*oauthceremony.RefreshTokenVault)(nil)).Elem(),
-		"GrantRevoker":         reflect.TypeOf((*oauthceremony.GrantRevoker)(nil)).Elem(),
-		"ProofKeyVault":        reflect.TypeOf((*oauthceremony.ProofKeyVault)(nil)).Elem(),
-		"AssertionReplayGuard": reflect.TypeOf((*oauthceremony.AssertionReplayGuard)(nil)).Elem(),
-		"UnitOfWork":           reflect.TypeOf((*oauthceremony.UnitOfWork)(nil)).Elem(),
+		"AccessTokenVault":  reflect.TypeOf((*oauthceremony.AccessTokenVault)(nil)).Elem(),
+		"RefreshTokenVault": reflect.TypeOf((*oauthceremony.RefreshTokenVault)(nil)).Elem(),
+		"GrantRevoker":      reflect.TypeOf((*oauthceremony.GrantRevoker)(nil)).Elem(),
+		"ProofKeyVault":     reflect.TypeOf((*oauthceremony.ProofKeyVault)(nil)).Elem(),
+		"UnitOfWork":        reflect.TypeOf((*oauthceremony.UnitOfWork)(nil)).Elem(),
 	}
 }
 

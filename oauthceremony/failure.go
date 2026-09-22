@@ -70,7 +70,6 @@ const (
 	CodeRegistrationNotSupported
 	CodeInvalidRequestURI
 	CodeInvalidRequestObject
-	CodeAssertionReplayed
 	CodeStorageConflict
 	CodeAuthorizationCodeConsumed
 	CodeUnhandledRequest
@@ -156,7 +155,6 @@ var failureMeta = [failureCodeCount]struct {
 	CodeRegistrationNotSupported:  {"registration_not_supported", "registration_not_supported", http.StatusBadRequest},
 	CodeInvalidRequestURI:         {"invalid_request_uri", "invalid_request_uri", http.StatusBadRequest},
 	CodeInvalidRequestObject:      {"invalid_request_object", "invalid_request_object", http.StatusBadRequest},
-	CodeAssertionReplayed:         {"assertion_replayed", "invalid_client", http.StatusBadRequest},
 	CodeStorageConflict:           {"storage_conflict", "server_error", http.StatusConflict},
 	CodeAuthorizationCodeConsumed: {"authorization_code_consumed", "invalid_grant", http.StatusBadRequest},
 	CodeUnhandledRequest:          {"unhandled_request", "invalid_request", http.StatusBadRequest},

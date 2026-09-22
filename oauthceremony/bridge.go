@@ -154,43 +154,28 @@ func (b *storageBridge) GetClient(ctx context.Context, id string) (engine.Client
 		}
 		return nil, note(ctx, ours)
 	}
-	return clientViewOf(reg)
+	return clientViewOf(reg), nil
 }
 
-// ClientAssertionJWTValid — проверка движка «этот `jti` уже видели?».
-//
-// ЗАВЕДОМО РАЗРЕШАЮЩАЯ, и это решение, а не заглушка. Движок спрашивает
-// здесь, а запоминает в SetClientAssertionJWT — между двумя вызовами окно, в
-// которое укладывается повторное предъявление. Настоящее решение принимается
-// одной инструкцией в ClaimAssertionID и ниже по стеку: утверждение, которое
-// не удалось зарезервировать, отвергается там. Ответить здесь «уже видели»
-// нечем и незачем — лишнее чтение только расширило бы окно.
-func (b *storageBridge) ClientAssertionJWTValid(_ context.Context, _ string) error {
-	return nil
+// ClientAssertionJWTValid и SetClientAssertionJWT — часть контракта
+// хранилища движка (engine.Storage), и утверждений клиента церемония НЕ
+// обслуживает: представление клиента не объявляет способа доказательства (см.
+// clientViewOf), и движок отвергает утверждение раньше, чем спросит о `jti`.
+// Дойди он сюда — отказ, а не разрешение: «не обслуживаем» не может молча
+// стать «принято».
+func (b *storageBridge) ClientAssertionJWTValid(context.Context, string) error {
+	return clientAssertionsNotServed()
 }
 
-// SetClientAssertionJWT резервирует `jti` — ЕДИНСТВЕННОЕ место, где решается
-// судьба утверждения клиента.
-func (b *storageBridge) SetClientAssertionJWT(ctx context.Context, assertionID string, exp time.Time) error {
-	ctx, cancel := b.deadline(ctx)
-	defer cancel()
+// SetClientAssertionJWT — см. ClientAssertionJWTValid.
+func (b *storageBridge) SetClientAssertionJWT(context.Context, string, time.Time) error {
+	return clientAssertionsNotServed()
+}
 
-	const op = "AssertionReplayGuard.ClaimAssertionID"
-	out, err := b.ports.Assertions.ClaimAssertionID(ctx, assertionID, exp)
-	if bad := checkDeclared(op, out, err); bad != nil {
-		return note(ctx, bad)
-	}
-	switch {
-	case out.Rows() == 1:
-		return nil
-	case out.Rows() == 0:
-		return pairEngine(ctx, failf(CodeAssertionReplayed, nil,
-			"The client assertion was presented more than once.",
-			"Every client assertion may be presented exactly once; issue a fresh one.", op),
-			engine.ErrJTIKnown)
-	default:
-		return note(ctx, contractBreach(op, "the reservation touched more than one row"))
-	}
+func clientAssertionsNotServed() *ProtocolError {
+	return failf(CodeInvalidClient, nil,
+		"Client assertions are not served by this authorization server.",
+		"Authenticate the client with its secret.", "engine storage: client assertion reached the bridge")
 }
 
 // ── Коды авторизации ────────────────────────────────────────────────────────

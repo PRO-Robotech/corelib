@@ -88,7 +88,11 @@ const (
 )
 
 // ClientAuthMethod — способ, которым клиент доказывает себя точке токена
-// (RFC 6749 §2.3, OIDC Core §9).
+// (RFC 6749 §2.3).
+//
+// Перечень ЗАКРЫТ: секрет либо ничего. Утверждения клиента (RFC 7523 §2.2)
+// церемония не обслуживает — ни способом здесь, ни полем в Additional: движок
+// отвергает такое утверждение (см. ClientRegistration).
 type ClientAuthMethod string
 
 // Способы доказательства клиента.
@@ -99,9 +103,6 @@ const (
 	ClientAuthBasic ClientAuthMethod = "client_secret_basic"
 	// ClientAuthPost — секрет в теле запроса.
 	ClientAuthPost ClientAuthMethod = "client_secret_post"
-	// ClientAuthPrivateKeyJWT — подписанное утверждение клиента; поля
-	// `client_assertion` и `client_assertion_type` кладутся в Additional.
-	ClientAuthPrivateKeyJWT ClientAuthMethod = "private_key_jwt"
 )
 
 // ScopeMatching — правило сопоставления запрошенной области с разрешённой.
@@ -131,6 +132,14 @@ const (
 // такой интерфейс — и состав её обязанностей менялся бы при обновлении
 // апстрима молча: новый необязательный интерфейс просто перестал бы
 // подхватываться. Структура делает состав ЯВНЫМ: новое поле видно в диффе.
+//
+// # Чего в записи НЕТ
+//
+// Набора ключей клиента, адресов объектов запроса и закреплённого способа
+// доказательства. Всё это нужно утверждениям клиента и объектам запроса
+// OpenID Connect, а их церемония не обслуживает: конфиденциальный клиент
+// доказывает себя секретом — заголовком либо телом запроса (RFC 6749 §2.3.1),
+// публичный не доказывает себя вовсе и обязан нести PKCE.
 type ClientRegistration struct {
 	// ClientID — публичный идентификатор клиента.
 	ClientID string
@@ -166,40 +175,6 @@ type ClientRegistration struct {
 	// ResponseDeliveries — разрешённые способы доставки ответа. Пустой
 	// перечень означает «только тот, что движок выберет по умолчанию».
 	ResponseDeliveries []ResponseDelivery
-
-	// TokenAuthMethod — способ доказательства клиента, на который он
-	// зарегистрирован. Пустое значение означает «проверку способа не
-	// исполнять», и это НЕ то же самое, что ClientAuthNone: назвав
-	// ClientAuthNone, запись ЗАПРЕЩАЕТ доказательство секретом, а не
-	// отменяет проверку.
-	TokenAuthMethod ClientAuthMethod
-
-	// TokenAuthSigningAlg — алгоритм подписи утверждения клиента для
-	// ClientAuthPrivateKeyJWT. Пусто означает умолчание OIDC Core §9
-	// ("RS256").
-	TokenAuthSigningAlg string
-
-	// JSONWebKeySet — набор ключей клиента КАК СЫРОЙ ДОКУМЕНТ JSON по
-	// RFC 7517 §5.
-	//
-	// Именно документ, а не разобранный тип: разобранный тип принадлежит
-	// библиотеке разбора, и, появись он в этом поле, каждая служба,
-	// заполняющая запись клиента, была бы обязана ту библиотеку назвать.
-	// Это ровно тот вид привязки, ради устранения которого пакет и
-	// заведён. Разбор исполняет церемония; недействительный документ —
-	// ErrMisconfiguration.
-	JSONWebKeySet []byte
-
-	// JSONWebKeySetURI — адрес, по которому набор ключей клиента можно
-	// забрать (`jwks_uri`).
-	JSONWebKeySetURI string
-
-	// RequestURIs — предварительно зарегистрированные адреса объектов
-	// запроса (OIDC Core §6.2).
-	RequestURIs []string
-
-	// RequestObjectSigningAlg — алгоритм подписи объекта запроса.
-	RequestObjectSigningAlg string
 }
 
 // ── Записи хранения ─────────────────────────────────────────────────────────
@@ -398,8 +373,9 @@ type TokenRequest struct {
 	// Audiences — `audience`.
 	Audiences []string
 
-	// Additional — прочие протокольные поля: `assertion`,
-	// `client_assertion`, `client_assertion_type`, поля расширений.
+	// Additional — прочие протокольные поля: поля расширений. Утверждение
+	// клиента (`client_assertion`) сюда класть бесполезно — движок его
+	// отвергает (см. ClientAuthMethod).
 	Additional map[string][]string
 }
 

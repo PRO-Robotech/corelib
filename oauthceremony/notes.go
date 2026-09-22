@@ -154,7 +154,7 @@ func (n *operationNotes) replayed() replayedFamily {
 // (б) означают, что операция не могла завершиться успехом.
 func coarsenable(code FailureCode) bool {
 	switch code {
-	case CodeAuthorizationCodeConsumed, CodeRefreshTokenRotated, CodeAssertionReplayed,
+	case CodeAuthorizationCodeConsumed, CodeRefreshTokenRotated,
 		CodePortContract, CodePortDeadline, CodePortCanceled:
 		return true
 	default:

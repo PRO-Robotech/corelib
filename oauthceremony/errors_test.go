@@ -56,7 +56,6 @@ func sentinelRoster() map[oauthceremony.FailureCode]*oauthceremony.ProtocolError
 		oauthceremony.CodeRegistrationNotSupported:  oauthceremony.ErrRegistrationNotSupported,
 		oauthceremony.CodeInvalidRequestURI:         oauthceremony.ErrInvalidRequestURI,
 		oauthceremony.CodeInvalidRequestObject:      oauthceremony.ErrInvalidRequestObject,
-		oauthceremony.CodeAssertionReplayed:         oauthceremony.ErrAssertionReplayed,
 		oauthceremony.CodeStorageConflict:           oauthceremony.ErrStorageConflict,
 		oauthceremony.CodeAuthorizationCodeConsumed: oauthceremony.ErrAuthorizationCodeConsumed,
 		oauthceremony.CodeUnhandledRequest:          oauthceremony.ErrUnhandledRequest,

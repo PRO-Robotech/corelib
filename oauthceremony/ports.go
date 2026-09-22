@@ -3,10 +3,7 @@
 
 package oauthceremony
 
-import (
-	"context"
-	"time"
-)
+import "context"
 
 // ── Число затронутых строк как ТИП ──────────────────────────────────────────
 
@@ -287,41 +284,6 @@ type ProofKeyVault interface {
 	DropProofKeyRequest(ctx context.Context, signature string) (StoreOutcome, error)
 }
 
-// AssertionReplayGuard — защита утверждений клиента от повторного
-// предъявления (RFC 7523 §3, OIDC Core §9).
-//
-// Реализует СЛУЖБА.
-//
-// # Почему здесь ОДИН метод, а у движка их ДВА
-//
-// Движок спрашивает хранилище «этот `jti` известен?» и, получив «нет», ПОЗЖЕ
-// говорит «запомни его». Между вопросом и ответом — окно, в которое
-// укладывается повторное предъявление того же утверждения.
-//
-// Наш порт этого окна не открывает: он объявляет одно действие —
-// «зарезервировать `jti`», исполняемое одной инструкцией
-// `INSERT … ON CONFLICT DO NOTHING`. Проверка движка обслуживается из
-// церемонии как заведомо разрешающая, а настоящее решение принимается по
-// числу вставленных строк. Это сужение чужого контракта до более строгого, и
-// оно законно: всякий, кто проходил у движка, проходит и здесь, а часть тех,
-// кто проходил дважды, теперь не проходит.
-type AssertionReplayGuard interface {
-	// ClaimAssertionID резервирует идентификатор утверждения до
-	// указанного срока.
-	//
-	// ОДНОЙ ИНСТРУКЦИЕЙ:
-	//
-	//	INSERT INTO client_assertions (assertion_id, expires_at)
-	//	VALUES ($1, $2) ON CONFLICT (assertion_id) DO NOTHING
-	//
-	// Исходы: 1 → резерв наш, утверждение принимается; 0 → утверждение
-	// уже предъявлялось → ErrAssertionReplayed; иное → ErrPortContract.
-	//
-	// Уборка просроченных записей — забота службы, а не церемонии:
-	// церемония не знает ни расписания, ни размера таблицы.
-	ClaimAssertionID(ctx context.Context, assertionID string, expiresAt time.Time) (StoreOutcome, error)
-}
-
 // UnitOfWork — НЕОБЯЗАТЕЛЬНЫЙ порт единицы работы.
 //
 // Реализует СЛУЖБА, если её хранилище умеет транзакции.
@@ -362,7 +324,6 @@ type Ports struct {
 	RefreshTokens      RefreshTokenVault
 	Grants             GrantRevoker
 	ProofKeys          ProofKeyVault
-	Assertions         AssertionReplayGuard
 
 	// Transaction — необязателен. Пусто означает «хранилище службы не
 	// умеет транзакций», и церемония ведёт себя соответственно.

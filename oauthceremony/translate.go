@@ -5,13 +5,10 @@ package oauthceremony
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"net/url"
 	"strconv"
 	"time"
-
-	jose "github.com/go-jose/go-jose/v3"
 
 	engine "github.com/PRO-Robotech/corelib/internal/oauth2"
 )
@@ -69,7 +66,6 @@ var engineFailurePairs = []struct {
 	{engine.ErrRegistrationNotSupported, CodeRegistrationNotSupported},
 	{engine.ErrInvalidRequestURI, CodeInvalidRequestURI},
 	{engine.ErrInvalidRequestObject, CodeInvalidRequestObject},
-	{engine.ErrJTIKnown, CodeAssertionReplayed},
 	{engine.ErrSerializationFailure, CodeStorageConflict},
 	{engine.ErrUnknownRequest, CodeUnhandledRequest},
 }
@@ -251,63 +247,20 @@ func (c *clientView) GetResponseModes() []engine.ResponseModeType {
 	return out
 }
 
-// oidcClientView — клиент, у которого НАЗВАН способ доказательства.
-//
-// # Почему отдельный тип, а не поле
-//
-// Движок спрашивает про способ доказательства утверждением типа. Реализуй его
-// единственный clientView — и движок увидел бы способ у КАЖДОГО клиента; у
-// того, кто способа не называл, способом оказалась бы пустая строка, и
-// доказательство секретом в заголовке Authorization было бы отвергнуто с
-// сообщением про «client_secret_basic вместо ”». То есть тип-утверждение
-// молча сменил бы поведение всем.
-//
-// Два типа говорят движку правду: способ назван — спрашивай; не назван —
-// вопрос неприменим.
-type oidcClientView struct {
-	*clientView
-	keys *jose.JSONWebKeySet
-}
-
-func (c *oidcClientView) GetRequestURIs() []string            { return c.reg.RequestURIs }
-func (c *oidcClientView) GetJSONWebKeys() *jose.JSONWebKeySet { return c.keys }
-func (c *oidcClientView) GetJSONWebKeysURI() string           { return c.reg.JSONWebKeySetURI }
-func (c *oidcClientView) GetTokenEndpointAuthMethod() string  { return string(c.reg.TokenAuthMethod) }
-func (c *oidcClientView) GetRequestObjectSigningAlgorithm() string {
-	return c.reg.RequestObjectSigningAlg
-}
-
-func (c *oidcClientView) GetTokenEndpointAuthSigningAlgorithm() string {
-	if c.reg.TokenAuthSigningAlg == "" {
-		return defaultAssertionSigningAlg
-	}
-	return c.reg.TokenAuthSigningAlg
-}
-
-// defaultAssertionSigningAlg — умолчание OIDC Core §9 для private_key_jwt.
-const defaultAssertionSigningAlg = "RS256"
+// Представления клиента С ЯВНЫМ СПОСОБОМ ДОКАЗАТЕЛЬСТВА (интерфейс движка
+// `OpenIDConnectClient`) здесь НЕТ, и это решение, а не пропуск. Тот интерфейс
+// отдаёт набор ключей клиента типом библиотеки JOSE движка, и реализовать его
+// значило бы импортировать эту библиотеку вне поддерева — а она заключена в
+// поддерево (приёмка F1, `F1-51`; гейт `internal/engineconfinement`). Вместе с
+// ним сняты способы, которым он нужен: утверждение клиента (RFC 7523 §2.2),
+// объекты запроса (OIDC Core §6) и закрепление способа за записью клиента.
+// Движок, не найдя у клиента этого интерфейса, отвергает утверждение клиента
+// и объект запроса РАНЬШЕ, чем обратится к хранилищу (предикат — проба
+// TestClientAssertionIsRefused).
 
 // clientViewOf собирает представление клиента для движка.
-func clientViewOf(reg ClientRegistration) (engine.Client, error) {
-	base := &clientView{reg: reg}
-
-	namesAuthMethod := reg.TokenAuthMethod != ""
-	carriesKeyMaterial := len(reg.JSONWebKeySet) > 0 || reg.JSONWebKeySetURI != "" || len(reg.RequestURIs) > 0
-	if !namesAuthMethod && !carriesKeyMaterial {
-		return base, nil
-	}
-
-	view := &oidcClientView{clientView: base}
-	if len(reg.JSONWebKeySet) > 0 {
-		set := new(jose.JSONWebKeySet)
-		if err := json.Unmarshal(reg.JSONWebKeySet, set); err != nil {
-			return nil, failf(CodeMisconfiguration, err,
-				"The registered JSON Web Key Set of the client could not be decoded.",
-				"Store the key set as the JSON document defined by RFC 7517 §5.", err.Error())
-		}
-		view.keys = set
-	}
-	return view, nil
+func clientViewOf(reg ClientRegistration) engine.Client {
+	return &clientView{reg: reg}
 }
 
 // ── Перевод гранта ──────────────────────────────────────────────────────────
@@ -340,10 +293,7 @@ func requesterFromGrant(ctx context.Context, clients func(context.Context, strin
 	if err != nil {
 		return nil, err
 	}
-	client, err := clientViewOf(reg)
-	if err != nil {
-		return nil, err
-	}
+	client := clientViewOf(reg)
 
 	// Движок передаёт сеанс НЕ ВСЕГДА: на пути отзыва (RFC 7009) он
 	// спрашивает грант, чтобы узнать его идентификатор, и сеанс ему не

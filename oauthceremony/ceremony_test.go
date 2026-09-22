@@ -12,6 +12,8 @@ package oauthceremony_test
 
 import (
 	"context"
+	"crypto/rand"
+	"crypto/rsa"
 	"crypto/sha256"
 	"encoding/base64"
 	"errors"
@@ -19,6 +21,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/golang-jwt/jwt/v5"
 	"golang.org/x/crypto/bcrypt"
 
 	"github.com/PRO-Robotech/corelib/oauthceremony"
@@ -358,6 +361,59 @@ func TestClientCredentialsIsNotServed(t *testing.T) {
 	}
 }
 
+// TestClientAssertionIsRefused — утверждение клиента (RFC 7523 §2.2)
+// церемония не обслуживает, и движок отвергает его ДО хранилища.
+//
+// Утверждение подписано по-настоящему и несёт всё, что движок проверяет
+// (iss, sub, aud, jti, exp): отказ обязан прийти из-за того, что способ не
+// обслуживается, а не из-за негодной подписи или разбора. Близнец — обмен тем
+// же клиентом с секретом (TestAuthorizationCodeCeremonyRoundTrip); отличие —
+// способ доказательства.
+func TestClientAssertionIsRefused(t *testing.T) {
+	store := newMemoryPorts()
+	registerTestClient(t, store)
+	ceremony := newTestCeremony(t, store.ports())
+	code, _ := issueCode(t, ceremony)
+
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatalf("НЕ ВЫПОЛНИЛОСЬ: ключ утверждения не создан: %v", err)
+	}
+	assertion, err := jwt.NewWithClaims(jwt.SigningMethodRS256, jwt.MapClaims{
+		"iss": testClientID,
+		"sub": testClientID,
+		"aud": testIssuer + "/oauth2/token",
+		"jti": "assertion-probe-1",
+		"exp": time.Now().Add(time.Minute).Unix(),
+	}).SignedString(key)
+	if err != nil {
+		t.Fatalf("НЕ ВЫПОЛНИЛОСЬ: утверждение не подписано: %v", err)
+	}
+
+	_, err = ceremony.Exchange(context.Background(), oauthceremony.TokenRequest{
+		Grant:        oauthceremony.GrantAuthorizationCode,
+		ClientID:     testClientID,
+		AuthMethod:   oauthceremony.ClientAuthNone,
+		Code:         code,
+		RedirectURI:  testRedirectURI,
+		CodeVerifier: testVerifier,
+		Additional: map[string][]string{
+			"client_assertion_type": {"urn:ietf:params:oauth:client-assertion-type:jwt-bearer"},
+			"client_assertion":      {assertion},
+		},
+	})
+	if err == nil {
+		t.Fatal("обмен с утверждением клиента прошёл")
+	}
+	if errors.Is(err, oauthceremony.ErrServerError) || errors.Is(err, oauthceremony.ErrUnknown) {
+		t.Fatalf("утверждение клиента отвергнуто поломкой, а не отказом протокола: %v", err)
+	}
+	if !errors.Is(err, oauthceremony.ErrInvalidRequest) {
+		t.Fatalf("случай %v, ожидался %v (способ не обслуживается)", oauthceremony.CodeOf(err), oauthceremony.CodeInvalidRequest)
+	}
+	t.Logf("отказ: %v", err)
+}
+
 // TestDenialTravelsBackAsRedirect — отказ в согласии уезжает клиенту
 // перенаправлением с полем `error`, а не телом ответа (RFC 6749 §4.1.2.1).
 func TestDenialTravelsBackAsRedirect(t *testing.T) {
@@ -554,7 +610,6 @@ func TestNewRejectsEveryMissingPort(t *testing.T) {
 		"RefreshTokens":      func(p *oauthceremony.Ports) { p.RefreshTokens = nil },
 		"Grants":             func(p *oauthceremony.Ports) { p.Grants = nil },
 		"ProofKeys":          func(p *oauthceremony.Ports) { p.ProofKeys = nil },
-		"Assertions":         func(p *oauthceremony.Ports) { p.Assertions = nil },
 	}
 	for name, drop := range cases {
 		t.Run(name, func(t *testing.T) {

@@ -34,13 +34,12 @@ type refreshRow struct {
 
 // memoryPorts — хранилище службы в памяти, реализующее ВСЕ порты церемонии.
 type memoryPorts struct {
-	mu         sync.Mutex
-	clients    map[string]oauthceremony.ClientRegistration
-	codes      map[string]*codeRow
-	access     map[string]oauthceremony.GrantRecord
-	refresh    map[string]*refreshRow
-	proof      map[string]oauthceremony.GrantRecord
-	assertions map[string]time.Time
+	mu      sync.Mutex
+	clients map[string]oauthceremony.ClientRegistration
+	codes   map[string]*codeRow
+	access  map[string]oauthceremony.GrantRecord
+	refresh map[string]*refreshRow
+	proof   map[string]oauthceremony.GrantRecord
 
 	// revoked — гранты, чьё семейство отозвано. Ведётся подставкой, чтобы
 	// проба утверждала СОСТОЯНИЕ гранта после отказа, а не только текст
@@ -142,13 +141,12 @@ func (m *memoryPorts) familyRevoked(grantID string) bool {
 
 func newMemoryPorts() *memoryPorts {
 	return &memoryPorts{
-		clients:    map[string]oauthceremony.ClientRegistration{},
-		codes:      map[string]*codeRow{},
-		access:     map[string]oauthceremony.GrantRecord{},
-		refresh:    map[string]*refreshRow{},
-		proof:      map[string]oauthceremony.GrantRecord{},
-		assertions: map[string]time.Time{},
-		revoked:    map[string]bool{},
+		clients: map[string]oauthceremony.ClientRegistration{},
+		codes:   map[string]*codeRow{},
+		access:  map[string]oauthceremony.GrantRecord{},
+		refresh: map[string]*refreshRow{},
+		proof:   map[string]oauthceremony.GrantRecord{},
+		revoked: map[string]bool{},
 	}
 }
 
@@ -160,7 +158,6 @@ func (m *memoryPorts) ports() oauthceremony.Ports {
 		RefreshTokens:      m,
 		Grants:             m,
 		ProofKeys:          m,
-		Assertions:         m,
 	}
 }
 
@@ -399,19 +396,6 @@ func (m *memoryPorts) DropProofKeyRequest(_ context.Context, signature string) (
 	return oauthceremony.RowsTouched(1), nil
 }
 
-// ── AssertionReplayGuard ────────────────────────────────────────────────────
-
-func (m *memoryPorts) ClaimAssertionID(_ context.Context, assertionID string, expiresAt time.Time) (oauthceremony.StoreOutcome, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	if _, taken := m.assertions[assertionID]; taken {
-		return oauthceremony.RowsTouched(0), nil
-	}
-	m.assertions[assertionID] = expiresAt
-	return oauthceremony.RowsTouched(1), nil
-}
-
 // Утверждения времени сборки: подставка обязана оставаться полной
 // реализацией портов. Отпавший метод — отказ сборки, а не красная проба с
 // неочевидным текстом.
@@ -422,7 +406,6 @@ var (
 	_ oauthceremony.RefreshTokenVault      = (*memoryPorts)(nil)
 	_ oauthceremony.GrantRevoker           = (*memoryPorts)(nil)
 	_ oauthceremony.ProofKeyVault          = (*memoryPorts)(nil)
-	_ oauthceremony.AssertionReplayGuard   = (*memoryPorts)(nil)
 )
 
 // ── Единица работы ──────────────────────────────────────────────────────────

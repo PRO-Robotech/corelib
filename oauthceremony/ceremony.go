@@ -306,8 +306,6 @@ func validatePorts(ports Ports) error {
 		return misuse("Ports.Grants is not named")
 	case ports.ProofKeys == nil:
 		return misuse("Ports.ProofKeys is not named")
-	case ports.Assertions == nil:
-		return misuse("Ports.Assertions is not named")
 	}
 	return nil
 }
@@ -763,13 +761,6 @@ func (c *Ceremony) postForm(ctx context.Context, form url.Values, clientID, clie
 	case ClientAuthPost:
 		form.Set("client_id", clientID)
 		form.Set("client_secret", clientSecret)
-	case ClientAuthPrivateKeyJWT:
-		if clientSecret != "" {
-			return nil, misuse("a client secret was supplied while AuthMethod is ClientAuthPrivateKeyJWT")
-		}
-		if clientID != "" {
-			form.Set("client_id", clientID)
-		}
 	case ClientAuthBasic:
 		// Доказательство уезжает заголовком ниже.
 	default:
