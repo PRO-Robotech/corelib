@@ -9,7 +9,7 @@ import (
 	"net/http"
 	"testing"
 
-	"github.com/ory/x/errorsx"
+	"github.com/PRO-Robotech/corelib/internal/oauth2deps/errorsx"
 
 	"github.com/golang/mock/gomock"
 	"github.com/pkg/errors"

@@ -9,7 +9,7 @@ import (
 	"net/url"
 	"strings"
 
-	"github.com/ory/x/errorsx"
+	"github.com/PRO-Robotech/corelib/internal/oauth2deps/errorsx"
 )
 
 type AudienceMatchingStrategy func(haystack []string, needle []string) error

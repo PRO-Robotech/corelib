@@ -11,7 +11,7 @@ import (
 	"github.com/dgraph-io/ristretto/v2"
 	"github.com/hashicorp/go-retryablehttp"
 
-	"github.com/ory/x/errorsx"
+	"github.com/PRO-Robotech/corelib/internal/oauth2deps/errorsx"
 
 	"github.com/go-jose/go-jose/v3"
 )

@@ -6,7 +6,7 @@ package openid
 import (
 	"context"
 
-	"github.com/ory/x/errorsx"
+	"github.com/PRO-Robotech/corelib/internal/oauth2deps/errorsx"
 
 	fosite "github.com/PRO-Robotech/corelib/internal/oauth2"
 	"github.com/PRO-Robotech/corelib/internal/oauth2/handler/oauth2"

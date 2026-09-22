@@ -8,8 +8,8 @@ import (
 	"net/http"
 	"net/url"
 
+	"github.com/PRO-Robotech/corelib/internal/oauth2deps/errorsx"
 	"github.com/PRO-Robotech/corelib/internal/otelx"
-	"github.com/ory/x/errorsx"
 	"go.opentelemetry.io/otel/trace"
 )
 

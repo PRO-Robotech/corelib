@@ -8,14 +8,14 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/ory/x/errorsx"
+	"github.com/PRO-Robotech/corelib/internal/oauth2deps/errorsx"
 
 	"github.com/mohae/deepcopy"
 	"github.com/pkg/errors"
 
 	fosite "github.com/PRO-Robotech/corelib/internal/oauth2"
 	"github.com/PRO-Robotech/corelib/internal/oauth2/token/jwt"
-	"github.com/ory/go-convenience/stringslice"
+	"github.com/PRO-Robotech/corelib/internal/oauth2deps/stringslice"
 )
 
 const defaultExpiryTime = time.Hour

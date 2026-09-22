@@ -12,7 +12,7 @@ import (
 
 	jjson "github.com/go-jose/go-jose/v3/json"
 
-	"github.com/ory/x/errorsx"
+	"github.com/PRO-Robotech/corelib/internal/oauth2deps/errorsx"
 )
 
 var TimeFunc = time.Now

@@ -6,7 +6,7 @@ package fosite
 import (
 	"context"
 
-	"github.com/ory/x/errorsx"
+	"github.com/PRO-Robotech/corelib/internal/oauth2deps/errorsx"
 
 	"golang.org/x/crypto/bcrypt"
 )

@@ -146,7 +146,19 @@ linters:
       # командой ровно на два файла происхождения. Запись, которой нечего
       # исключать, — слепая зона; если поддерево уйдёт из дерева, уйти обязана
       # и эта запись.
-      - path: '^internal/oauth2/'
+      #
+      # `internal/oauth2deps/` — ТОГО ЖЕ РОДА: два пакета, которые движок берёт
+      # из чужих модулей (`errorsx` из `github.com/ory/x@v0.0.729`,
+      # `stringslice` из `github.com/ory/go-convenience@v0.1.0`), внесённые
+      # побайтово и без единой строки правки (`local_patch: none` в блоке
+      # `upstream-pins` файла `internal/oauth2/PROVENANCE.md`). Замер на день
+      # вноса (единица — находка): 1 находка — staticcheck SA6005 в
+      # `stringslice/has.go:18` (`strings.ToLower(a) == strings.ToLower(b)`
+      # вместо `strings.EqualFold`). Правка сделала бы область НЕ побайтовой, а
+      # её гейт происхождения — красным; поведение апстрима здесь обязано
+      # оставаться апстримным. Предикат предметности:
+      # `git ls-files 'internal/oauth2deps/*' | wc -l` → 11.
+      - path: '^internal/oauth2(deps)?/'
         linters: [revive, staticcheck, unused, govet, errcheck, misspell,
                   ineffassign, bodyclose, copyloopvar]
       - path: '_test\.go$'

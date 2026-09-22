@@ -14,7 +14,7 @@ import (
 	"golang.org/x/text/language"
 
 	"github.com/PRO-Robotech/corelib/internal/oauth2/i18n"
-	"github.com/ory/x/errorsx"
+	"github.com/PRO-Robotech/corelib/internal/oauth2deps/errorsx"
 
 	"github.com/pkg/errors"
 )

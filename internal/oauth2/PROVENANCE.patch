@@ -15,52 +15,48 @@
 diff -ruN a/access_request_handler.go b/access_request_handler.go
 --- a/access_request_handler.go
 +++ b/access_request_handler.go
-@@ -9,8 +9,8 @@
- 	"strings"
+@@ -10,7 +10,7 @@
  
  	"github.com/PRO-Robotech/corelib/internal/oauth2/i18n"
-+	"github.com/PRO-Robotech/corelib/internal/otelx"
- 	"github.com/ory/x/errorsx"
+ 	"github.com/PRO-Robotech/corelib/internal/oauth2deps/errorsx"
 -	"github.com/ory/x/otelx"
++	"github.com/PRO-Robotech/corelib/internal/otelx"
  	"go.opentelemetry.io/otel/trace"
  
  	"github.com/pkg/errors"
 diff -ruN a/access_response_writer.go b/access_response_writer.go
 --- a/access_response_writer.go
 +++ b/access_response_writer.go
-@@ -6,8 +6,8 @@
- import (
+@@ -7,7 +7,7 @@
  	"context"
  
-+	"github.com/PRO-Robotech/corelib/internal/otelx"
- 	"github.com/ory/x/errorsx"
+ 	"github.com/PRO-Robotech/corelib/internal/oauth2deps/errorsx"
 -	"github.com/ory/x/otelx"
++	"github.com/PRO-Robotech/corelib/internal/otelx"
  	"go.opentelemetry.io/otel/trace"
  
  	"github.com/pkg/errors"
 diff -ruN a/authorize_request_handler.go b/authorize_request_handler.go
 --- a/authorize_request_handler.go
 +++ b/authorize_request_handler.go
-@@ -15,8 +15,8 @@
- 
+@@ -16,7 +16,7 @@
  	"github.com/PRO-Robotech/corelib/internal/oauth2/i18n"
  	"github.com/PRO-Robotech/corelib/internal/oauth2/token/jwt"
-+	"github.com/PRO-Robotech/corelib/internal/otelx"
- 	"github.com/ory/x/errorsx"
+ 	"github.com/PRO-Robotech/corelib/internal/oauth2deps/errorsx"
 -	"github.com/ory/x/otelx"
++	"github.com/PRO-Robotech/corelib/internal/otelx"
  
  	"github.com/pkg/errors"
  
 diff -ruN a/authorize_response_writer.go b/authorize_response_writer.go
 --- a/authorize_response_writer.go
 +++ b/authorize_response_writer.go
-@@ -8,8 +8,8 @@
- 	"net/http"
+@@ -9,7 +9,7 @@
  	"net/url"
  
-+	"github.com/PRO-Robotech/corelib/internal/otelx"
- 	"github.com/ory/x/errorsx"
+ 	"github.com/PRO-Robotech/corelib/internal/oauth2deps/errorsx"
 -	"github.com/ory/x/otelx"
++	"github.com/PRO-Robotech/corelib/internal/otelx"
  	"go.opentelemetry.io/otel/trace"
  )
  
@@ -75,7 +71,7 @@ diff -ruN a/client_authentication_jwks_strategy.go b/client_authentication_jwks_
 +	"github.com/dgraph-io/ristretto/v2"
  	"github.com/hashicorp/go-retryablehttp"
  
- 	"github.com/ory/x/errorsx"
+ 	"github.com/PRO-Robotech/corelib/internal/oauth2deps/errorsx"
 diff -ruN a/client_authentication_jwks_strategy_test.go b/client_authentication_jwks_strategy_test.go
 --- a/client_authentication_jwks_strategy_test.go
 +++ b/client_authentication_jwks_strategy_test.go
@@ -93,7 +89,7 @@ diff -ruN a/handler/oauth2/flow_authorize_code_token.go b/handler/oauth2/flow_au
 +++ b/handler/oauth2/flow_authorize_code_token.go
 @@ -9,7 +9,7 @@
  
- 	"github.com/ory/x/errorsx"
+ 	"github.com/PRO-Robotech/corelib/internal/oauth2deps/errorsx"
  
 -	"github.com/PRO-Robotech/corelib/internal/oauth2/storage"
 +	"github.com/PRO-Robotech/corelib/internal/oauth2/storage/tx"
@@ -217,65 +213,60 @@ diff -ruN a/handler/rfc7523/handler_test.go b/handler/rfc7523/handler_test.go
 diff -ruN a/introspect.go b/introspect.go
 --- a/introspect.go
 +++ b/introspect.go
-@@ -8,8 +8,8 @@
- 	"net/http"
+@@ -9,7 +9,7 @@
  	"strings"
  
-+	"github.com/PRO-Robotech/corelib/internal/otelx"
- 	"github.com/ory/x/errorsx"
+ 	"github.com/PRO-Robotech/corelib/internal/oauth2deps/errorsx"
 -	"github.com/ory/x/otelx"
++	"github.com/PRO-Robotech/corelib/internal/otelx"
  	"go.opentelemetry.io/otel/trace"
  
  	"github.com/pkg/errors"
 diff -ruN a/introspection_request_handler.go b/introspection_request_handler.go
 --- a/introspection_request_handler.go
 +++ b/introspection_request_handler.go
-@@ -12,8 +12,8 @@
- 	"go.opentelemetry.io/otel/trace"
+@@ -13,7 +13,7 @@
  	"golang.org/x/text/language"
  
-+	"github.com/PRO-Robotech/corelib/internal/otelx"
- 	"github.com/ory/x/errorsx"
+ 	"github.com/PRO-Robotech/corelib/internal/oauth2deps/errorsx"
 -	"github.com/ory/x/otelx"
++	"github.com/PRO-Robotech/corelib/internal/otelx"
  )
  
  // NewIntrospectionRequest initiates token introspection as defined in
 diff -ruN a/pushed_authorize_request_handler.go b/pushed_authorize_request_handler.go
 --- a/pushed_authorize_request_handler.go
 +++ b/pushed_authorize_request_handler.go
-@@ -9,8 +9,8 @@
- 	"net/http"
+@@ -10,7 +10,7 @@
  
  	"github.com/PRO-Robotech/corelib/internal/oauth2/i18n"
-+	"github.com/PRO-Robotech/corelib/internal/otelx"
- 	"github.com/ory/x/errorsx"
+ 	"github.com/PRO-Robotech/corelib/internal/oauth2deps/errorsx"
 -	"github.com/ory/x/otelx"
++	"github.com/PRO-Robotech/corelib/internal/otelx"
  	"go.opentelemetry.io/otel/trace"
  )
  
 diff -ruN a/pushed_authorize_response_writer.go b/pushed_authorize_response_writer.go
 --- a/pushed_authorize_response_writer.go
 +++ b/pushed_authorize_response_writer.go
-@@ -9,8 +9,8 @@
- 	"fmt"
+@@ -10,7 +10,7 @@
  	"net/http"
  
-+	"github.com/PRO-Robotech/corelib/internal/otelx"
- 	"github.com/ory/x/errorsx"
+ 	"github.com/PRO-Robotech/corelib/internal/oauth2deps/errorsx"
 -	"github.com/ory/x/otelx"
++	"github.com/PRO-Robotech/corelib/internal/otelx"
  	"go.opentelemetry.io/otel/trace"
  )
  
 diff -ruN a/revoke_handler.go b/revoke_handler.go
 --- a/revoke_handler.go
 +++ b/revoke_handler.go
-@@ -9,8 +9,8 @@
- 	"fmt"
+@@ -10,7 +10,7 @@
  	"net/http"
  
-+	"github.com/PRO-Robotech/corelib/internal/otelx"
- 	"github.com/ory/x/errorsx"
+ 	"github.com/PRO-Robotech/corelib/internal/oauth2deps/errorsx"
 -	"github.com/ory/x/otelx"
++	"github.com/PRO-Robotech/corelib/internal/otelx"
  	"go.opentelemetry.io/otel/trace"
  
  	"github.com/pkg/errors"

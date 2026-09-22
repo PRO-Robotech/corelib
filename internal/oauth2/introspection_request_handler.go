@@ -12,8 +12,8 @@ import (
 	"go.opentelemetry.io/otel/trace"
 	"golang.org/x/text/language"
 
+	"github.com/PRO-Robotech/corelib/internal/oauth2deps/errorsx"
 	"github.com/PRO-Robotech/corelib/internal/otelx"
-	"github.com/ory/x/errorsx"
 )
 
 // NewIntrospectionRequest initiates token introspection as defined in

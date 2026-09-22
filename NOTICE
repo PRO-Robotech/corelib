@@ -27,5 +27,39 @@ github.com/ory/fosite
     Проверка машиной: `.github/scripts/oauth2-provenance.sh` (исход 0 —
     поддерево восстановлено из апстрима и совпало побайтово).
 
+--------------------------------------------------------------------------------
+github.com/ory/x — пакет errorsx
+--------------------------------------------------------------------------------
+
+Каталог `internal/oauth2deps/errorsx/` содержит пакет `errorsx` модуля
+`github.com/ory/x`, внесённый исходниками БЕЗ ИЗМЕНЕНИЙ.
+
+    Источник      github.com/ory/x, пакет errorsx
+    Версия        v0.0.729
+    Коммит        dc85614cf20e5d2ffa44d5e2108fcd1244f62157
+    Сумма модуля  h1:7ttCYNCjCdspI6X0oaxGAXoiYWSBrwGRz6w/IG8s3I4=
+    Лицензия      Apache License 2.0 — дословно в
+                  `internal/oauth2deps/errorsx/LICENSE`
+    Права         Copyright © 2023 Ory Corp
+
+--------------------------------------------------------------------------------
+github.com/ory/go-convenience — пакет stringslice
+--------------------------------------------------------------------------------
+
+Каталог `internal/oauth2deps/stringslice/` содержит пакет `stringslice`
+модуля `github.com/ory/go-convenience`, внесённый исходниками БЕЗ ИЗМЕНЕНИЙ.
+
+    Источник      github.com/ory/go-convenience, пакет stringslice
+    Версия        v0.1.0
+    Коммит        ab120a447a7fe88a9c3b7cbfca477340b0e88ef3
+    Сумма модуля  h1:zouLKfF2GoSGnJwGq+PE/nJAE6dj2Zj5QlTgmMTsTS8=
+    Лицензия      MIT License — текст лицензии и уведомление о правах
+                  дословно в `internal/oauth2deps/stringslice/LICENSE`
+    Права         Copyright (c) 2018 ORY
+
+Пины всех трёх внесённых апстримов — блок `upstream-pins` файла
+`internal/oauth2/PROVENANCE.md`; оба пакета сверяются тем же
+`.github/scripts/oauth2-provenance.sh`.
+
 Остальное дерево — собственная работа PRO-Robotech под Apache License 2.0
 (корневой `LICENSE`).

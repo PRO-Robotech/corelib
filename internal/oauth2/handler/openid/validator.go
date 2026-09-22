@@ -9,13 +9,13 @@ import (
 	"strings"
 	"time"
 
-	"github.com/ory/x/errorsx"
+	"github.com/PRO-Robotech/corelib/internal/oauth2deps/errorsx"
 
 	"github.com/pkg/errors"
 
 	fosite "github.com/PRO-Robotech/corelib/internal/oauth2"
 	"github.com/PRO-Robotech/corelib/internal/oauth2/token/jwt"
-	"github.com/ory/go-convenience/stringslice"
+	"github.com/PRO-Robotech/corelib/internal/oauth2deps/stringslice"
 )
 
 var defaultPrompts = []string{"login", "none", "consent", "select_account"}

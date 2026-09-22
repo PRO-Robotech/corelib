@@ -12,7 +12,7 @@ import (
 
 	fosite "github.com/PRO-Robotech/corelib/internal/oauth2"
 	"github.com/PRO-Robotech/corelib/internal/oauth2/token/hmac"
-	"github.com/ory/x/errorsx"
+	"github.com/PRO-Robotech/corelib/internal/oauth2deps/errorsx"
 )
 
 const (

@@ -16,7 +16,7 @@ import (
 
 	"github.com/go-jose/go-jose/v3"
 
-	"github.com/ory/x/errorsx"
+	"github.com/PRO-Robotech/corelib/internal/oauth2deps/errorsx"
 
 	"github.com/pkg/errors"
 )

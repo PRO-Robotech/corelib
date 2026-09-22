@@ -12,7 +12,7 @@ import (
 	"net/url"
 	"strings"
 
-	"github.com/ory/x/errorsx"
+	"github.com/PRO-Robotech/corelib/internal/oauth2deps/errorsx"
 
 	"github.com/asaskevich/govalidator"
 )

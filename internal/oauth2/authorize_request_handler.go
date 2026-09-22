@@ -15,12 +15,12 @@ import (
 
 	"github.com/PRO-Robotech/corelib/internal/oauth2/i18n"
 	"github.com/PRO-Robotech/corelib/internal/oauth2/token/jwt"
+	"github.com/PRO-Robotech/corelib/internal/oauth2deps/errorsx"
 	"github.com/PRO-Robotech/corelib/internal/otelx"
-	"github.com/ory/x/errorsx"
 
 	"github.com/pkg/errors"
 
-	"github.com/ory/go-convenience/stringslice"
+	"github.com/PRO-Robotech/corelib/internal/oauth2deps/stringslice"
 )
 
 func wrapSigningKeyFailure(outer *RFC6749Error, inner error) *RFC6749Error {

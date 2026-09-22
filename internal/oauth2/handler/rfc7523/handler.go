@@ -14,7 +14,7 @@ import (
 	"github.com/go-jose/go-jose/v3/jwt"
 
 	fosite "github.com/PRO-Robotech/corelib/internal/oauth2"
-	"github.com/ory/x/errorsx"
+	"github.com/PRO-Robotech/corelib/internal/oauth2deps/errorsx"
 )
 
 // #nosec:gosec G101 - False Positive
