@@ -2,34 +2,78 @@
 # Copyright (c) PRO-Robotech
 # SPDX-License-Identifier: Apache-2.0
 #
-# install.sh — провязать хук отправки этого клона и сказать, провязан ли он.
-# Своей цели `make` здесь нет: у фундамента (corelib) нет Makefile вовсе —
-# ci.yml зовёт go/golangci-lint/gosec напрямую (см. его шапку: «форма взята у
-# конвейера службы, но НЕ скопирована»). Тот же принцип держит и этот файл:
-# способ провязки — команда, а не цель:
+# install.sh — провязать хуки этого дерева в клон и сказать, провязаны ли они.
 #
-#   bash scripts/hooks/install.sh install
-#   bash scripts/hooks/install.sh check
+#   bash scripts/hooks/install.sh install   # положить переходники, затем вердикт check
+#   bash scripts/hooks/install.sh check     # вердикт: 0 — провязано и исполнимо, 1 — нет
+#   bash scripts/hooks/install.sh stub <имя> # текст переходника (для пробы scripts/hooks/inject.sh)
 #
-# ЭКЗЕМПЛЯР ЭТОГО МЕХАНИЗМА — СВОЙ, А НЕ СКОПИРОВАННЫЙ. Идея переходника
-# (стаб в `.git/hooks`, исполняющий отслеживаемый скрипт из рабочей копии) та
-# же, что у kacho и у kaname — но байты не перенесены: копия одного
-# отслеживаемого пути в двух стволах запрещена (ban20-copy-ban). У фундамента
-# нет ни Makefile, ни группировки прогона по составу диффа — здесь один
-# Go-модуль без соседей, и хук отправки зовёт `go`/`golangci-lint` напрямую.
+# Своей цели `make` нет: у фундамента нет Makefile, ci.yml зовёт инструменты
+# напрямую — поэтому провязка тоже команда. Экземпляр свой, не копия (ban20):
+# идея переходника общая с kacho и kaname, байты не перенесены.
 #
-# ПОЧЕМУ НЕ `core.hooksPath` — тот же довод везде: git начинает искать хуки
-# ТОЛЬКО по указанному пути, и всё, что уже лежит в `.git/hooks`, перестаёт
-# исполняться молча. Переходник этого не делает: посторонний хук под другим
-# именем не трогается никогда, переходник берёт скрипт из ТЕКУЩЕЙ рабочей
-# копии, путей машины в нём нет.
+# ПЕРЕХОДНИК, А НЕ `core.hooksPath`. С `core.hooksPath` git ищет хуки только по
+# указанному пути: всё, что лежит в `.git/hooks`, перестаёт исполняться молча, а
+# если по тому пути хука нет (рабочая копия старше хука), git не исполняет
+# НИЧЕГО и тоже молчит. Поэтому любой `core.hooksPath` — отказ, а в `.git/hooks`
+# кладётся переходник, исполняющий отслеживаемый скрипт ТЕКУЩЕЙ рабочей копии;
+# посторонний хук под другим именем не трогается, чужой файл под нашим именем
+# не перезаписывается (отказ).
 #
-# ХУКОМ СЧИТАЕТСЯ отслеживаемый файл в scripts/hooks без точки в имени.
+# НЕТ АДРЕСАТА — ОТКАЗ (corelib#24). Редакция v1 на ненайденном адресате
+# печатала «проверок НЕ БЫЛО» и выходила нулём: отправка уезжала непроверенной,
+# и отличить это от зелёного было нечем. v2 выходит кодом 1 с причиной. Клон с
+# v1 выглядит провязанным и ведёт себя как непровязанный, поэтому редакция
+# читается из маркера: v1 — «прежней редакции», check отказывает, install
+# перезаписывает. `check` печатает раздельно «переходник провязан» и «адресат
+# исполним»: переходник без исполнимого адресата откажет каждой отправке.
+#
+# ХУКОМ СЧИТАЕТСЯ отслеживаемый (`git ls-files`) файл в scripts/hooks без точки
+# в имени; число осмотренных выводится этим обходом, пустой обход — отказ.
 set -uo pipefail
 
 mode="${1:-install}"
 
 die() { printf '%s\n' "$@" >&2; exit 1; }
+
+marker_family="corelib-hook-stub v"
+stub_version=2
+
+# stub_for — ЕДИНСТВЕННЫЙ производитель текста переходника: проба берёт его
+# режимом `stub`, а не своей копией.
+stub_for() {
+    cat <<STUB
+#!/usr/bin/env bash
+# СГЕНЕРИРОВАН \`bash scripts/hooks/install.sh install\` — правится НЕ здесь, а в scripts/hooks/$1.
+# $marker_family$stub_version
+# Нет адресата — ОТКАЗ, а не успех: «ноль осмотренного» зелёным не бывает (corelib#24).
+set -uo pipefail
+top="\$(git rev-parse --show-toplevel 2>/dev/null)" || top=""
+[ -n "\$top" ] || top="\$PWD"
+real="\$top/scripts/hooks/$1"
+if [ ! -x "\$real" ]; then
+    {
+        echo "$1: ОТКАЗ — проверок НЕ БЫЛО: адресата нет в этой рабочей копии либо он не исполняемый."
+        echo "  адресат: \$real"
+        echo "  исходы: перейти на ревизию, где scripts/hooks/$1 есть и исполним;"
+        echo "          хук снят намеренно — снять и переходник: rm \"\$(git rev-parse --git-common-dir)/hooks/$1\";"
+        echo "          отправка без проверок — сказать это явно: git push --no-verify."
+    } >&2
+    exit 1
+fi
+exec "\$real" "\$@"
+STUB
+}
+
+case "$mode" in
+install|check) ;;
+stub)
+    [ "$#" -ge 2 ] || die "install-hooks: режим stub требует имя хука: $0 stub <имя>"
+    stub_for "$2"
+    exit 0
+    ;;
+*) die "install-hooks: неизвестный режим «$mode» (install | check | stub <имя>)" ;;
+esac
 
 root="$(git rev-parse --show-toplevel 2>/dev/null)" ||
     die "install-hooks: это не рабочая копия git — провязывать не во что."
@@ -42,6 +86,7 @@ dst="$common/hooks"
 
 hooks=()
 while IFS= read -r rel; do
+    [ -n "$rel" ] || continue
     base="${rel##*/}"
     case "$base" in *.*) continue ;; esac
     hooks+=("$base")
@@ -49,63 +94,49 @@ done < <(git -C "$root" ls-files scripts/hooks)
 
 [ "${#hooks[@]}" -gt 0 ] ||
     die "install-hooks: в scripts/hooks нет НИ ОДНОГО отслеживаемого хука." \
-        "Пустой обход здесь означал бы зелёный вывод при непровязанном клоне."
+        "Пустой обход здесь означал бы зелёный вывод при непровязанном клоне." \
+        "Осмотрено: $src"
 
-marker="corelib-hook-stub v1"
-
-configured="$(git config --get core.hooksPath 2>/dev/null || true)"
-if [ -n "$configured" ]; then
-    abs="$configured"
-    case "$abs" in /*) ;; *) abs="$root/$abs" ;; esac
-    if [ ! -d "$abs" ]; then
-        die "ОТКАЗ: core.hooksPath = «$configured» — каталога по этому пути НЕТ." \
-            "  git config --unset core.hooksPath   # затем: bash scripts/hooks/install.sh install"
-    fi
-    real_cfg="$(cd "$abs" && pwd -P)"
-    if [ "$real_cfg" != "$(cd "$src" && pwd -P)" ]; then
-        die "ОТКАЗ: core.hooksPath = «$configured» ведёт в $real_cfg." \
-            "git будет искать хуки ТАМ, провязка в $dst не исполнится ни разу." \
-            "  git config --unset core.hooksPath   # затем: bash scripts/hooks/install.sh install"
-    fi
-    echo "core.hooksPath = «$configured» — хуки исполняются НАПРЯМУЮ из $src."
-    echo "отслеживаемых хуков: ${#hooks[@]}; исполняются напрямую"
-    exit 0
-fi
+configured="$(git -C "$root" config --get core.hooksPath 2>/dev/null || true)"
+[ -z "$configured" ] ||
+    die "ОТКАЗ: выставлен core.hooksPath=«$configured»." \
+        "git ищет хуки только там: переходник в $dst не исполнится ни разу, а без" \
+        "файла по тому пути git не исполнит НИЧЕГО и промолчит." \
+        "  git config --unset core.hooksPath   # затем: bash scripts/hooks/install.sh install"
 
 mkdir -p "$dst" || die "install-hooks: не создать $dst"
 
-stub_for() {
-    cat <<STUB
-#!/usr/bin/env bash
-# СГЕНЕРИРОВАН \`bash scripts/hooks/install.sh install\` — правится НЕ здесь, а в scripts/hooks/$1.
-# $marker
-set -uo pipefail
-top="\$(git rev-parse --show-toplevel 2>/dev/null)" || top=""
-[ -n "\$top" ] || top="\$PWD"
-real="\$top/scripts/hooks/$1"
-if [ ! -x "\$real" ]; then
-    echo "$1: в этой рабочей копии нет \$real — проверок НЕ БЫЛО" >&2
-    exit 0
-fi
-exec "\$real" "\$@"
-STUB
+# stub_version_of — редакция переходника из его маркера; пусто — файл не наш.
+stub_version_of() {
+    sed -n "s/^# ${marker_family}\([0-9][0-9]*\).*/\1/p" "$1" 2>/dev/null | head -1
 }
 
-wired=0
-missing=()
-foreign=()
-for name in "${hooks[@]}"; do
-    target="$dst/$name"
-    if [ ! -e "$target" ]; then
-        missing+=("$name")
-        continue
-    fi
-    if grep -qF "$marker" "$target" 2>/dev/null; then
-        if [ -x "$target" ]; then wired=$((wired + 1)); else missing+=("$name"); fi
-        continue
-    fi
-    foreign+=("$name")
-done
+survey() {
+    wired=0; missing=(); stale=(); foreign=(); runnable=0; unrunnable=()
+    local name t ver
+    for name in "${hooks[@]}"; do
+        if [ -x "$src/$name" ]; then runnable=$((runnable + 1)); else unrunnable+=("$name"); fi
+        t="$dst/$name"
+        if [ ! -e "$t" ]; then missing+=("$name"); continue; fi
+        ver="$(stub_version_of "$t")"
+        if [ -z "$ver" ]; then foreign+=("$name"); continue; fi
+        if [ "$ver" -lt "$stub_version" ]; then stale+=("$name(v$ver)"); continue; fi
+        if [ -x "$t" ]; then wired=$((wired + 1)); else missing+=("$name"); fi
+    done
+}
+survey
+
+if [ "$mode" = install ]; then
+    [ "${#foreign[@]}" -eq 0 ] ||
+        die "ОТКАЗ: под именем хука уже лежит ЧУЖОЙ файл: ${foreign[*]}" \
+            "Он НЕ перезаписывается: уберите его сами либо слейте со scripts/hooks/<имя>."
+    for name in "${hooks[@]}"; do
+        stub_for "$name" > "$dst/$name" || die "install-hooks: не записать $dst/$name"
+        chmod +x "$dst/$name" || die "install-hooks: не сделать исполняемым $dst/$name"
+    done
+    echo "провязаны переходниками v$stub_version: ${hooks[*]}"
+    survey
+fi
 
 kept=()
 for f in "$dst"/*; do
@@ -117,52 +148,28 @@ for f in "$dst"/*; do
     [ "$ours" = 1 ] || kept+=("$b")
 done
 
-report() {
-    echo "хуки: провязано $wired из ${#hooks[@]} ($dst)"
-    [ "${#kept[@]}" -eq 0 ] ||
-        printf 'посторонних хуков оставлено нетронутыми: %s\n' "${kept[*]}"
-}
+echo "хуки: отслеживаемых ${#hooks[@]} · переходник провязан $wired · не провязано ${#missing[@]} · прежней редакции ${#stale[@]} · занято чужим ${#foreign[@]}"
+echo "адресаты: исполнимых $runnable из ${#hooks[@]} ($src)"
+echo "клон: $dst"
+[ "${#kept[@]}" -eq 0 ] || echo "посторонних хуков оставлено нетронутыми: ${kept[*]}"
 
-case "$mode" in
-check)
-    report
-    if [ "${#foreign[@]}" -gt 0 ]; then
-        echo "ОТКАЗ: под именем хука лежит ЧУЖОЙ файл: ${foreign[*]}" >&2
-        exit 1
-    fi
-    if [ "${#missing[@]}" -gt 0 ]; then
-        echo "ОТКАЗ: не провязаны: ${missing[*]}" >&2
-        echo "Отправка ветки НЕ проверяется локально: конвейер станет первым читателем." >&2
-        echo "  bash scripts/hooks/install.sh install" >&2
-        exit 1
-    fi
-    exit 0
-    ;;
-notice)
-    if [ "${#missing[@]}" -gt 0 ] || [ "${#foreign[@]}" -gt 0 ]; then
-        echo "ВНИМАНИЕ: хуки git не провязаны (${#missing[@]} не провязано, ${#foreign[@]} занято чужим)." >&2
-        echo "  Отправка ветки НЕ будет проверена локально — «bash scripts/hooks/install.sh check» это покажет." >&2
-    fi
-    exit 0
-    ;;
-install) ;;
-*) die "install-hooks: неизвестный режим «$mode» (install | check | notice)" ;;
-esac
-
+rc=0
 if [ "${#foreign[@]}" -gt 0 ]; then
-    die "ОТКАЗ: под именем хука уже лежит ЧУЖОЙ файл: ${foreign[*]}" \
-        "Он НЕ перезаписывается: уберите его сами либо слейте со scripts/hooks/<имя>."
+    echo "ОТКАЗ: под именем хука лежит ЧУЖОЙ файл: ${foreign[*]} — уберите его либо слейте со scripts/hooks/<имя>." >&2
+    rc=1
 fi
-
-installed=()
-for name in "${hooks[@]}"; do
-    target="$dst/$name"
-    stub_for "$name" > "$target" || die "install-hooks: не записать $target"
-    chmod +x "$target" || die "install-hooks: не сделать исполняемым $target"
-    installed+=("$name")
-done
-
-wired=${#installed[@]}
-report
-printf 'провязаны переходниками: %s\n' "${installed[*]}"
-echo "проверить в любой момент: bash scripts/hooks/install.sh check"
+if [ "${#stale[@]}" -gt 0 ]; then
+    echo "ОТКАЗ: переходник прежней редакции: ${stale[*]} (нужна v$stub_version) — на ненайденном адресате выходит нулём и пропускает отправку молча." >&2
+    rc=1
+fi
+if [ "${#missing[@]}" -gt 0 ]; then
+    echo "ОТКАЗ: не провязаны: ${missing[*]} — отправка не проверяется локально, конвейер станет первым читателем." >&2
+    rc=1
+fi
+[ "$rc" -eq 0 ] || echo "  bash scripts/hooks/install.sh install" >&2
+if [ "${#unrunnable[@]}" -gt 0 ]; then
+    echo "ОТКАЗ: адресат не исполним: ${unrunnable[*]} — переходник откажет каждой отправке." >&2
+    echo "  git checkout -- scripts/hooks/<имя>   # либо chmod +x scripts/hooks/<имя>" >&2
+    rc=1
+fi
+exit "$rc"

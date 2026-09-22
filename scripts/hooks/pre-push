@@ -2,125 +2,175 @@
 # Copyright (c) PRO-Robotech
 # SPDX-License-Identifier: Apache-2.0
 #
-# Хук отправки: то же, что первым делом проверяет ci.yml — локально, ДО конвейера.
+# Хук отправки: то, что первым делом проверяет ci.yml, — локально, ДО конвейера.
+# Экземпляр свой, не копия (ban20): состав свой — один Go-модуль без Makefile.
 #
-# ЭКЗЕМПЛЯР СВОЙ, НЕ КОПИЯ. Идея переходника — общая с kacho и kaname (см.
-# scripts/hooks/install.sh), но состав проверок здесь свой: фундамент — один
-# Go-модуль без Makefile, и ci.yml сам объявляет, что взял форму у конвейера
-# kaname «не скопировав» её. Этот файл продолжает тот же принцип для хука.
+# ЧТО ГОНИТСЯ: build · vet · gofmt · golangci-lint (пин v2.12.2, тот же, что в
+# ci.yml: расхождение версии дало бы другой вердикт об одном дереве, и молча).
+# ЧТО НЕ ГОНИТСЯ — печатается на КАЖДОМ пути выхода (`finish`): go test (юниты
+# не отделены от интеграционных тегом сборки — `git ls-files '*_test.go' | xargs
+# grep -lE '^//go:build' | wc -l` → 0, разделяет `-short`), gosec (своя установка
+# инструмента ради хука, обязанного быть быстрым) и govulncheck (судит базу
+# уязвимостей, а не дерево).
 #
-# ЧТО ГОНИТСЯ: build · vet · gofmt · golangci-lint (пин v2.12.2, тот же, что
-# объявлен в ci.yml — расхождение версии дало бы другой вердикт об одном и том
-# же дереве). ЧТО НЕ ГОНИТСЯ: go test (юниты дерева поднимают немного, но не
-# отделены от интеграционных тегом сборки — `git ls-files '*_test.go' | xargs
-# grep -lE '^//go:build' | wc -l` → 0, см. ci.yml; разделяет `-short`, а не тег,
-# и решить со стороны хука, какие пакеты быстрые, нечем без самого прогона),
-# gosec (ci.yml ставит его пином и гоняет отдельным заданием — здесь это же
-# заняло бы четвёртую по счёту установку инструмента ради хука, который обязан
-# быть быстрым) и govulncheck (сверяет базу уязвимостей, а не дерево — вердикт
-# меняется без единой правки кода, это работа конвейера, а не локального хука).
+# СУДИТСЯ ОТПРАВЛЯЕМАЯ РЕВИЗИЯ. Проверки читают диск рабочей копии, а уезжает
+# коммит. Вершина отправки не равна HEAD либо в копии есть правки или
+# неотслеживаемое — ОТКАЗ: вердикт был бы о другом дереве. Разных вершин в
+# одной отправке больше одной — ОТКАЗ по той же причине. Отправка одних снятий
+# ссылок содержимого не везёт — код 0 с переписью. Пустой вход (хук позван
+# руками) — судится рабочая копия, и это печатается.
 #
-# КАК ОБОЙТИ. `git push --no-verify` либо `CORELIB_SKIP_PREPUSH=1`.
+# ИСХОДЫ: 0 — исполнена хотя бы одна проверка, красных 0; 1 — красное либо
+# отказ по предмету; 2 — не исполнено ни одной: «отказов 0» при нуле
+# исполненного — «спросить было не у кого», а не зелёное. Проверка без условия
+# (нет инструмента, версия линтера не равна пину) — третья категория: названа
+# поимённо, в «исполнено» не входит, отправку одна не останавливает.
 #
-# Установка: `bash scripts/hooks/install.sh install` кладёт в `.git/hooks`
-# переходник, исполняющий ЭТОТ файл из той рабочей копии, из которой идёт
-# отправка. Проверить: `bash scripts/hooks/install.sh check`.
+# ОБХОД ОДИН: `CORELIB_SKIP_PREPUSH=1` — печатает строку и перечень
+# непроверенного. Обхода по имени ветки нет: ветка — номер задачи (правило
+# 2026-09-22), а пропуск `wip/*`/`tmp/*` вёз дерево непроверенным и не был
+# объявлен обходом. `git push --no-verify` обходит хук средствами git до его
+# запуска и сказать о себе отсюда не может.
+#
+# КЭШ ЛИНТЕРА — в каталоге git ЭТОЙ рабочей копии: общий на машину отдаёт
+# полосе чужой вердикт, а в дереве он стал бы неотслеживаемым файлом и сам
+# сделал бы копию «грязной».
+#
+# Установка: `bash scripts/hooks/install.sh install`; провязку проверяет
+# `… check`. Проба этого файла и провязки — scripts/hooks/inject.sh.
 set -uo pipefail
-
-if [ "${CORELIB_SKIP_PREPUSH:-0}" = "1" ]; then
-    echo "pre-push: пропущен по CORELIB_SKIP_PREPUSH=1 — локальные проверки НЕ выполнялись" >&2
-    exit 0
-fi
-
-ROOT="$(git rev-parse --show-toplevel)"
-unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_OBJECT_DIRECTORY \
-      GIT_ALTERNATE_OBJECT_DIRECTORIES GIT_COMMON_DIR GIT_PREFIX
-
-branch="$(git rev-parse --abbrev-ref HEAD)"
-case "$branch" in
-    wip/*|tmp/*)
-        echo "pre-push: ветка «$branch» объявлена черновиком — проверки пропущены" >&2
-        exit 0
-        ;;
-esac
-
-cd "$ROOT" || exit 1
+exec 1>&2
 
 GOLANGCI_LINT_VERSION="v2.12.2"
+NOT_RUN="go test (-race -short и интеграция с Postgres) · gosec · govulncheck"
 
-echo "== pre-push (corelib): локальные проверки перед отправкой ветки «$branch»"
-echo "   (обойти: git push --no-verify — но тогда конвейер станет первым читателем)"
-echo "   гонится: build · vet · gofmt · golangci-lint (пин $GOLANGCI_LINT_VERSION)"
-echo "   не гонится здесь: go test, gosec, govulncheck — их предмет назван в шапке файла"
+declared=0
+executed=0
+red=()
+unmet=()
+why=""
 
-fails=()
-
-run() {
-    local name="$1"; shift
-    echo ""
-    echo "-- $name --"
-    if "$@"; then
-        echo "ok"
-    else
-        fails+=("$name")
-        echo "КРАСНОЕ: $name"
-    fi
+finish() {
+    local code="$1"; shift
+    printf '%s\n' "$@"
+    echo "   исполнено проверок: $executed · здесь НЕ гонялось: $NOT_RUN"
+    echo "   («хук зелен» не значит «конвейер зелен»)"
+    exit "$code"
 }
 
-run "go build" go build ./...
-run "go vet" go vet ./...
-
-files=$(git ls-files '*.go')
-if [ -z "$files" ]; then
-    echo ""
-    echo "-- gofmt --"
-    echo "ОТКАЗ: обход пуст — ни одного файла Go не прочитано." >&2
-    fails+=("gofmt (обход пуст)")
-else
-    echo ""
-    echo "-- gofmt --"
-    unformatted=$(gofmt -l $files || true)
-    if [ -n "$unformatted" ]; then
-        echo "требуется gofmt:"; echo "$unformatted"
-        fails+=("gofmt")
-    else
-        echo "ok ($(printf '%s\n' "$files" | wc -l) файлов прочитано)"
-    fi
+if [ "${CORELIB_SKIP_PREPUSH:-0}" = "1" ]; then
+    finish 0 "pre-push: пропущен по CORELIB_SKIP_PREPUSH=1 — локальные проверки НЕ выполнялись"
 fi
+
+ROOT="$(git rev-parse --show-toplevel 2>/dev/null)" ||
+    finish 2 "pre-push: ОТКАЗ — корень рабочей копии не установлен: судить нечего и негде"
+lint_cache="$(git rev-parse --absolute-git-dir 2>/dev/null)/corelib-prepush/golangci-lint"
+# Окружение git проверкам не наследуется: с выставленным GIT_DIR git в
+# дочерних процессах определял бы репозиторий по переменной, а не по каталогу.
+unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_OBJECT_DIRECTORY \
+      GIT_ALTERNATE_OBJECT_DIRECTORIES GIT_COMMON_DIR GIT_PREFIX
+cd "$ROOT" || finish 2 "pre-push: ОТКАЗ — в корень рабочей копии не перейти: $ROOT"
+
+# ── ЧТО УЕЗЖАЕТ: строки `<local_ref> <local_sha> <remote_ref> <remote_sha>` ──
+refs=0
+tips=()
+if [ ! -t 0 ]; then
+    while read -r _lref lsha _rref _rsha; do
+        [ -n "${lsha:-}" ] || continue
+        refs=$((refs + 1))
+        case "$lsha" in *[!0]*) ;; *) continue ;; esac   # одни нули — снятие ссылки
+        c="$(git rev-parse --verify --quiet "$lsha^{commit}")" ||
+            finish 1 "pre-push: ОТКАЗ — отправляемый объект $lsha не сводится к коммиту: судить нечего"
+        tips+=("$c")
+    done
+fi
+
+subject="рабочая копия $ROOT (входа отправки нет — хук позван руками)"
+if [ "$refs" -gt 0 ] && [ "${#tips[@]}" -eq 0 ]; then
+    finish 0 "pre-push: ссылок в отправке $refs, все — снятия: содержимого не уезжает, проверять нечего"
+fi
+if [ "${#tips[@]}" -gt 0 ]; then
+    distinct="$(printf '%s\n' "${tips[@]}" | sort -u | wc -l)"
+    [ "$distinct" -eq 1 ] ||
+        finish 1 "pre-push: ОТКАЗ — отправка несёт $distinct разных вершин: вердикт был бы об одной, уехали бы все." \
+                 "  Отправляйте ветки по одной."
+    tip="${tips[0]}"
+    head="$(git rev-parse --verify --quiet 'HEAD^{commit}' || true)"
+    [ "$tip" = "$head" ] ||
+        finish 1 "pre-push: ОТКАЗ — уезжает $tip, а рабочая копия стоит на ${head:-<HEAD не разрешается>}:" \
+                 "  проверки судили бы другое дерево. Отправляйте из копии, стоящей на отправляемой ревизии."
+    st="$(git status --porcelain)" ||
+        finish 1 "pre-push: ОТКАЗ — состояние рабочей копии не прочитано: чистоту судимого дерева не установить"
+    dirty="$(printf '%s' "$st" | grep -c .)"
+    [ "$dirty" -eq 0 ] ||
+        finish 1 "pre-push: ОТКАЗ — в рабочей копии правок и неотслеживаемых файлов: $dirty." \
+                 "  Сборка и линтер читают диск: вердикт был бы о дереве, которого в $tip нет." \
+                 "  Закоммитьте либо уберите их (git stash -u) и повторите."
+    subject="ревизия $tip (= HEAD, рабочая копия чистая)"
+fi
+
+echo "== pre-push (corelib): судится $subject"
+
+# check <имя> <функция>: функция возвращает код проверки; условие не создано —
+# объявляет его в `why`, не исполняя проверку. Категорию даёт `why`, а не код:
+# у golangci-lint код 3 — его собственный отказ, и выводить из кода «без
+# условия» значило бы обнулять красное.
+check() {
+    local name="$1" rc
+    declared=$((declared + 1))
+    why=""
+    echo ""
+    echo "-- $name --"
+    "$2"; rc=$?
+    if [ -n "$why" ]; then
+        unmet+=("$name: $why")
+        echo "УСЛОВИЕ НЕ СОЗДАНО: $why — вердикта о «$name» нет"
+        return
+    fi
+    executed=$((executed + 1))
+    if [ "$rc" -eq 0 ]; then echo "ok"; else red+=("$name"); echo "КРАСНОЕ: $name (код $rc)"; fi
+}
+
+need() { command -v "$1" >/dev/null 2>&1 && return 0; why="$1 не найден в PATH"; return 1; }
+
+c_build() { need go || return; go build ./...; }
+c_vet()   { need go || return; go vet ./...; }
+c_gofmt() {
+    need gofmt || return
+    local files out
+    files="$(git ls-files '*.go')"
+    if [ -z "$files" ]; then
+        echo "обход пуст — ни одного файла Go не прочитано: «ноль неотформатированных» было бы «ноль прочитанного»"
+        return 1
+    fi
+    # shellcheck disable=SC2086  # пути индекса без пробелов; тот же обход, что в ci.yml
+    out="$(gofmt -l $files)" || { echo "gofmt не разобрал дерево"; return 1; }
+    [ -z "$out" ] || { echo "требуется gofmt:"; echo "$out"; return 1; }
+    echo "прочитано файлов Go: $(printf '%s\n' "$files" | wc -l)"
+}
+c_lint() {
+    need golangci-lint || return
+    local have want="${GOLANGCI_LINT_VERSION#v}"
+    have="$(golangci-lint version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)"
+    if [ "$have" != "$want" ]; then
+        why="в PATH golangci-lint ${have:-без версии}, пин конвейера $want (go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$GOLANGCI_LINT_VERSION)"
+        return
+    fi
+    mkdir -p "$lint_cache" || return 1
+    GOLANGCI_LINT_CACHE="$lint_cache" golangci-lint run --timeout=5m --config=.github/golangci.yml ./...
+}
+
+check "сборка" c_build
+check "vet" c_vet
+check "gofmt" c_gofmt
+check "golangci-lint (пин $GOLANGCI_LINT_VERSION)" c_lint
 
 echo ""
-echo "-- golangci-lint --"
-have="$(golangci-lint version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)"
-want="$(printf '%s' "$GOLANGCI_LINT_VERSION" | sed 's/^v//')"
-if [ -z "$have" ]; then
-    echo "УСЛОВИЕ НЕ СОЗДАНО: golangci-lint не найден. Конвейер ставит его пином:" >&2
-    echo "  go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$GOLANGCI_LINT_VERSION" >&2
-    echo "  (не находка — отправка НЕ останавливается по этой строке одной)"
-elif [ "$have" != "$want" ]; then
-    echo "УСЛОВИЕ НЕ СОЗДАНО: в PATH golangci-lint $have, пин конвейера $want." >&2
-    echo "Вердикты разных версий расходятся молча — поставьте пин:" >&2
-    echo "  go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$GOLANGCI_LINT_VERSION" >&2
-else
-    if golangci-lint run --timeout=5m --config=.github/golangci.yml ./...; then
-        echo "ok"
-    else
-        fails+=("golangci-lint")
-        echo "КРАСНОЕ: golangci-lint"
-    fi
-fi
+echo "== перепись: проверок объявлено $declared · исполнено $executed (красных ${#red[@]}) · без условия ${#unmet[@]}"
+for u in "${unmet[@]}"; do echo "   без условия — $u"; done
 
-echo ""
-echo "== итог: отказов ${#fails[@]}"
-echo "   Здесь НЕ проверялось: go test, gosec, govulncheck, интеграция с Postgres."
-if [ "${#fails[@]}" -gt 0 ]; then
-    cat >&2 <<MSG
-
-pre-push ОТКАЗ: локальные проверки красные — отправка остановлена: ${fails[*]}
-
-Почините найденное либо отправьте черновик явно — git push --no-verify, зная,
-что конвейер станет первым читателем.
-MSG
-    exit 1
-fi
-
-echo "== pre-push (corelib): локальные проверки зелёные — отправляю"
+[ "${#red[@]}" -eq 0 ] ||
+    finish 1 "pre-push ОТКАЗ: красные — ${red[*]}. Отправка остановлена."
+[ "$executed" -gt 0 ] ||
+    finish 2 "pre-push ОТКАЗ: исполнено НОЛЬ проверок из $declared — зелёным «ноль осмотренного» не бывает."
+finish 0 "pre-push (corelib): исполнено $executed из $declared, красных 0 — отправляю"
