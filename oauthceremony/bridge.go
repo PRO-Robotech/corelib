@@ -45,12 +45,16 @@ type transactionalStorageBridge struct {
 }
 
 // newStorageBridge собирает мост, ВЫБИРАЯ тип по наличию единицы работы.
-func newStorageBridge(ports Ports, timeout time.Duration) any {
-	base := &storageBridge{ports: ports, timeout: timeout}
+//
+// Возвращает оба вида: base — сам мост, которым церемония отзывает семейство
+// повторённого токена по завершении операции (вне единицы работы движка), и
+// forEngine — то, что видит движок и о чём он спрашивает утверждением типа.
+func newStorageBridge(ports Ports, timeout time.Duration) (base *storageBridge, forEngine any) {
+	base = &storageBridge{ports: ports, timeout: timeout}
 	if ports.Transaction == nil {
-		return base
+		return base, base
 	}
-	return &transactionalStorageBridge{storageBridge: base}
+	return base, &transactionalStorageBridge{storageBridge: base}
 }
 
 // ── Срок вызова ─────────────────────────────────────────────────────────────
@@ -305,15 +309,46 @@ func (b *storageBridge) CreateRefreshTokenSession(ctx context.Context, signature
 	return nil
 }
 
+// GetRefreshTokenSession отдаёт грант по подписи токена обновления.
+//
+// Обёрнутый токен — ПОВТОР, и он отдаётся движку ВМЕСТЕ с грантом и часовым
+// «токен неактивен»: по этому часовому движок на пути обмена отзывает
+// артефакты гранта (`flow_refresh.go`, handleRefreshTokenReuse), а для отзыва
+// ему нужен идентификатор гранта. Грант семейства записывается в ведомость
+// ДО сборки запроса: если сборка откажет (клиента успели снять), отзыв всё
+// равно состоится — его исполнит церемония.
 func (b *storageBridge) GetRefreshTokenSession(ctx context.Context, signature string, session engine.Session) (engine.Requester, error) {
 	ctx, cancel := b.deadline(ctx)
 	defer cancel()
 
+	const op = "RefreshTokenVault.FetchRefreshToken"
 	rec, err := b.ports.RefreshTokens.FetchRefreshToken(ctx, signature)
-	if err != nil {
-		return nil, notFoundAware(ctx, "RefreshTokenVault.FetchRefreshToken", err)
+	if err == nil {
+		return requesterFromGrant(ctx, b.ports.Clients.LookupClient, rec, session)
 	}
-	return requesterFromGrant(ctx, b.ports.Clients.LookupClient, rec, session)
+	ours := fromPort(op, err)
+	switch ours.Code {
+	case CodeRefreshTokenRotated:
+		if rec.GrantID == "" {
+			return nil, note(ctx, contractBreach(op, "a rotated refresh token was returned without its grant; "+
+				"the family of a replayed token cannot be revoked without its identifier"))
+		}
+		notesFrom(ctx).markReplayedFamily(rec.GrantID, rec.ClientID)
+		ours = refreshReplayed(op)
+		requester, buildErr := requesterFromGrant(ctx, b.ports.Clients.LookupClient, rec, session)
+		if buildErr != nil {
+			// Случай повтора записывается и тогда, когда запрос собрать не
+			// удалось: движок получит отказ сборки, а церемония ответит
+			// повтором и отзовёт семейство по записанному гранту.
+			notesFrom(ctx).record(ours)
+			return nil, buildErr
+		}
+		return requester, pairEngine(ctx, ours, engine.ErrInactiveToken)
+	case CodeGrantNotFound:
+		return nil, pairEngine(ctx, ours, engine.ErrNotFound)
+	default:
+		return nil, note(ctx, ours)
+	}
 }
 
 func (b *storageBridge) DeleteRefreshTokenSession(ctx context.Context, signature string) error {
@@ -329,8 +364,10 @@ func (b *storageBridge) DeleteRefreshTokenSession(ctx context.Context, signature
 
 // RotateRefreshToken помечает токен обновления обёрнутым.
 //
-// Ноль затронутых строк здесь означает то же, что и у кода авторизации:
-// артефакт уже израсходован, и предъявление повторное.
+// Ноль затронутых строк — ОДНОВРЕМЕННЫЙ ПОВТОР: выборку прошли двое, и этот
+// оборот опередили. Движок на этом исходе откатывает свою единицу работы и
+// семейства не отзывает; отзыв исполняет церемония по завершении операции, вне
+// той единицы работы, — поэтому здесь грант только записывается в ведомость.
 func (b *storageBridge) RotateRefreshToken(ctx context.Context, grantID, signature string) error {
 	ctx, cancel := b.deadline(ctx)
 	defer cancel()
@@ -344,13 +381,23 @@ func (b *storageBridge) RotateRefreshToken(ctx context.Context, grantID, signatu
 	case out.Rows() == 1:
 		return nil
 	case out.Rows() == 0:
-		return pairEngine(ctx, failf(CodeAuthorizationCodeConsumed, nil,
-			"The refresh token was already rotated.",
-			"Every refresh token may be presented exactly once.", op),
-			engine.ErrInvalidatedAuthorizeCode)
+		if grantID == "" {
+			return note(ctx, contractBreach(op, "the refresh token was rotated under an empty grant identifier; "+
+				"the family of a replayed token cannot be revoked without it"))
+		}
+		notesFrom(ctx).markReplayedFamily(grantID, "")
+		return pairEngine(ctx, refreshReplayed(op), engine.ErrInactiveToken)
 	default:
 		return note(ctx, contractBreach(op, "the single statement touched more than one row"))
 	}
+}
+
+// refreshReplayed — наш отказ на повтор токена обновления. Один конструктор на
+// оба пути, которыми повтор замечается: выборку и оборот.
+func refreshReplayed(op string) *ProtocolError {
+	return failf(CodeRefreshTokenRotated, nil,
+		"The refresh token was already used.",
+		"Every refresh token may be presented exactly once; the grant has been revoked.", op)
 }
 
 // ── Отзыв по гранту ─────────────────────────────────────────────────────────

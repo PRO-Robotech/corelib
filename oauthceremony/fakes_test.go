@@ -42,10 +42,102 @@ type memoryPorts struct {
 	proof      map[string]oauthceremony.GrantRecord
 	assertions map[string]time.Time
 
+	// revoked — гранты, чьё семейство отозвано. Ведётся подставкой, чтобы
+	// проба утверждала СОСТОЯНИЕ гранта после отказа, а не только текст
+	// отказа.
+	revoked map[string]bool
+
 	// Подмены на время пробы контракта порта. Пусто — обычное поведение.
 	consumeOverride func(signature string) (oauthceremony.StoreOutcome, error)
 	storeOverride   func(signature string) (oauthceremony.StoreOutcome, error)
 	lookupDelay     time.Duration
+	// fetchRefreshOverride подменяет исход выборки токена обновления.
+	fetchRefreshOverride func(signature string) (oauthceremony.GrantRecord, error)
+
+	// refreshFetchGate — точка встречи одновременных выборок токена
+	// обновления. Пусто — выборка не ждёт никого.
+	refreshFetchGate *rendezvous
+}
+
+// rendezvous — встреча ровно n участников. Пока не собрались все, каждый
+// пришедший ждёт; собрались — проходят все, и последующие приходы не ждут.
+//
+// Зачем: одновременный повтор токена обновления воспроизводится ТОЛЬКО если
+// оба запроса прошли выборку до того, как хоть один обернул токен. Без встречи
+// запросы почти всегда исполнялись бы по очереди, и проба «одновременного»
+// повтора проверяла бы последовательный.
+type rendezvous struct {
+	mu      sync.Mutex
+	need    int
+	arrived int
+	all     chan struct{}
+}
+
+func newRendezvous(n int) *rendezvous {
+	return &rendezvous{need: n, all: make(chan struct{})}
+}
+
+// meet отмечает приход и ждёт остальных. Срок ожидания — срок вызова порта:
+// не собравшаяся встреча кончается отказом, а не зависанием пробы.
+func (r *rendezvous) meet(ctx context.Context) error {
+	r.mu.Lock()
+	if r.arrived >= r.need {
+		r.mu.Unlock()
+		return nil
+	}
+	r.arrived++
+	if r.arrived == r.need {
+		close(r.all)
+	}
+	r.mu.Unlock()
+
+	select {
+	case <-r.all:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+// met отвечает, собрались ли все участники. Проба, у которой встреча не
+// состоялась, одновременности не создала — её исход «не выполнилось», а не
+// зелёный и не красный.
+func (r *rendezvous) met() bool {
+	select {
+	case <-r.all:
+		return true
+	default:
+		return false
+	}
+}
+
+// liveArtifactsOf — сколько у гранта живых артефактов: токенов доступа и
+// токенов обновления, которые выборка отдала бы как годные.
+func (m *memoryPorts) liveArtifactsOf(grantID string) (access, refresh int) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if m.revoked[grantID] {
+		return 0, 0
+	}
+	for _, grant := range m.access {
+		if grant.GrantID == grantID {
+			access++
+		}
+	}
+	for _, row := range m.refresh {
+		if row.grant.GrantID == grantID && !row.rotated {
+			refresh++
+		}
+	}
+	return access, refresh
+}
+
+// familyRevoked — отозвано ли семейство гранта.
+func (m *memoryPorts) familyRevoked(grantID string) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.revoked[grantID]
 }
 
 func newMemoryPorts() *memoryPorts {
@@ -56,6 +148,7 @@ func newMemoryPorts() *memoryPorts {
 		refresh:    map[string]*refreshRow{},
 		proof:      map[string]oauthceremony.GrantRecord{},
 		assertions: map[string]time.Time{},
+		revoked:    map[string]bool{},
 	}
 }
 
@@ -159,7 +252,9 @@ func (m *memoryPorts) FetchAccessToken(_ context.Context, signature string) (oau
 	defer m.mu.Unlock()
 
 	grant, found := m.access[signature]
-	if !found {
+	if !found || m.revoked[grant.GrantID] {
+		// Отзыв семейства необратим: токен отозванного гранта не годен,
+		// когда бы он ни был положен.
 		return oauthceremony.GrantRecord{}, oauthceremony.ErrGrantNotFound
 	}
 	return grant, nil
@@ -189,15 +284,29 @@ func (m *memoryPorts) StoreRefreshToken(_ context.Context, signature, accessSign
 	return oauthceremony.RowsTouched(1), nil
 }
 
-func (m *memoryPorts) FetchRefreshToken(_ context.Context, signature string) (oauthceremony.GrantRecord, error) {
+func (m *memoryPorts) FetchRefreshToken(ctx context.Context, signature string) (oauthceremony.GrantRecord, error) {
+	if m.refreshFetchGate != nil {
+		if err := m.refreshFetchGate.meet(ctx); err != nil {
+			return oauthceremony.GrantRecord{}, err
+		}
+	}
+	if m.fetchRefreshOverride != nil {
+		return m.fetchRefreshOverride(signature)
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
 	row, found := m.refresh[signature]
-	if !found {
+	switch {
+	case !found, m.revoked[row.grant.GrantID]:
 		return oauthceremony.GrantRecord{}, oauthceremony.ErrGrantNotFound
+	case row.rotated:
+		// Повтор: грант отдаётся ВМЕСТЕ с отказом — по нему отзывается
+		// семейство.
+		return row.grant, oauthceremony.ErrRefreshTokenRotated
+	default:
+		return row.grant, nil
 	}
-	return row.grant, nil
 }
 
 func (m *memoryPorts) DropRefreshToken(_ context.Context, signature string) (oauthceremony.StoreOutcome, error) {
@@ -216,7 +325,7 @@ func (m *memoryPorts) RotateRefreshToken(_ context.Context, grantID, signature s
 	defer m.mu.Unlock()
 
 	row, found := m.refresh[signature]
-	if !found || row.rotated || row.grant.GrantID != grantID {
+	if !found || row.rotated || row.grant.GrantID != grantID || m.revoked[grantID] {
 		return oauthceremony.RowsTouched(0), nil
 	}
 	row.rotated = true
@@ -229,6 +338,7 @@ func (m *memoryPorts) RevokeGrantRefreshTokens(_ context.Context, grantID string
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
+	m.revoked[grantID] = true
 	var touched int64
 	for signature, row := range m.refresh {
 		if row.grant.GrantID == grantID {
@@ -243,6 +353,7 @@ func (m *memoryPorts) RevokeGrantAccessTokens(_ context.Context, grantID string)
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
+	m.revoked[grantID] = true
 	var touched int64
 	for signature, grant := range m.access {
 		if grant.GrantID == grantID {

@@ -37,9 +37,40 @@ import (
 //
 // Записывается ПЕРВЫЙ случай: первый отказ хранилища и есть причина, а
 // последующие — уже следствия разбора.
+//
+// # Второе, что несёт ведомость: семейство, которое обязано умереть
+//
+// Мост, увидевший повтор токена обновления, записывает сюда грант, чьё
+// семейство отзывается. Отзыв исполняет ЦЕРЕМОНИЯ по завершении операции, а
+// не мост и не движок, потому что ни у одного из них для этого нет места:
+//
+//   - на одновременном повторе движок узнаёт о нём по нулю строк оборота
+//     ВНУТРИ своей единицы работы и откатывает её (`flow_refresh.go`,
+//     handleRefreshTokenEndpointStorageError); отзыв, исполненный мостом в той
+//     же единице работы, откатился бы вместе с ней;
+//   - на последовательном повторе движок отзывает сам, но его исход после
+//     отзыва огрубляется, и отказ отзыва был бы неотличим от успеха.
+//
+// Церемония отзывает ВНЕ единицы работы движка и называет отказ отзыва
+// отказом операции — а не «повтор», за которым живое семейство.
 type operationNotes struct {
 	mu      sync.Mutex
 	precise *ProtocolError
+	// replayedFamily — семейство, у которого предъявлен обёрнутый токен
+	// обновления. Нулевое значение — повтора не было.
+	replayedFamily replayedFamily
+}
+
+// replayedFamily — грант повторённого токена и клиент, которому грант выдан.
+//
+// Клиент нужен ровно одному пути — отзыву (RFC 7009 §2.1): отозвать семейство
+// по обёрнутому токену вправе только клиент, которому грант выдан. На пути
+// обмена клиент не нужен: повтор там — повтор, кем бы он ни был предъявлен, и
+// движок отзывает семейство раньше, чем сверит клиента. Пусто — клиент не
+// назван: так пишет оборот, у которого есть только грант.
+type replayedFamily struct {
+	grantID  string
+	clientID string
 }
 
 type operationNotesKey struct{}
@@ -90,6 +121,31 @@ func (n *operationNotes) preferRecorded(engineVerdict error) error {
 	return n.precise
 }
 
+// markReplayedFamily записывает грант, чьё семейство обязано быть отозвано.
+// Пустой идентификатор сюда не доходит: мост отвергает его раньше как
+// нарушение контракта порта (отозвать семейство без имени нечем).
+func (n *operationNotes) markReplayedFamily(grantID, clientID string) {
+	if n == nil || grantID == "" {
+		return
+	}
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	if n.replayedFamily.grantID == "" {
+		n.replayedFamily = replayedFamily{grantID: grantID, clientID: clientID}
+	}
+}
+
+// replayed отдаёт семейство, у которого замечен повтор; нулевое значение —
+// повтора не было.
+func (n *operationNotes) replayed() replayedFamily {
+	if n == nil {
+		return replayedFamily{}
+	}
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	return n.replayedFamily
+}
+
 // coarsenable — случаи, которые мост заносит в ведомость.
 //
 // Перечень ЗАКРЫТ и невелик намеренно: заноси мы всякий отказ хранилища,
@@ -98,7 +154,7 @@ func (n *operationNotes) preferRecorded(engineVerdict error) error {
 // (б) означают, что операция не могла завершиться успехом.
 func coarsenable(code FailureCode) bool {
 	switch code {
-	case CodeAuthorizationCodeConsumed, CodeAssertionReplayed,
+	case CodeAuthorizationCodeConsumed, CodeRefreshTokenRotated, CodeAssertionReplayed,
 		CodePortContract, CodePortDeadline, CodePortCanceled:
 		return true
 	default:

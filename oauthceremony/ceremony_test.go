@@ -321,45 +321,6 @@ func TestIssuedArtifactsCarryNoVendorPrefix(t *testing.T) {
 	}
 }
 
-// TestRefreshTokenRotationRejectsSecondPresentation — оборот токена
-// обновления держится тем же одноинструкционным правилом, что и погашение
-// кода.
-func TestRefreshTokenRotationRejectsSecondPresentation(t *testing.T) {
-	store := newMemoryPorts()
-	registerTestClient(t, store)
-	ceremony := newTestCeremony(t, store.ports())
-
-	code, _ := issueCode(t, ceremony)
-	first, err := ceremony.Exchange(context.Background(), oauthceremony.TokenRequest{
-		Grant:        oauthceremony.GrantAuthorizationCode,
-		ClientID:     testClientID,
-		ClientSecret: testSecret,
-		AuthMethod:   oauthceremony.ClientAuthBasic,
-		Code:         code,
-		RedirectURI:  testRedirectURI,
-		CodeVerifier: testVerifier,
-	})
-	if err != nil {
-		t.Fatalf("Exchange отказал: %v", err)
-	}
-
-	refresh := oauthceremony.TokenRequest{
-		Grant:        oauthceremony.GrantRefreshToken,
-		ClientID:     testClientID,
-		ClientSecret: testSecret,
-		AuthMethod:   oauthceremony.ClientAuthBasic,
-		RefreshToken: first.RefreshToken,
-		Scopes:       []string{"openid", "offline"},
-	}
-
-	if _, err := ceremony.Exchange(context.Background(), refresh); err != nil {
-		t.Fatalf("первый оборот токена обновления отказал: %v", err)
-	}
-	if _, err := ceremony.Exchange(context.Background(), refresh); err == nil {
-		t.Fatal("второй оборот тем же токеном обновления прошёл")
-	}
-}
-
 // TestDenialTravelsBackAsRedirect — отказ в согласии уезжает клиенту
 // перенаправлением с полем `error`, а не телом ответа (RFC 6749 §4.1.2.1).
 func TestDenialTravelsBackAsRedirect(t *testing.T) {

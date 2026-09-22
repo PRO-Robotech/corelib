@@ -85,7 +85,8 @@ func (o StoreOutcome) Declared() bool { return o.declared }
 // # Что общего у всех портов
 //
 // Порт отвечает НАШИМИ ошибками (ErrGrantNotFound, ErrStorageConflict,
-// ErrAuthorizationCodeConsumed, ErrPortContract) либо любой своей — тогда
+// ErrAuthorizationCodeConsumed, ErrRefreshTokenRotated, ErrPortContract) либо
+// любой своей — тогда
 // церемония переложит её в CodeServerError, сохранив текст в Debug. Порт НЕ
 // обязан знать ни о движке, ни о его системе ошибок.
 //
@@ -180,6 +181,8 @@ type AccessTokenVault interface {
 	StoreAccessToken(ctx context.Context, signature string, grant GrantRecord) (StoreOutcome, error)
 
 	// FetchAccessToken отдаёт грант по подписи. Нет → ErrGrantNotFound.
+	// Токен отозванного семейства (см. GrantRevoker) — тоже ErrGrantNotFound,
+	// когда бы он ни был положен.
 	FetchAccessToken(ctx context.Context, signature string) (GrantRecord, error)
 
 	// DropAccessToken снимает токен доступа по подписи.
@@ -200,7 +203,22 @@ type RefreshTokenVault interface {
 	// Связь нужна, чтобы отзыв одного снимал второй.
 	StoreRefreshToken(ctx context.Context, signature, accessSignature string, grant GrantRecord) (StoreOutcome, error)
 
-	// FetchRefreshToken отдаёт грант по подписи. Нет → ErrGrantNotFound.
+	// FetchRefreshToken отдаёт грант по подписи.
+	//
+	// Исходов ТРИ, и все три названы:
+	//
+	//  1. Токен есть и не обёрнут → (грант, nil).
+	//  2. Токена нет вовсе либо его семейство отозвано (см. GrantRevoker) →
+	//     (пустой грант, ErrGrantNotFound).
+	//  3. Токен есть и УЖЕ ОБЁРНУТ → (ГРАНТ, ErrRefreshTokenRotated).
+	//
+	// Третий исход — ПОВТОР (RFC 9700 §4.14.2): токеном владеют двое, и
+	// сервер не знает, кто из них законный. Грант обязан ехать ВМЕСТЕ с
+	// ошибкой по той же причине, что у погашенного кода: по нему отзывается
+	// семейство. Обёрнутый токен, отданный как живой, превращает повтор в
+	// обычный оборот, и пара, выданная первым оборотом, переживает его; грант
+	// без идентификатора при третьем исходе — ErrPortContract (отзывать
+	// нечего).
 	FetchRefreshToken(ctx context.Context, signature string) (GrantRecord, error)
 
 	// DropRefreshToken снимает токен обновления по подписи. Ноль строк —
@@ -216,15 +234,31 @@ type RefreshTokenVault interface {
 	//	   SET rotated_at = now()
 	//	 WHERE grant_id = $1 AND signature = $2 AND rotated_at IS NULL
 	//
-	// Исходы: 1 → оборот наш; 0 → токен уже обернули (повторное
-	// предъявление) → ErrAuthorizationCodeConsumed по смыслу «артефакт
-	// уже израсходован»; иное → ErrPortContract.
+	// Исходы: 1 → оборот наш; 0 → токен уже обернули — одновременный ПОВТОР:
+	// выборку прошли двое, и этот оборот опередили. Церемония отвечает
+	// ErrRefreshTokenRotated и отзывает семейство гранта; иное →
+	// ErrPortContract.
 	RotateRefreshToken(ctx context.Context, grantID, signature string) (StoreOutcome, error)
 }
 
 // GrantRevoker — отзыв всех артефактов одного гранта.
 //
 // Реализует СЛУЖБА.
+//
+// # Отзыв — СЕМЕЙСТВА, и он НЕОБРАТИМ
+//
+// Отозванный грант не годен целиком: его токен доступа и токен обновления не
+// годны, КОГДА БЫ ОНИ НИ БЫЛИ ПОЛОЖЕНЫ — до отзыва или после. Выборка такого
+// токена отвечает ErrGrantNotFound.
+//
+// Почему «и после». На одновременном повторе (см. RotateRefreshToken)
+// проигравший оборот отзывает семейство, пока победитель ещё кладёт выданную
+// ему пару. Порядок этих записей держит только единица работы, а она
+// необязательна (UnitOfWork). Отзыв, снимающий лишь уже лежащие строки, при
+// таком порядке оставил бы пару победителя живой — ровно ту, ради снятия
+// которой отзыв и исполнялся. Ожидаемая форма — отметка отзыва у самого
+// семейства (`token_families.revoked_at`), которую выборка сверяет, а не
+// удаление строк.
 type GrantRevoker interface {
 	// RevokeGrantRefreshTokens снимает ВСЕ токены обновления гранта.
 	// Ноль строк — законный исход (нечего снимать).

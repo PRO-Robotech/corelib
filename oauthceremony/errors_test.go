@@ -61,6 +61,7 @@ func sentinelRoster() map[oauthceremony.FailureCode]*oauthceremony.ProtocolError
 		oauthceremony.CodeAuthorizationCodeConsumed: oauthceremony.ErrAuthorizationCodeConsumed,
 		oauthceremony.CodeUnhandledRequest:          oauthceremony.ErrUnhandledRequest,
 		oauthceremony.CodeGrantNotFound:             oauthceremony.ErrGrantNotFound,
+		oauthceremony.CodeRefreshTokenRotated:       oauthceremony.ErrRefreshTokenRotated,
 		oauthceremony.CodePortContract:              oauthceremony.ErrPortContract,
 		oauthceremony.CodePortDeadline:              oauthceremony.ErrPortDeadline,
 		oauthceremony.CodePortCanceled:              oauthceremony.ErrPortCanceled,

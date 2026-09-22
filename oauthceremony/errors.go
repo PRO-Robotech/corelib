@@ -147,6 +147,7 @@ var (
 	ErrAuthorizationCodeConsumed = sentinel(CodeAuthorizationCodeConsumed)
 	ErrUnhandledRequest          = sentinel(CodeUnhandledRequest)
 	ErrGrantNotFound             = sentinel(CodeGrantNotFound)
+	ErrRefreshTokenRotated       = sentinel(CodeRefreshTokenRotated)
 	ErrPortContract              = sentinel(CodePortContract)
 	ErrPortDeadline              = sentinel(CodePortDeadline)
 	ErrPortCanceled              = sentinel(CodePortCanceled)
@@ -167,7 +168,7 @@ var allSentinels = []*ProtocolError{
 	ErrInteractionRequired, ErrRequestNotSupported, ErrRequestURINotSupported,
 	ErrRegistrationNotSupported, ErrInvalidRequestURI, ErrInvalidRequestObject,
 	ErrAssertionReplayed, ErrStorageConflict, ErrAuthorizationCodeConsumed,
-	ErrUnhandledRequest, ErrGrantNotFound, ErrPortContract, ErrPortDeadline,
+	ErrUnhandledRequest, ErrGrantNotFound, ErrRefreshTokenRotated, ErrPortContract, ErrPortDeadline,
 	ErrPortCanceled, ErrCeremonyMisuse, ErrUnknown,
 }
 

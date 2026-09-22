@@ -109,6 +109,11 @@ type Ceremony struct {
 	provider engine.OAuth2Provider
 	cfg      Config
 
+	// bridge — мост к портам службы. Церемонии он нужен помимо движка ровно
+	// для одного: отозвать семейство повторённого токена обновления ВНЕ
+	// единицы работы движка (см. revokeReplayedFamily).
+	bridge *storageBridge
+
 	authorizeURL string
 	tokenURL     string
 }
@@ -154,7 +159,7 @@ func New(cfg Config, ports Ports) (*Ceremony, error) {
 		RefreshTokenScopes:             refreshTokenScopesOf(cfg),
 	}
 
-	store := newStorageBridge(ports, cfg.PortTimeout)
+	bridge, store := newStorageBridge(ports, cfg.PortTimeout)
 	coreStore, ok := store.(enginehandler.CoreStorage)
 	if !ok {
 		// Недостижимо: соответствие моста закреплено утверждениями
@@ -234,6 +239,7 @@ func New(cfg Config, ports Ports) (*Ceremony, error) {
 	return &Ceremony{
 		provider:     engine.NewOAuth2Provider(clientStore, engineCfg),
 		cfg:          cfg,
+		bridge:       bridge,
 		authorizeURL: authorizeURL,
 		tokenURL:     tokenURL,
 	}, nil
@@ -581,16 +587,57 @@ func (c *Ceremony) Exchange(ctx context.Context, req TokenRequest) (TokenResult,
 	}
 
 	session := newSession()
+	var responder engine.AccessResponder
 	accessRequest, engineErr := c.provider.NewAccessRequest(ctx, httpReq, session)
-	if engineErr != nil {
-		return TokenResult{}, notes.preferRecorded(fromEngine(engineErr))
+	if engineErr == nil {
+		responder, engineErr = c.provider.NewAccessResponse(ctx, accessRequest)
 	}
 
-	responder, engineErr := c.provider.NewAccessResponse(ctx, accessRequest)
+	// Повтор токена обновления (RFC 9700 §4.14.2) отзывает семейство гранта —
+	// и последовательный, замеченный выборкой, и одновременный, замеченный
+	// нулём строк оборота. Правило не зависит от того, чем кончил движок: если
+	// повтор замечен, выданное этим обменом принадлежит отозванному семейству,
+	// и отдать его вызывающему как успех значило бы отдать мёртвые токены.
+	if family := notes.replayed(); family.grantID != "" {
+		if err := c.revokeReplayedFamily(ctx, family.grantID); err != nil {
+			return TokenResult{}, err
+		}
+		if engineErr == nil {
+			return TokenResult{}, refreshReplayed("Exchange")
+		}
+	}
 	if engineErr != nil {
 		return TokenResult{}, notes.preferRecorded(fromEngine(engineErr))
 	}
 	return tokenResultOf(responder), nil
+}
+
+// revokeReplayedFamily отзывает семейство гранта, у которого замечен повтор.
+//
+// # Почему здесь, а не в мосту и не в движке
+//
+// На одновременном повторе ноль строк оборота приходит ВНУТРИ единицы работы
+// движка, и движок её откатывает — отзыв, исполненный в ней, откатился бы
+// вместе с ней. Здесь единицы работы движка уже нет: каждый вызов порта
+// закрепляется сам. На последовательном повторе движок отзывает и сам, но его
+// исход после отзыва огрубляется; повторный отзыв здесь законен — ноль строк
+// у порта отзыва не отказ — и делает исход ВИДИМЫМ: отказ отзыва возвращается
+// отказом операции, а не случаем «повтор», за которым живое семейство.
+//
+// # Почему контекст отвязан от отмены вызывающего
+//
+// Повтор уже замечен. Вызывающий, оборвавший соединение, — возможно, тот
+// самый второй владелец токена, — не должен иметь возможности оставить
+// семейство живым, оборвав запрос в нужный миг. Срок у каждого вызова порта
+// свой (Config.PortTimeout), его назначает мост; бессрочного вызова нет.
+func (c *Ceremony) revokeReplayedFamily(ctx context.Context, grantID string) error {
+	detached := context.WithoutCancel(ctx)
+	refreshErr := c.bridge.RevokeRefreshToken(detached, grantID)
+	accessErr := c.bridge.RevokeAccessToken(detached, grantID)
+	if refreshErr != nil {
+		return refreshErr
+	}
+	return accessErr
 }
 
 // ── Интроспекция ────────────────────────────────────────────────────────────
@@ -632,7 +679,11 @@ func (c *Ceremony) Introspect(ctx context.Context, req IntrospectionRequest) (In
 	responder, engineErr := c.provider.NewIntrospectionRequest(ctx, httpReq, session)
 	if engineErr != nil {
 		ours := notes.preferRecorded(fromEngine(engineErr))
-		if CodeOf(ours) == CodeInactiveToken {
+		// Обёрнутый токен обновления — негоден, и это ответ, а не отказ.
+		// Семейства интроспекция не отзывает: она спрашивает о токене, а не
+		// пользуется им, и спрашивать о старом токене вправе и сам клиент.
+		switch CodeOf(ours) {
+		case CodeInactiveToken, CodeRefreshTokenRotated:
 			return IntrospectionResult{Active: false}, nil
 		}
 		return IntrospectionResult{}, ours
@@ -670,13 +721,28 @@ func (c *Ceremony) Revoke(ctx context.Context, req RevocationRequest) error {
 	}
 
 	engineErr := c.provider.NewRevocationRequest(ctx, httpReq)
+
+	// Отзыв ОБЁРНУТЫМ токеном обновления. Движок, получив «токен неактивен»,
+	// ищет артефакт среди токенов доступа, не находит и отвечает успехом, не
+	// тронув гранта, — то есть пара, выданная оборотом, пережила бы выход
+	// клиента из сеанса. Отзыв токена обновления снимает весь грант (RFC 7009
+	// §2.1), поэтому здесь семейство отзывается целиком — но только по
+	// предъявлению того клиента, которому грант выдан: проверку «токен выдан
+	// спрашивающему» (там же) движок на этом пути не исполняет, и её исполняет
+	// церемония. Чужой обёрнутый токен — негодный токен, и отвечают на него
+	// успехом без действия (RFC 7009 §2.2).
+	if family := notes.replayed(); family.grantID != "" && family.clientID != "" && family.clientID == req.ClientID {
+		if err := c.revokeReplayedFamily(ctx, family.grantID); err != nil {
+			return err
+		}
+	}
 	if engineErr == nil {
 		return nil
 	}
 
 	ours := notes.preferRecorded(fromEngine(engineErr))
 	switch CodeOf(ours) {
-	case CodeUnhandledRequest, CodeGrantNotFound, CodeNotFound:
+	case CodeUnhandledRequest, CodeGrantNotFound, CodeNotFound, CodeRefreshTokenRotated:
 		return nil
 	default:
 		return ours

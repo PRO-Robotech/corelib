@@ -298,6 +298,32 @@ func TestUnitOfWorkIsEngagedWhenNamed(t *testing.T) {
 	t.Logf("единица работы: открытий %d шт, закреплений %d шт, откатов %d шт", begun, committed, rolled)
 }
 
+// TestRotatedRefreshTokenWithoutItsGrantIsAContractBreach — выборка, назвавшая
+// токен обёрнутым, обязана отдать и его грант: по нему отзывается семейство.
+// Без гранта отзывать нечего, и это дефект порта, а не «повтор» — иначе
+// церемония ответила бы «семейство отозвано», не отозвав ничего.
+//
+// Близнец — TestSequentialRefreshReplayRevokesTheFamily: тот же исход выборки
+// с грантом даёт случай повтора (отличие — идентификатор гранта в записи).
+func TestRotatedRefreshTokenWithoutItsGrantIsAContractBreach(t *testing.T) {
+	store := newMemoryPorts()
+	registerTestClient(t, store)
+	ceremony := newTestCeremony(t, store.ports())
+
+	first := exchangeCode(t, ceremony)
+	store.fetchRefreshOverride = func(string) (oauthceremony.GrantRecord, error) {
+		return oauthceremony.GrantRecord{ClientID: testClientID}, oauthceremony.ErrRefreshTokenRotated
+	}
+
+	_, err := ceremony.Exchange(context.Background(), refreshRequest(first.RefreshToken))
+	if !errors.Is(err, oauthceremony.ErrPortContract) {
+		t.Fatalf("случай %v, ожидался %v", oauthceremony.CodeOf(err), oauthceremony.CodePortContract)
+	}
+	if errors.Is(err, oauthceremony.ErrRefreshTokenRotated) {
+		t.Error("обёрнутый токен без гранта выдан за повтор, после которого семейство отозвано")
+	}
+}
+
 // TestCallerCancellationIsItsOwnCase — снятие вызывающим отличимо от
 // истёкшего срока.
 func TestCallerCancellationIsItsOwnCase(t *testing.T) {

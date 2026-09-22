@@ -82,6 +82,16 @@ const (
 	// разные события для того, кто читает журнал.
 	CodeGrantNotFound
 
+	// CodeRefreshTokenRotated — предъявлен токен обновления, который уже
+	// обернули: выборка отдала его обёрнутым, либо оборот затронул ноль
+	// строк, потому что его опередили. Это ПОВТОР (RFC 9700 §4.14.2):
+	// токеном владеют двое, и церемония, ответив этим случаем, уже отозвала
+	// семейство гранта целиком. Отдельно от CodeAuthorizationCodeConsumed:
+	// «код погашен» и «токен обновления повторён» — разные артефакты разных
+	// потоков, и журналу службы различать их обязательно; на проводе оба —
+	// `invalid_grant`.
+	CodeRefreshTokenRotated
+
 	// CodePortContract — порт нарушил свой контракт: вернул неназванное
 	// число затронутых строк либо число, невозможное при корректной
 	// одноинструкционной записи. Это ДЕФЕКТ реализации порта, а не отказ
@@ -151,6 +161,7 @@ var failureMeta = [failureCodeCount]struct {
 	CodeAuthorizationCodeConsumed: {"authorization_code_consumed", "invalid_grant", http.StatusBadRequest},
 	CodeUnhandledRequest:          {"unhandled_request", "invalid_request", http.StatusBadRequest},
 	CodeGrantNotFound:             {"grant_not_found", "invalid_grant", http.StatusBadRequest},
+	CodeRefreshTokenRotated:       {"refresh_token_rotated", "invalid_grant", http.StatusBadRequest},
 	CodePortContract:              {"port_contract", "server_error", http.StatusInternalServerError},
 	CodePortDeadline:              {"port_deadline", "temporarily_unavailable", http.StatusServiceUnavailable},
 	CodePortCanceled:              {"port_canceled", "temporarily_unavailable", http.StatusServiceUnavailable},

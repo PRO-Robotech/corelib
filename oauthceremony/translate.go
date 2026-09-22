@@ -93,6 +93,7 @@ func init() {
 	for code, engineErr := range map[FailureCode]*engine.RFC6749Error{
 		CodeGrantNotFound:             engine.ErrInvalidGrant,
 		CodeAuthorizationCodeConsumed: engine.ErrInvalidGrant,
+		CodeRefreshTokenRotated:       engine.ErrInvalidGrant,
 		CodePortContract:              engine.ErrServerError,
 		CodePortDeadline:              engine.ErrTemporarilyUnavailable,
 		CodePortCanceled:              engine.ErrTemporarilyUnavailable,
