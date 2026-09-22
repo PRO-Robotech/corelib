@@ -52,10 +52,29 @@ type memoryPorts struct {
 	lookupDelay     time.Duration
 	// fetchRefreshOverride подменяет исход выборки токена обновления.
 	fetchRefreshOverride func(signature string) (oauthceremony.GrantRecord, error)
+	// fetchCodeOverride подменяет исход выборки кода авторизации.
+	fetchCodeOverride func(signature string) (oauthceremony.GrantRecord, error)
 
 	// refreshFetchGate — точка встречи одновременных выборок токена
 	// обновления. Пусто — выборка не ждёт никого.
 	refreshFetchGate *rendezvous
+
+	// codeFetchGate, proofFetchGate, consumeGate — точки встречи
+	// одновременных обменов одного кода: на выборке кода (до выборки PKCE),
+	// на выборке запроса PKCE и перед погашением кода. Пусто — не ждёт никто.
+	codeFetchGate  *rendezvous
+	proofFetchGate *rendezvous
+	consumeGate    *rendezvous
+
+	// proofTaken — если задан, ВТОРАЯ и последующие выборки запроса PKCE ждут,
+	// пока первую запись PKCE не снимут. Так воспроизводится ровно тот
+	// порядок, в котором проигравший обмен находит запись PKCE уже снятой.
+	proofTaken     chan struct{}
+	proofTakenOnce sync.Once
+	proofFetches   int
+
+	// revokeFailure — отказ порта отзыва. Пусто — отзыв исполняется.
+	revokeFailure error
 }
 
 // rendezvous — встреча ровно n участников. Пока не собрались все, каждый
@@ -201,7 +220,22 @@ func (m *memoryPorts) StoreAuthorizationCode(_ context.Context, signature string
 	return oauthceremony.RowsTouched(1), nil
 }
 
-func (m *memoryPorts) FetchAuthorizationCode(_ context.Context, signature string) (oauthceremony.GrantRecord, error) {
+// FetchAuthorizationCode читает строку ДО встречи — по той же причине, что
+// FetchRefreshToken.
+func (m *memoryPorts) FetchAuthorizationCode(ctx context.Context, signature string) (oauthceremony.GrantRecord, error) {
+	rec, err := m.readCodeRow(signature)
+	if m.codeFetchGate != nil {
+		if meetErr := m.codeFetchGate.meet(ctx); meetErr != nil {
+			return oauthceremony.GrantRecord{}, meetErr
+		}
+	}
+	return rec, err
+}
+
+func (m *memoryPorts) readCodeRow(signature string) (oauthceremony.GrantRecord, error) {
+	if m.fetchCodeOverride != nil {
+		return m.fetchCodeOverride(signature)
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -220,9 +254,14 @@ func (m *memoryPorts) FetchAuthorizationCode(_ context.Context, signature string
 
 // ConsumeAuthorizationCode — одна операция под замком, как одна инструкция
 // `UPDATE … WHERE consumed_at IS NULL` под замком строки.
-func (m *memoryPorts) ConsumeAuthorizationCode(_ context.Context, signature string) (oauthceremony.StoreOutcome, error) {
+func (m *memoryPorts) ConsumeAuthorizationCode(ctx context.Context, signature string) (oauthceremony.StoreOutcome, error) {
 	if m.consumeOverride != nil {
 		return m.consumeOverride(signature)
+	}
+	if m.consumeGate != nil {
+		if err := m.consumeGate.meet(ctx); err != nil {
+			return oauthceremony.StoreOutcome{}, err
+		}
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -351,6 +390,10 @@ func (m *memoryPorts) RevokeGrantRefreshTokens(_ context.Context, grantID string
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
+	if m.revokeFailure != nil {
+		return oauthceremony.StoreOutcome{}, m.revokeFailure
+	}
+
 	m.revoked[grantID] = true
 	var touched int64
 	for signature, row := range m.refresh {
@@ -365,6 +408,10 @@ func (m *memoryPorts) RevokeGrantRefreshTokens(_ context.Context, grantID string
 func (m *memoryPorts) RevokeGrantAccessTokens(_ context.Context, grantID string) (oauthceremony.StoreOutcome, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+
+	if m.revokeFailure != nil {
+		return oauthceremony.StoreOutcome{}, m.revokeFailure
+	}
 
 	m.revoked[grantID] = true
 	var touched int64
@@ -390,7 +437,31 @@ func (m *memoryPorts) StoreProofKeyRequest(_ context.Context, signature string, 
 	return oauthceremony.RowsTouched(1), nil
 }
 
-func (m *memoryPorts) FetchProofKeyRequest(_ context.Context, signature string) (oauthceremony.GrantRecord, error) {
+// FetchProofKeyRequest читает строку ДО встречи — по той же причине, что
+// FetchRefreshToken.
+func (m *memoryPorts) FetchProofKeyRequest(ctx context.Context, signature string) (oauthceremony.GrantRecord, error) {
+	m.mu.Lock()
+	m.proofFetches++
+	later := m.proofFetches > 1
+	m.mu.Unlock()
+	if later && m.proofTaken != nil {
+		select {
+		case <-m.proofTaken:
+		case <-ctx.Done():
+			return oauthceremony.GrantRecord{}, ctx.Err()
+		}
+	}
+
+	rec, err := m.readProofRow(signature)
+	if m.proofFetchGate != nil {
+		if meetErr := m.proofFetchGate.meet(ctx); meetErr != nil {
+			return oauthceremony.GrantRecord{}, meetErr
+		}
+	}
+	return rec, err
+}
+
+func (m *memoryPorts) readProofRow(signature string) (oauthceremony.GrantRecord, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -409,6 +480,9 @@ func (m *memoryPorts) DropProofKeyRequest(_ context.Context, signature string) (
 		return oauthceremony.RowsTouched(0), nil
 	}
 	delete(m.proof, signature)
+	if m.proofTaken != nil {
+		m.proofTakenOnce.Do(func() { close(m.proofTaken) })
+	}
 	return oauthceremony.RowsTouched(1), nil
 }
 
