@@ -65,6 +65,10 @@ type memoryPorts struct {
 // оба запроса прошли выборку до того, как хоть один обернул токен. Без встречи
 // запросы почти всегда исполнялись бы по очереди, и проба «одновременного»
 // повтора проверяла бы последовательный.
+//
+// Встреча ставится ПОСЛЕ чтения строки, а не до него: встреча до чтения
+// создаёт одновременность прихода, но не одновременность прочитанного, и
+// met() сообщал бы о созданном условии, которого проба не создала.
 type rendezvous struct {
 	mu      sync.Mutex
 	need    int
@@ -281,12 +285,24 @@ func (m *memoryPorts) StoreRefreshToken(_ context.Context, signature, accessSign
 	return oauthceremony.RowsTouched(1), nil
 }
 
+// FetchRefreshToken ЧИТАЕТ СТРОКУ ДО ВСТРЕЧИ. Порядок несущий: встреча,
+// поставленная до чтения, пропускает участников к чтению по одному, и второй
+// почти всегда читает уже обёрнутый токен — то есть идёт ПОСЛЕДОВАТЕЛЬНЫМ
+// путём, хотя встреча состоялась. Замер при встрече до чтения: с дефектом
+// «ноль строк оборота не отмечает семейство» проба одновременного повтора
+// была зелёной в 19 прогонах из 30. Чтение до встречи — оба участника видят
+// токен необёрнутым, и ноль строк оборота получает ровно один из них.
 func (m *memoryPorts) FetchRefreshToken(ctx context.Context, signature string) (oauthceremony.GrantRecord, error) {
+	rec, err := m.readRefreshRow(signature)
 	if m.refreshFetchGate != nil {
-		if err := m.refreshFetchGate.meet(ctx); err != nil {
-			return oauthceremony.GrantRecord{}, err
+		if meetErr := m.refreshFetchGate.meet(ctx); meetErr != nil {
+			return oauthceremony.GrantRecord{}, meetErr
 		}
 	}
+	return rec, err
+}
+
+func (m *memoryPorts) readRefreshRow(signature string) (oauthceremony.GrantRecord, error) {
 	if m.fetchRefreshOverride != nil {
 		return m.fetchRefreshOverride(signature)
 	}
