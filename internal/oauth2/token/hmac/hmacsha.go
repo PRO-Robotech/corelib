@@ -1,5 +1,6 @@
 // Copyright © 2024 Ory Corp
 // SPDX-License-Identifier: Apache-2.0
+// Изменено PRO-Robotech (modified by PRO-Robotech): перечень изменений — internal/oauth2/PROVENANCE.md.
 
 // Package hmac is the default implementation for generating and validating challenges. It uses SHA-512/256 to
 // generate and validate challenges.

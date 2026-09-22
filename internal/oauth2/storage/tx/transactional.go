@@ -1,5 +1,6 @@
 // Copyright © 2024 Ory Corp
 // SPDX-License-Identifier: Apache-2.0
+// Изменено PRO-Robotech (modified by PRO-Robotech): перечень изменений — internal/oauth2/PROVENANCE.md.
 
 // Package tx — лист транзакционных помощников движка. СОДЕРЖИМОЕ АПСТРИМНОЕ И
 // ПЕРЕНЕСЕНО ДОСЛОВНО из `storage/transactional.go`; правка Kacho — только место.

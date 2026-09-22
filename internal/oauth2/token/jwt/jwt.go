@@ -1,5 +1,6 @@
 // Copyright © 2024 Ory Corp
 // SPDX-License-Identifier: Apache-2.0
+// Изменено PRO-Robotech (modified by PRO-Robotech): перечень изменений — internal/oauth2/PROVENANCE.md.
 
 // Package jwt is able to generate and validate json web tokens.
 // Follows https://tools.ietf.org/html/draft-ietf-oauth-json-web-token-32
