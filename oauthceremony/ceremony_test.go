@@ -321,6 +321,43 @@ func TestIssuedArtifactsCarryNoVendorPrefix(t *testing.T) {
 	}
 }
 
+// TestClientCredentialsIsNotServed — вид гранта `client_credentials`
+// церемония не обслуживает: у машинной полосы службы доступа своя выдача.
+//
+// Отказ обязан прийти ДО движка и своим случаем «вид не поддерживается», а не
+// «клиенту не разрешено» от движка: второе значило бы, что обработчик вида
+// провязан и лишь этому клиенту не выдан.
+//
+// Близнец — обмен кода тем же клиентом в той же церемонии: он проходит
+// (TestAuthorizationCodeCeremonyRoundTrip), отличие — вид гранта.
+func TestClientCredentialsIsNotServed(t *testing.T) {
+	store := newMemoryPorts()
+	registerTestClient(t, store)
+	reg := store.clients[testClientID]
+	reg.GrantKinds = append(reg.GrantKinds, oauthceremony.GrantKind("client_credentials"))
+	store.clients[testClientID] = reg
+	ceremony := newTestCeremony(t, store.ports())
+
+	for _, kind := range oauthceremony.GrantKinds() {
+		if kind == "client_credentials" {
+			t.Errorf("словарь видов гранта называет %q", kind)
+		}
+	}
+
+	_, err := ceremony.Exchange(context.Background(), oauthceremony.TokenRequest{
+		Grant:        oauthceremony.GrantKind("client_credentials"),
+		ClientID:     testClientID,
+		ClientSecret: testSecret,
+		AuthMethod:   oauthceremony.ClientAuthBasic,
+	})
+	if err == nil {
+		t.Fatal("обмен client_credentials прошёл")
+	}
+	if !errors.Is(err, oauthceremony.ErrUnsupportedGrantType) {
+		t.Fatalf("случай %v, ожидался %v", oauthceremony.CodeOf(err), oauthceremony.CodeUnsupportedGrantType)
+	}
+}
+
 // TestDenialTravelsBackAsRedirect — отказ в согласии уезжает клиенту
 // перенаправлением с полем `error`, а не телом ответа (RFC 6749 §4.1.2.1).
 func TestDenialTravelsBackAsRedirect(t *testing.T) {

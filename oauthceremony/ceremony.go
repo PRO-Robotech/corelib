@@ -197,14 +197,6 @@ func New(cfg Config, ports Ports) (*Ceremony, error) {
 		TokenRevocationStorage: revocationStore,
 		Config:                 engineCfg,
 	}
-	clientCredentialsGrant := &enginehandler.ClientCredentialsGrantHandler{
-		HandleHelper: &enginehandler.HandleHelper{
-			AccessTokenStrategy: strategy,
-			AccessTokenStorage:  coreStore,
-			Config:              engineCfg,
-		},
-		Config: engineCfg,
-	}
 	proofKey := &engineproofkey.Handler{
 		AuthorizeCodeStrategy: strategy,
 		Storage:               proofKeyStore,
@@ -230,7 +222,6 @@ func New(cfg Config, ports Ports) (*Ceremony, error) {
 
 	engineCfg.TokenEndpointHandlers.Append(explicitGrant)
 	engineCfg.TokenEndpointHandlers.Append(refreshGrant)
-	engineCfg.TokenEndpointHandlers.Append(clientCredentialsGrant)
 	engineCfg.TokenEndpointHandlers.Append(proofKey)
 
 	engineCfg.TokenIntrospectionHandlers.Append(introspector)
@@ -563,7 +554,7 @@ func (c *Ceremony) checkIntent(intent AuthorizationIntent) error {
 
 // ── Точка токена ────────────────────────────────────────────────────────────
 
-// Exchange обменивает грант на артефакты (RFC 6749 §4.1.3, §6, §4.4).
+// Exchange обменивает грант на артефакты (RFC 6749 §4.1.3, §6).
 func (c *Ceremony) Exchange(ctx context.Context, req TokenRequest) (TokenResult, error) {
 	ctx, cancel := context.WithTimeout(ctx, c.cfg.OperationTimeout)
 	defer cancel()

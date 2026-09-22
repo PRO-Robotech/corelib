@@ -20,16 +20,20 @@ type GrantKind string
 // запрос с таким `grant_type` получал бы «неизвестный запрос» вместо честного
 // «способ не поддерживается». Способ заводится отдельной фазой вместе со
 // своим портом.
+//
+// `client_credentials` здесь тоже НЕТ: машинные клиенты службы доступа
+// получают токен своей выдачей, а не церемонией (решение по эпику, К3).
+// Слово вне словаря отвергается в Exchange до движка, и обработчика этого
+// вида в провязке церемонии нет.
 const (
 	GrantAuthorizationCode GrantKind = "authorization_code"
 	GrantRefreshToken      GrantKind = "refresh_token"
-	GrantClientCredentials GrantKind = "client_credentials"
 )
 
 // GrantKinds возвращает словарь целиком — тому, кто строит метаданные
 // сервера обнаружения или проверяет запись клиента.
 func GrantKinds() []GrantKind {
-	return []GrantKind{GrantAuthorizationCode, GrantRefreshToken, GrantClientCredentials}
+	return []GrantKind{GrantAuthorizationCode, GrantRefreshToken}
 }
 
 // Declared отвечает, входит ли способ в словарь. Пустое значение НЕ входит:
