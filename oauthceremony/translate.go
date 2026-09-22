@@ -508,8 +508,8 @@ func checkStoredInstants(field string, instants map[TokenKind]time.Time) error {
 	for _, kind := range slices.Sorted(maps.Keys(instants)) {
 		if instants[kind].IsZero() {
 			return contractBreach(field, strconv.Quote(string(kind))+" is the zero time; "+
-				"a stored bound or expiry is a real instant or an absent key, and a zero one "+
-				"would make the refresh token eternal")
+				"a stored bound or expiry is a real instant or an absent key, so a zero one is a corrupted record "+
+				"(for a refresh token the engine reads a zero expiry as no expiry at all)")
 		}
 	}
 	return nil
