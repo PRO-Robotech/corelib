@@ -509,12 +509,15 @@ func (c *Ceremony) CompleteAuthorization(ctx context.Context, intent Authorizati
 		intent.requester.GrantAudience(audience)
 	}
 
+	// Решение службы о сроках — ГРАНИЦА семейства, а не срок первого
+	// артефакта: срок каждому артефакту назначает движок в миг выпуска, а
+	// сеанс не даёт назначить его позже границы (ceremonySession).
 	session := newSession()
 	if err := hydrateSession(session, SessionRecord{
-		Subject:   grant.Subject,
-		Username:  grant.Username,
-		ExpiresAt: grant.ExpiresAt,
-		Claims:    grant.Claims,
+		Subject:  grant.Subject,
+		Username: grant.Username,
+		NotAfter: grant.ExpiresAt,
+		Claims:   grant.Claims,
 	}); err != nil {
 		return AuthorizationResult{}, err
 	}
@@ -976,7 +979,7 @@ func introspectionResultOf(responder engine.IntrospectionResponder) Introspectio
 
 	result := IntrospectionResult{
 		Active:          true,
-		Kind:            TokenKind(responder.GetTokenUse()),
+		Kind:            tokenKindOf(responder.GetTokenUse()),
 		AccessTokenType: responder.GetAccessTokenType(),
 	}
 

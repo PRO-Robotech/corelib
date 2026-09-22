@@ -322,23 +322,106 @@ func requesterFromGrant(ctx context.Context, clients func(context.Context, strin
 
 // ── Перевод сеанса ──────────────────────────────────────────────────────────
 
+// Вид артефакта в языке движка и в нашем — РАЗНЫЕ слова у кода авторизации:
+// наш `authorization_code` (RFC 6749), движка — `authorize_code`. Перевод
+// приведением строки клал бы наш срок кода под ключ, которого движок не
+// читает, а срок движка — под ключ, которого нет среди наших видов: граница
+// кода не действовала бы, и никто бы этого не увидел. Поэтому — словарь.
+var engineTokenTypes = map[TokenKind]engine.TokenType{
+	TokenKindAccess:            engine.AccessToken,
+	TokenKindRefresh:           engine.RefreshToken,
+	TokenKindAuthorizationCode: engine.AuthorizeCode,
+	TokenKindIdentity:          engine.IDToken,
+}
+
+// engineTypeOf переводит наш вид в вид движка. Вид вне словаря — вид,
+// которого у движка нет, — переносится как есть: терять запись молча нельзя.
+func engineTypeOf(kind TokenKind) engine.TokenType {
+	if t, known := engineTokenTypes[kind]; known {
+		return t
+	}
+	return engine.TokenType(kind)
+}
+
+// tokenKindOf — обратный перевод, по тому же словарю.
+func tokenKindOf(t engine.TokenType) TokenKind {
+	for kind, engineType := range engineTokenTypes {
+		if engineType == t {
+			return kind
+		}
+	}
+	return TokenKind(t)
+}
+
+// ceremonySession — сеанс движка с ГРАНИЦЕЙ СРОКОВ СЕМЕЙСТВА.
+//
+// # Зачем свой тип
+//
+// Движок назначает срок артефакту сам, в миг выпуска: `сейчас + срок из
+// настроек` — и при выдаче кода, и при обмене, и на КАЖДОМ обороте токена
+// обновления, поверх сеанса семейства (`flow_refresh.go`). Граница, названная
+// службой (AuthorizationGrant.ExpiresAt), в этой арифметике не участвует, и
+// первый же оборот продлевал бы семейство за неё, а каждый следующий — ещё.
+// Здесь граница живёт в самом сеансе, и назначить срок позже неё нельзя ни
+// одним путём движка: все они назначают срок через SetExpiresAt.
+type ceremonySession struct {
+	engine.DefaultSession
+
+	// notAfter — граница годности по видам артефактов для ВСЕГО семейства
+	// гранта. Отсутствие ключа — границы нет.
+	notAfter map[engine.TokenType]time.Time
+}
+
+// SetExpiresAt назначает срок, не позже границы семейства.
+func (s *ceremonySession) SetExpiresAt(key engine.TokenType, exp time.Time) {
+	if bound, named := s.notAfter[key]; named && exp.After(bound) {
+		exp = bound
+	}
+	s.DefaultSession.SetExpiresAt(key, exp)
+}
+
+// Clone — копия вместе с границей. Унаследованная Clone копировала бы только
+// сеанс движка, и оборот, работающий на копии (`flow_refresh.go`), шёл бы
+// уже без границы.
+func (s *ceremonySession) Clone() engine.Session {
+	if s == nil {
+		return nil
+	}
+	inner, ours := s.DefaultSession.Clone().(*engine.DefaultSession)
+	if !ours || inner == nil {
+		inner = &engine.DefaultSession{}
+	}
+	out := &ceremonySession{DefaultSession: *inner, notAfter: make(map[engine.TokenType]time.Time, len(s.notAfter))}
+	for k, v := range s.notAfter {
+		out.notAfter[k] = v
+	}
+	return out
+}
+
 // sessionRecordOf снимает с сеанса движка нашу запись.
 func sessionRecordOf(s engine.Session) SessionRecord {
-	rec := SessionRecord{ExpiresAt: map[TokenKind]time.Time{}, Claims: map[string]any{}}
+	rec := SessionRecord{
+		ExpiresAt: map[TokenKind]time.Time{},
+		NotAfter:  map[TokenKind]time.Time{},
+		Claims:    map[string]any{},
+	}
 	if s == nil {
 		return rec
 	}
 	rec.Subject = s.GetSubject()
 	rec.Username = s.GetUsername()
 
-	def, ours := s.(*engine.DefaultSession)
+	cs, ours := s.(*ceremonySession)
 	if !ours {
 		return rec
 	}
-	for kind, at := range def.ExpiresAt {
-		rec.ExpiresAt[TokenKind(kind)] = at
+	for kind, at := range cs.ExpiresAt {
+		rec.ExpiresAt[tokenKindOf(kind)] = at
 	}
-	for k, v := range def.Extra {
+	for kind, at := range cs.notAfter {
+		rec.NotAfter[tokenKindOf(kind)] = at
+	}
+	for k, v := range cs.Extra {
 		rec.Claims[k] = v
 	}
 	return rec
@@ -350,21 +433,38 @@ func sessionRecordOf(s engine.Session) SessionRecord {
 // быть не может. Если он всё же пришёл — это дефект сборки, и он называется
 // отказом, а не молча пропускается: сеанс без сроков годности сделал бы
 // бессрочными все выпущенные артефакты.
+//
+// # Сроки СЛИВАЮТСЯ, а не заменяются
+//
+// Движок наполняет ОДИН И ТОТ ЖЕ сеанс несколько раз за операцию: при обмене
+// кода — выборкой кода, затем выборкой PKCE, затем снова выборкой кода перед
+// выпуском, и между первой и последней назначает сроки выпускаемой пары.
+// Замена карты сроков записью кода стирала бы их: пара уезжала в хранилище без
+// своих сроков, и токен обновления без срока движок считает бессрочным.
+// Слияние — ключ записи перекрывает ключ сеанса, прочие остаются — то, чего
+// движок ждёт от хранилища (так ведёт себя разбор JSON в карту, на который он
+// рассчитан). Граница семейства и прочее — из записи целиком.
 func hydrateSession(s engine.Session, rec SessionRecord) error {
-	def, ours := s.(*engine.DefaultSession)
+	cs, ours := s.(*ceremonySession)
 	if !ours {
 		return failf(CodeCeremonyMisuse, nil,
 			"The authorization engine asked to hydrate a session this package did not create.", "", "")
 	}
-	def.Subject = rec.Subject
-	def.Username = rec.Username
-	def.ExpiresAt = make(map[engine.TokenType]time.Time, len(rec.ExpiresAt))
-	for kind, at := range rec.ExpiresAt {
-		def.ExpiresAt[engine.TokenType(kind)] = at
+	cs.Subject = rec.Subject
+	cs.Username = rec.Username
+	cs.notAfter = make(map[engine.TokenType]time.Time, len(rec.NotAfter))
+	for kind, at := range rec.NotAfter {
+		cs.notAfter[engineTypeOf(kind)] = at
 	}
-	def.Extra = make(map[string]any, len(rec.Claims))
+	if cs.ExpiresAt == nil {
+		cs.ExpiresAt = make(map[engine.TokenType]time.Time, len(rec.ExpiresAt))
+	}
+	for kind, at := range rec.ExpiresAt {
+		cs.SetExpiresAt(engineTypeOf(kind), at)
+	}
+	cs.Extra = make(map[string]any, len(rec.Claims))
 	for k, v := range rec.Claims {
-		def.Extra[k] = v
+		cs.Extra[k] = v
 	}
 	return nil
 }
@@ -372,9 +472,12 @@ func hydrateSession(s engine.Session, rec SessionRecord) error {
 // newSession собирает пустой сеанс движка. ЕДИНСТВЕННОЕ место, где сеанс
 // возникает, — отсюда и уверенность hydrateSession в его типе.
 func newSession() engine.Session {
-	return &engine.DefaultSession{
-		ExpiresAt: map[engine.TokenType]time.Time{},
-		Extra:     map[string]any{},
+	return &ceremonySession{
+		DefaultSession: engine.DefaultSession{
+			ExpiresAt: map[engine.TokenType]time.Time{},
+			Extra:     map[string]any{},
+		},
+		notAfter: map[engine.TokenType]time.Time{},
 	}
 }
 

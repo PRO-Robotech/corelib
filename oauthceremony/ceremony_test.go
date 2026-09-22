@@ -177,8 +177,13 @@ func TestAuthorizationCodeCeremonyRoundTrip(t *testing.T) {
 	if tokens.TokenType != "bearer" {
 		t.Errorf("тип токена %q, ожидался \"bearer\"", tokens.TokenType)
 	}
-	if tokens.ExpiresIn != time.Hour {
-		t.Errorf("срок токена доступа %v, ожидался %v", tokens.ExpiresIn, time.Hour)
+	// Ответ называет ОСТАВШЕЕСЯ время до срока, записанного у токена, в
+	// целых секундах: движок округляет срок до секунды, а к мигу ответа
+	// проходят миллисекунды — отсюда час либо час без секунды. Точное
+	// равенство часу держалось, пока срок у токена НЕ записывался вовсе и
+	// ответ брал голую длительность из настроек (lifetime_test.go).
+	if tokens.ExpiresIn < time.Hour-time.Second || tokens.ExpiresIn > time.Hour {
+		t.Errorf("срок токена доступа %v, ожидался час (не меньше %v)", tokens.ExpiresIn, time.Hour-time.Second)
 	}
 
 	introspection, err := ceremony.Introspect(context.Background(), oauthceremony.IntrospectionRequest{
