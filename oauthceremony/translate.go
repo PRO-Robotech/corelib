@@ -6,7 +6,9 @@ package oauthceremony
 import (
 	"context"
 	"errors"
+	"maps"
 	"net/url"
+	"slices"
 	"strconv"
 	"time"
 
@@ -368,14 +370,27 @@ type ceremonySession struct {
 	engine.DefaultSession
 
 	// notAfter — граница годности по видам артефактов для ВСЕГО семейства
-	// гранта. Отсутствие ключа — границы нет.
+	// гранта. Отсутствие ключа — границы нет. Нулевого времени здесь не
+	// бывает: его отвергают при выдаче (checkGrantBounds) и при наполнении из
+	// хранилища (hydrateSession).
 	notAfter map[engine.TokenType]time.Time
 }
 
-// SetExpiresAt назначает срок, не позже границы семейства.
+// SetExpiresAt назначает срок, не позже границы семейства, и НИКОГДА не пишет
+// нулевого времени.
+//
+// Нулевой срок движок читает у токена обновления как «без срока», то есть как
+// срок позже любой границы. Поэтому при названной границе нулевой срок
+// сжимается к ней, а без границы не пишется вовсе — остаётся прежний срок либо
+// его отсутствие, то есть то, что движок и так читает. Граница, равная
+// нулевому времени, — не граница: оказавшись в сеансе в обход обеих проверок,
+// она не сжимает срок к нулю.
 func (s *ceremonySession) SetExpiresAt(key engine.TokenType, exp time.Time) {
-	if bound, named := s.notAfter[key]; named && exp.After(bound) {
+	if bound, named := s.notAfter[key]; named && !bound.IsZero() && (exp.IsZero() || exp.After(bound)) {
 		exp = bound
+	}
+	if exp.IsZero() {
+		return
 	}
 	s.DefaultSession.SetExpiresAt(key, exp)
 }
@@ -444,11 +459,29 @@ func sessionRecordOf(s engine.Session) SessionRecord {
 // Слияние — ключ записи перекрывает ключ сеанса, прочие остаются — то, чего
 // движок ждёт от хранилища (так ведёт себя разбор JSON в карту, на который он
 // рассчитан). Граница семейства и прочее — из записи целиком.
+//
+// # Нулевое время в записи — нарушение контракта порта
+//
+// Ни граница семейства, ни срок артефакта не бывают нулевым временем в записи,
+// которую церемония отдаёт на хранение: границу-ноль отвергает выдача
+// (checkGrantBounds), нулевого срока не пишет сеанс (SetExpiresAt). Значит,
+// ноль в записи из хранилища — порча записи на стороне службы, и она
+// отвергается как ErrPortContract, а не принимается: нулевая граница сжала бы
+// к нулю срок нового токена обновления, нулевой срок сделал бы бессрочным
+// предъявленный — движок читает нулевой срок токена обновления как «без
+// срока». Трактовать ноль как «ключа нет» значило бы молча чинить чужую запись
+// в сторону меньшей строгости.
 func hydrateSession(s engine.Session, rec SessionRecord) error {
 	cs, ours := s.(*ceremonySession)
 	if !ours {
 		return failf(CodeCeremonyMisuse, nil,
 			"The authorization engine asked to hydrate a session this package did not create.", "", "")
+	}
+	if err := checkStoredInstants("SessionRecord.NotAfter", rec.NotAfter); err != nil {
+		return err
+	}
+	if err := checkStoredInstants("SessionRecord.ExpiresAt", rec.ExpiresAt); err != nil {
+		return err
 	}
 	cs.Subject = rec.Subject
 	cs.Username = rec.Username
@@ -465,6 +498,19 @@ func hydrateSession(s engine.Session, rec SessionRecord) error {
 	cs.Extra = make(map[string]any, len(rec.Claims))
 	for k, v := range rec.Claims {
 		cs.Extra[k] = v
+	}
+	return nil
+}
+
+// checkStoredInstants отвергает нулевое время в карте сроков записи. Вид —
+// первый по порядку имени, чтобы текст отказа не зависел от порядка обхода.
+func checkStoredInstants(field string, instants map[TokenKind]time.Time) error {
+	for _, kind := range slices.Sorted(maps.Keys(instants)) {
+		if instants[kind].IsZero() {
+			return contractBreach(field, strconv.Quote(string(kind))+" is the zero time; "+
+				"a stored bound or expiry is a real instant or an absent key, and a zero one "+
+				"would make the refresh token eternal")
+		}
 	}
 	return nil
 }

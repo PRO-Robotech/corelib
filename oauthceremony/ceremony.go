@@ -5,6 +5,7 @@ package oauthceremony
 
 import (
 	"context"
+	"maps"
 	"net/http"
 	"net/url"
 	"slices"
@@ -501,6 +502,9 @@ func (c *Ceremony) CompleteAuthorization(ctx context.Context, intent Authorizati
 	if err := c.checkGrantWithinRequest(intent, grant); err != nil {
 		return AuthorizationResult{}, err
 	}
+	if err := checkGrantBounds(grant.ExpiresAt); err != nil {
+		return AuthorizationResult{}, err
+	}
 
 	for _, scope := range grant.GrantedScopes {
 		intent.requester.GrantScope(scope)
@@ -582,6 +586,25 @@ func (c *Ceremony) checkGrantWithinRequest(intent AuthorizationIntent, grant Aut
 		if !slices.Contains(audiences, audience) {
 			return misuse("AuthorizationGrant.GrantedAudiences carries " + strconv.Quote(audience) +
 				", which the authorization request did not ask for; a grant may narrow the request, never widen it")
+		}
+	}
+	return nil
+}
+
+// checkGrantBounds отвергает границу семейства, равную нулевому времени.
+//
+// Нулевое время — не граница. Движок читает нулевой срок токена обновления как
+// «без срока», и граница-ноль, сжав к себе каждый назначаемый срок, сделала бы
+// семейство БЕССРОЧНЫМ — обратное тому, о чём служба просила, назвав границу.
+// Вид без границы выражается отсутствием ключа, а не нулём. Отказ называет
+// вид; при нескольких нулевых — первый по порядку имени, чтобы текст отказа не
+// зависел от порядка обхода карты.
+func checkGrantBounds(bounds map[TokenKind]time.Time) error {
+	for _, kind := range slices.Sorted(maps.Keys(bounds)) {
+		if bounds[kind].IsZero() {
+			return misuse("AuthorizationGrant.ExpiresAt[" + strconv.Quote(string(kind)) + "] is the zero time; " +
+				"the zero time is no bound (a zero refresh token expiry reads as no expiry at all) — " +
+				"leave the kind out to take its lifespan from the settings")
 		}
 	}
 	return nil

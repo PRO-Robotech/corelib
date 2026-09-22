@@ -11,6 +11,8 @@ package oauthceremony_test
 
 import (
 	"context"
+	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -161,5 +163,189 @@ func TestGrantBoundHoldsTheAuthorizationCode(t *testing.T) {
 			}
 		}
 		requireNotAfter(t, "код авторизации", row.grant.Session.ExpiresAt[oauthceremony.TokenKindAuthorizationCode], bound)
+	}
+}
+
+// ── Нулевое время границы ──────────────────────────────────────────────────
+//
+// Движок читает нулевой срок токена обновления как «без срока»
+// (ValidateRefreshToken: нулевое время — бессрочно). Граница, равная нулевому
+// времени, сжимала бы к нулю каждый назначаемый срок токена обновления — то
+// есть делала бы семейство БЕССРОЧНЫМ, хотя служба, назвав границу, просила
+// обратного. Нулевое время границы — не граница, и ни один путь церемонии не
+// имеет права его принять.
+
+const (
+	// zeroBoundLifespan — срок токена обновления из настроек в пробах
+	// нулевой границы: короткий, чтобы истечение наблюдалось в пробе.
+	zeroBoundLifespan = time.Second
+	// zeroBoundWait — сколько проба ждёт перед оборотом. Больше срока с
+	// запасом на округление движка до секунды (срок назначается
+	// `Round(time.Second)`, то есть до полусекунды позже).
+	zeroBoundWait = 2500 * time.Millisecond
+)
+
+func shortRefreshLifespan(c *oauthceremony.Config) { c.RefreshTokenLifespan = zeroBoundLifespan }
+
+// requireRefreshExpired — оборот отвергнут истечением токена обновления: на
+// проводе `invalid_grant`, в тексте — истечение, а не иной отказ.
+func requireRefreshExpired(t *testing.T, err error) {
+	t.Helper()
+	if err == nil {
+		t.Fatalf("оборот через %s при сроке токена обновления %s принят", zeroBoundWait, zeroBoundLifespan)
+	}
+	if !errors.Is(err, oauthceremony.ErrInvalidGrant) || !strings.Contains(err.Error(), "expired") {
+		t.Fatalf("оборот через %s отвергнут не истечением: случай %v, текст %q", zeroBoundWait, oauthceremony.CodeOf(err), err)
+	}
+}
+
+// TestGSR_ZeroRefreshBound — граница токена обновления, равная нулевому
+// времени, отвергается при выдаче по имени поля; законный близнец без границы
+// показывает, что при этих же настройках токен обновления истекает.
+//
+// Предмет — ИСХОД, а не текст: до правки нулевая граница принималась, и
+// оборот через 2,5 с при сроке 1 с проходил — семейство было бессрочным. Проба
+// в этом случае доводит семейство до оборота, чтобы красное называло вред.
+func TestGSR_ZeroRefreshBound(t *testing.T) {
+	t.Run("близнец без границы истекает по настройкам", func(t *testing.T) {
+		t.Parallel()
+		store := newMemoryPorts()
+		registerTestClient(t, store)
+		ceremony := newTestCeremony(t, store.ports(), shortRefreshLifespan)
+
+		first := exchangeGrant(t, ceremony, grantOfScopes("openid", "offline"))
+		time.Sleep(zeroBoundWait)
+		_, err := ceremony.Exchange(context.Background(), refreshRequest(first.RefreshToken))
+		requireRefreshExpired(t, err)
+	})
+
+	t.Run("нулевая граница токена обновления отвергнута", func(t *testing.T) {
+		t.Parallel()
+		store := newMemoryPorts()
+		registerTestClient(t, store)
+		ceremony := newTestCeremony(t, store.ports(), shortRefreshLifespan)
+
+		grant := grantOfScopes("openid", "offline")
+		grant.ExpiresAt = map[oauthceremony.TokenKind]time.Time{oauthceremony.TokenKindRefresh: {}}
+		result, err := completeWith(t, ceremony, authorizeRequest(), grant)
+		if err == nil {
+			tokens, xerr := ceremony.Exchange(context.Background(), codeExchange(result.Parameters["code"][0]))
+			if xerr != nil {
+				t.Fatalf("нулевая граница принята при выдаче, обмен кода отказал: %v", xerr)
+			}
+			time.Sleep(zeroBoundWait)
+			_, rerr := ceremony.Exchange(context.Background(), refreshRequest(tokens.RefreshToken))
+			if rerr == nil {
+				t.Fatalf("нулевая граница принята при выдаче, и оборот через %s при сроке %s прошёл — семейство бессрочно",
+					zeroBoundWait, zeroBoundLifespan)
+			}
+			t.Fatalf("нулевая граница принята при выдаче; оборот через %s отказал: %v", zeroBoundWait, rerr)
+		}
+		requireZeroBoundRefused(t, store, oauthceremony.TokenKindRefresh, err)
+	})
+}
+
+// requireZeroBoundRefused — выдача с нулевой границей отвергнута как ошибка
+// службы, отказ называет поле и вид, и кода нет в хранилище.
+func requireZeroBoundRefused(t *testing.T, store *memoryPorts, kind oauthceremony.TokenKind, err error) {
+	t.Helper()
+	if !errors.Is(err, oauthceremony.ErrCeremonyMisuse) {
+		t.Fatalf("нулевая граница %s отвергнута случаем %v, ожидался %v: %v",
+			kind, oauthceremony.CodeOf(err), oauthceremony.CodeCeremonyMisuse, err)
+	}
+	if text := err.Error(); !strings.Contains(text, "AuthorizationGrant.ExpiresAt") || !strings.Contains(text, string(kind)) {
+		t.Errorf("отказ не называет поле и вид: %q", text)
+	}
+	store.mu.Lock()
+	stored := len(store.codes)
+	store.mu.Unlock()
+	if stored != 0 {
+		t.Errorf("при отказе в хранилище положено кодов %d шт", stored)
+	}
+}
+
+// TestZeroBoundOfEveryKindIsRefusedByName — нулевое время границы не граница
+// ни у одного объявленного вида: отказ называет поле и вид.
+func TestZeroBoundOfEveryKindIsRefusedByName(t *testing.T) {
+	for _, kind := range []oauthceremony.TokenKind{
+		oauthceremony.TokenKindAccess, oauthceremony.TokenKindRefresh,
+		oauthceremony.TokenKindAuthorizationCode, oauthceremony.TokenKindIdentity,
+	} {
+		t.Run(string(kind), func(t *testing.T) {
+			store := newMemoryPorts()
+			registerTestClient(t, store)
+			ceremony := newTestCeremony(t, store.ports())
+
+			grant := grantOfScopes("openid", "offline")
+			grant.ExpiresAt = map[oauthceremony.TokenKind]time.Time{
+				oauthceremony.TokenKindAccess: time.Now().UTC().Add(time.Minute),
+				kind:                          {},
+			}
+			_, err := completeWith(t, ceremony, authorizeRequest(), grant)
+			if err == nil {
+				t.Fatalf("выдача с нулевой границей %s принята", kind)
+			}
+			requireZeroBoundRefused(t, store, kind, err)
+		})
+	}
+}
+
+// TestStoredZeroInstantIsAContractBreach — запись, отданная хранилищем, несёт
+// нулевое время в границе семейства либо в сроке артефакта: это нарушение
+// контракта порта, и оборот не состоится. Законный близнец — та же запись без
+// правки — оборачивается (отличие — одно значение одного ключа).
+//
+// До правки такая запись принималась: нулевая граница сжимала срок нового
+// токена обновления к нулю, нулевой срок записывался как есть, и оба пути
+// давали бессрочный токен обновления.
+func TestStoredZeroInstantIsAContractBreach(t *testing.T) {
+	cases := map[string]func(*oauthceremony.SessionRecord){
+		"близнец без правки": nil,
+		"SessionRecord.NotAfter": func(s *oauthceremony.SessionRecord) {
+			s.NotAfter = map[oauthceremony.TokenKind]time.Time{oauthceremony.TokenKindRefresh: {}}
+		},
+		"SessionRecord.ExpiresAt": func(s *oauthceremony.SessionRecord) {
+			s.ExpiresAt[oauthceremony.TokenKindRefresh] = time.Time{}
+		},
+	}
+	for name, corrupt := range cases {
+		t.Run(name, func(t *testing.T) {
+			store := newMemoryPorts()
+			registerTestClient(t, store)
+			ceremony := newTestCeremony(t, store.ports())
+
+			first := exchangeGrant(t, ceremony, grantOfScopes("openid", "offline"))
+			if corrupt != nil {
+				store.mu.Lock()
+				if len(store.refresh) != 1 {
+					store.mu.Unlock()
+					t.Fatalf("НЕ ВЫПОЛНИЛОСЬ: токенов обновления в хранилище %d шт, ожидался 1", len(store.refresh))
+				}
+				for _, row := range store.refresh {
+					corrupt(&row.grant.Session)
+				}
+				store.mu.Unlock()
+			}
+
+			next, err := ceremony.Exchange(context.Background(), refreshRequest(first.RefreshToken))
+			if corrupt == nil {
+				if err != nil {
+					t.Fatalf("близнец: оборот отказал: %v", err)
+				}
+				return
+			}
+			if err == nil {
+				t.Fatalf("запись с нулевым %s принята: оборот прошёл, срок нового токена обновления %v", name,
+					introspect(t, ceremony, next.RefreshToken, oauthceremony.TokenKindRefresh).ExpiresAt)
+			}
+			var pe *oauthceremony.ProtocolError
+			if !errors.Is(err, oauthceremony.ErrPortContract) || !errors.As(err, &pe) {
+				t.Fatalf("запись с нулевым %s отвергнута случаем %v, ожидался %v: %v",
+					name, oauthceremony.CodeOf(err), oauthceremony.CodePortContract, err)
+			}
+			if !strings.Contains(pe.Debug, name) || !strings.Contains(pe.Debug, string(oauthceremony.TokenKindRefresh)) {
+				t.Errorf("отказ не называет поле и вид: %q", pe.Debug)
+			}
+		})
 	}
 }
