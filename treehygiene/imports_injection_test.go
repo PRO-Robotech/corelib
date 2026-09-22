@@ -132,6 +132,11 @@ func TestImportConfinementBuildConstrainedFileIsRead(t *testing.T) {
 
 // TestImportConfinementKnowsEveryLawfulFormOfTheSet — каждая законная форма
 // пути набора узнаётся, а соседний модуль с похожим именем — нет.
+//
+// Форма в другом регистре — тоже законная форма: хостинг кода не различает
+// регистра организации и репозитория, и прокси модулей отдаёт модуль под
+// `github.com/Go-Jose/go-jose` так же, как под `github.com/go-jose/go-jose`.
+// Чужой модуль в другом регистре остаётся чужим.
 func TestImportConfinementKnowsEveryLawfulFormOfTheSet(t *testing.T) {
 	set := testRule().Set
 	for _, path := range []string{
@@ -140,6 +145,9 @@ func TestImportConfinementKnowsEveryLawfulFormOfTheSet(t *testing.T) {
 		joseV4JW,
 		joseOld,
 		joseOld + "/jwt",
+		"github.com/Go-Jose/" + "go-jose/v3",
+		"github.com/go-jose/" + "Go-Jose",
+		"gopkg.in/Square/" + "go-jose.v2",
 	} {
 		if !treehygiene.InImportSet(path, set) {
 			t.Errorf("форма %q набора не узнана", path)
@@ -149,6 +157,8 @@ func TestImportConfinementKnowsEveryLawfulFormOfTheSet(t *testing.T) {
 		"github.com/go-jose/" + "go-josex",
 		"github.com/go-jose/" + "other",
 		ourJWT,
+		"github.com/Go-Jose/" + "Go-Josex",
+		"github.com/Golang-JWT/" + "jwt/v5",
 	} {
 		if treehygiene.InImportSet(path, set) {
 			t.Errorf("чужой модуль %q назван набором", path)

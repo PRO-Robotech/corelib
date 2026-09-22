@@ -30,7 +30,8 @@ const subtreeRoot = "internal/oauth2"
 // `gopkg.in/square/go-jose.vN` → `github.com/go-jose/go-jose` и
 // `gopkg.in/go-jose/go-jose.vN`), и подписант на любом из них вне поддерева —
 // второй путь подписи. Перечень выведен опросом прокси модулей; предикат его
-// полноты — forms_test.go.
+// полноты — forms_test.go, в том числе для написаний в другом регистре
+// (сравнение набора — без учёта регистра, treehygiene.ImportConfinement.Set).
 func engineStackRule() treehygiene.ImportConfinement {
 	return treehygiene.ImportConfinement{
 		Name: "стек JOSE движка",
