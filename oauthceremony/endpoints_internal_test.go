@@ -207,7 +207,6 @@ func endpointProbeConfig(authorize, token string) Config {
 		ScopeMatching:             ScopeMatchingExact,
 		RefreshTokenIssuance:      RefreshTokenIssuanceOnScope,
 		RefreshTokenScopes:        []string{"offline"},
-		SecretHashCost:            10,
 		MinParameterEntropy:       8,
 		PortTimeout:               2 * time.Second,
 		OperationTimeout:          5 * time.Second,
@@ -223,5 +222,6 @@ func uncalledPorts() Ports {
 		RefreshTokens:      uncalledRefreshTokens{},
 		Grants:             uncalledGrants{},
 		AccessTokenIssuer:  uncalledAccessTokenIssuer{},
+		ClientSecrets:      uncalledClientSecrets{},
 	}
 }

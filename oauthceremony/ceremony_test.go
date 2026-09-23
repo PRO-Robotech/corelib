@@ -22,7 +22,6 @@ import (
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
-	"golang.org/x/crypto/bcrypt"
 
 	"github.com/PRO-Robotech/corelib/oauthceremony"
 )
@@ -57,7 +56,6 @@ func newTestCeremonyConfig(tweaks ...func(*oauthceremony.Config)) oauthceremony.
 		ScopeMatching:             oauthceremony.ScopeMatchingExact,
 		RefreshTokenIssuance:      oauthceremony.RefreshTokenIssuanceOnScope,
 		RefreshTokenScopes:        []string{"offline"},
-		SecretHashCost:            10,
 		MinParameterEntropy:       8,
 		PortTimeout:               2 * time.Second,
 		OperationTimeout:          5 * time.Second,
@@ -80,16 +78,15 @@ func newTestCeremony(t *testing.T, ports oauthceremony.Ports, tweaks ...func(*oa
 	return ceremony
 }
 
+// registerTestClient регистрирует конфиденциального клиента: запись — в
+// справочнике, проверочное значение секрета — у порта сверки. В записи клиента
+// секрета нет ни в каком виде: его держит служба.
 func registerTestClient(t *testing.T, store *memoryPorts) {
 	t.Helper()
 
-	hash, err := bcrypt.GenerateFromPassword([]byte(testSecret), 10)
-	if err != nil {
-		t.Fatalf("хеш секрета клиента не собран: %v", err)
-	}
+	store.secrets[testClientID] = testSecret
 	store.clients[testClientID] = oauthceremony.ClientRegistration{
 		ClientID:     testClientID,
-		HashedSecret: hash,
 		RedirectURIs: []string{testRedirectURI},
 		GrantKinds: []oauthceremony.GrantKind{
 			oauthceremony.GrantAuthorizationCode,
@@ -590,7 +587,6 @@ func TestNewRejectsEveryUnnamedSetting(t *testing.T) {
 		AuthorizationCodeLifespan: 10 * time.Minute,
 		ScopeMatching:             oauthceremony.ScopeMatchingExact,
 		RefreshTokenIssuance:      oauthceremony.RefreshTokenIssuanceAlways,
-		SecretHashCost:            10,
 		MinParameterEntropy:       8,
 		PortTimeout:               time.Second,
 		OperationTimeout:          time.Second,
@@ -620,8 +616,6 @@ func TestNewRejectsEveryUnnamedSetting(t *testing.T) {
 		"RefreshTokenScopes пуст при OnScope": func(c *oauthceremony.Config) {
 			c.RefreshTokenIssuance = oauthceremony.RefreshTokenIssuanceOnScope
 		},
-		"SecretHashCost ниже предела": func(c *oauthceremony.Config) { c.SecretHashCost = 4 },
-		"SecretHashCost выше предела": func(c *oauthceremony.Config) { c.SecretHashCost = 31 },
 		"MinParameterEntropy занижен": func(c *oauthceremony.Config) { c.MinParameterEntropy = 4 },
 		"PortTimeout не назван":       func(c *oauthceremony.Config) { c.PortTimeout = 0 },
 		"OperationTimeout не назван":  func(c *oauthceremony.Config) { c.OperationTimeout = 0 },
@@ -663,7 +657,6 @@ func TestNewRejectsAnEndpointThatIsNotAnAbsoluteAddress(t *testing.T) {
 		AuthorizationCodeLifespan: 10 * time.Minute,
 		ScopeMatching:             oauthceremony.ScopeMatchingExact,
 		RefreshTokenIssuance:      oauthceremony.RefreshTokenIssuanceAlways,
-		SecretHashCost:            10,
 		MinParameterEntropy:       8,
 		PortTimeout:               time.Second,
 		OperationTimeout:          time.Second,
@@ -768,7 +761,6 @@ func TestNewRejectsEveryMissingPort(t *testing.T) {
 		AuthorizationCodeLifespan: 10 * time.Minute,
 		ScopeMatching:             oauthceremony.ScopeMatchingExact,
 		RefreshTokenIssuance:      oauthceremony.RefreshTokenIssuanceAlways,
-		SecretHashCost:            10,
 		MinParameterEntropy:       8,
 		PortTimeout:               time.Second,
 		OperationTimeout:          time.Second,
@@ -786,6 +778,7 @@ func TestNewRejectsEveryMissingPort(t *testing.T) {
 		"RefreshTokens":      func(p *oauthceremony.Ports) { p.RefreshTokens = nil },
 		"Grants":             func(p *oauthceremony.Ports) { p.Grants = nil },
 		"AccessTokenIssuer":  func(p *oauthceremony.Ports) { p.AccessTokenIssuer = nil },
+		"ClientSecrets":      func(p *oauthceremony.Ports) { p.ClientSecrets = nil },
 	}
 	for name, drop := range cases {
 		t.Run(name, func(t *testing.T) {

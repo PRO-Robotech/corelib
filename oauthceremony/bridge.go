@@ -152,19 +152,134 @@ func pairEngine(ctx context.Context, ours *ProtocolError, engineSentinel error) 
 
 // ── Справочник клиентов ─────────────────────────────────────────────────────
 
+// GetClient отдаёт движку запись клиента.
+//
+// # Клиент, которого справочник не знает, в доказательстве клиента
+//
+// В операции, где клиент доказывает себя (обмен, интроспекция, отзыв —
+// operationNotes.provesClient), движок спрашивает справочник ради
+// доказательства и на «клиента нет» отказывает СРАЗУ, не сверяя секрета.
+// Отказ неизвестному клиенту стоил бы тогда меньше отказа неверному секрету, а
+// на интроспекции ещё и назывался бы другими словами: время и текст ответа
+// стали бы прибором для перебора зарегистрированных клиентов.
+//
+// Поэтому неизвестному клиенту здесь отдаётся представление без единого права
+// (unregisteredClient), и движок идёт тем же путём, что с известным: к сверке
+// секрета портом службы (clientSecretHasher) — ровно один раз, — и отказ
+// приходит оттуда же и теми же словами. Доказать себя такое представление не
+// может: «совпал» о нём — нарушение контракта порта (verifyClientSecret).
+//
+// Вне доказательства клиента (точка авторизации) «клиента нет» — отказ, как
+// прежде: секрета там не предъявляют.
+//
+// Клиент, о котором спросили, записывается в ведомость операции: по ней хешер
+// церемонии узнаёт, чей секрет сверять.
 func (b *storageBridge) GetClient(ctx context.Context, id string) (engine.Client, error) {
 	ctx, cancel := b.deadline(ctx)
 	defer cancel()
 
+	notes := notesFrom(ctx)
 	reg, err := b.ports.Clients.LookupClient(ctx, id)
 	if err != nil {
 		ours := fromPort("ClientDirectory.LookupClient", err)
-		if ours.Code == CodeGrantNotFound {
+		switch {
+		case ours.Code == CodeGrantNotFound && notes.provesClient():
+			notes.noteClientClaim(id, false)
+			return unregisteredClientOf(id), nil
+		case ours.Code == CodeGrantNotFound:
 			return nil, pairEngine(ctx, ours, engine.ErrNotFound)
+		default:
+			return nil, note(ctx, ours)
 		}
-		return nil, note(ctx, ours)
 	}
+	notes.noteClientClaim(id, true)
 	return clientViewOf(reg), nil
+}
+
+// ── Сверка секрета клиента ──────────────────────────────────────────────────
+
+// clientSecretHasher — хешер секретов в настройках движка, который сверяет
+// портом службы (Ports.ClientSecrets).
+//
+// Движок сверяет секрет клиента на двух путях — доказательство точек токена и
+// отзыва и своё у интроспекции, — и оба зовут хешер настроек ровно один раз на
+// клиента: прежних проверочных значений у представлений клиента нет (оборот
+// секретов — забота службы), и других сверок движок не делает. Хешер движка
+// по умолчанию на этих путях не участвует: функцию, цену и сравнение выбирает
+// служба.
+//
+// Хешировать хешер церемонии не умеет: проверочное значение чеканит служба.
+type clientSecretHasher struct {
+	bridge *storageBridge
+}
+
+// Compare сверяет предъявленный секрет портом службы. Проверочного значения,
+// которое передаёт движок, у церемонии нет — представления клиента отдают его
+// пустым; клиента хешер берёт из ведомости операции.
+func (h clientSecretHasher) Compare(ctx context.Context, _, presented []byte) error {
+	return h.bridge.verifyClientSecret(ctx, presented)
+}
+
+// Hash отказывает: проверочное значение секрета чеканит служба, а не
+// церемония (см. clientSecretHasher).
+func (clientSecretHasher) Hash(context.Context, []byte) ([]byte, error) {
+	return nil, misuse("the ceremony mints no client secret hash; the verification value belongs to the service")
+}
+
+var _ engine.Hasher = clientSecretHasher{}
+
+// verifyClientSecret — одна сверка секрета клиента, которого операция
+// доказывает.
+//
+// Исход порта становится ответом движку так:
+//   - «совпал» о зарегистрированном клиенте — клиент доказан;
+//   - «не совпал» — отказ clientSecretRefused, на который движок отвечает своим
+//     отказом доказательства: одним и тем же для неизвестного клиента и для
+//     неверного секрета;
+//   - отказ порта, вердикт вне словаря, «совпал» о клиенте, которого справочник
+//     не знает, и сверка вне доказательства клиента — отказ ОПЕРАЦИИ. Он
+//     пишется в ведомость любым случаем: на интроспекции движок отказа хешера
+//     не оборачивает, а на точке токена оборачивает в «клиент не доказан», и
+//     без записи несостоявшаяся сверка стала бы вердиктом «не совпал».
+func (b *storageBridge) verifyClientSecret(ctx context.Context, presented []byte) error {
+	const op = "ClientSecretVerifier.VerifyClientSecret"
+	notes := notesFrom(ctx)
+	fail := func(failure *ProtocolError) error {
+		notes.record(failure)
+		return failure
+	}
+
+	claim, named := notes.claimedClient()
+	if !named {
+		return fail(failf(CodeCeremonyMisuse, nil,
+			"The authorization server was asked to verify a client secret outside a client authentication.", "",
+			op+": the operation looked up no client for authentication; the port was not called"))
+	}
+
+	ctx, cancel := b.deadline(ctx)
+	defer cancel()
+
+	verdict, err := b.ports.ClientSecrets.VerifyClientSecret(ctx, claim.clientID, NewPresentedSecret(string(presented)))
+	switch {
+	case err != nil:
+		return fail(fromPort(op, err))
+	case !verdict.Declared():
+		return fail(contractBreach(op, "the verdict is neither SecretMatched nor SecretMismatched"))
+	case verdict == SecretMatched && !claim.registered:
+		return fail(contractBreach(op, "the verifier matched the secret of a client the directory does not know"))
+	case verdict == SecretMatched:
+		return nil
+	default:
+		return clientSecretRefused()
+	}
+}
+
+// clientSecretRefused — «секрет не совпал». Один конструктор и один текст на
+// оба случая, которые обязаны быть неотличимы: неизвестный клиент и неверный
+// секрет.
+func clientSecretRefused() *ProtocolError {
+	return failf(CodeInvalidClient, nil, "The client could not be authenticated.", "",
+		"ClientSecretVerifier.VerifyClientSecret: the presented secret did not match")
 }
 
 // ClientAssertionJWTValid и SetClientAssertionJWT — часть контракта

@@ -108,11 +108,6 @@ type Config struct {
 	// RefreshTokenIssuanceAlways, иначе у правила было бы два места.
 	RefreshTokenScopes []string
 
-	// SecretHashCost — цена хеширования секрета клиента. Обязана быть в
-	// пределах [10, 15]: ниже — подбор дёшев, выше — сверка секрета
-	// становится прибором для отказа в обслуживании.
-	SecretHashCost int
-
 	// MinParameterEntropy — минимальная длина `state` и `nonce` в
 	// символах. Обязана быть не меньше 8 (RFC 6749 §10.10 требует не
 	// менее 128 бит для непредсказуемых значений; 8 символов — нижняя
@@ -210,6 +205,8 @@ func New(cfg Config, ports Ports) (*Ceremony, error) {
 		return nil, err
 	}
 
+	bridge, store := newStorageBridge(ports, cfg.PortTimeout)
+
 	// Издателя (AccessTokenIssuer, IDTokenIssuer) настройки движка не
 	// называют: его читают лишь стратегии JWT движка, а New строит свою
 	// стратегию (artifactStrategy, ниже), которая его не читает. Код
@@ -227,7 +224,6 @@ func New(cfg Config, ports Ports) (*Ceremony, error) {
 		AccessTokenLifespan:            cfg.AccessTokenLifespan,
 		RefreshTokenLifespan:           cfg.RefreshTokenLifespan,
 		AuthorizeCodeLifespan:          cfg.AuthorizationCodeLifespan,
-		HashCost:                       cfg.SecretHashCost,
 		MinParameterEntropy:            cfg.MinParameterEntropy,
 		ScopeStrategy:                  scopeStrategyOf(cfg.ScopeMatching),
 		AudienceMatchingStrategy:       engine.DefaultAudienceMatchingStrategy,
@@ -244,18 +240,20 @@ func New(cfg Config, ports Ports) (*Ceremony, error) {
 		// обработчик PKCE движка (см. storageBridge.GetPKCERequestSession).
 		SanitationWhiteList: []string{"code", "redirect_uri", formCodeChallenge, formCodeChallengeMethod},
 	}
-	// Хешер секрета клиента назван ЗДЕСЬ, а не оставлен движку. Геттер движка
-	// заполняет неназванное поле ЛЕНИВО — первым вызовом и без синхронизации,
-	// — и первые одновременные обмены писали бы его из одного запроса под
-	// чтением из другого: гонка данных. Значение — то же, что завёл бы движок:
-	// bcrypt, цена — SecretHashCost. Два других лениво заполняемых поля,
-	// ScopeStrategy и AudienceMatchingStrategy, названы выше; четвёртое,
-	// JWKSFetcherStrategy, не названо намеренно — путь запроса церемонии его
-	// геттера не достигает. Предикат всех трёх утверждений — проба
+	// Секрет клиента сверяет порт службы (Ports.ClientSecrets), а не хешер
+	// движка: хешер настроек — clientSecretHasher, и цены хеширования у
+	// церемонии нет. Проверочное значение, его функцию и цену выбирает служба.
+	//
+	// Поле названо ЗДЕСЬ ещё и потому, что геттер движка заполняет неназванное
+	// ЛЕНИВО — первым вызовом и без синхронизации, — и первые одновременные
+	// обмены писали бы его из одного запроса под чтением из другого: гонка
+	// данных. Два других лениво заполняемых поля, ScopeStrategy и
+	// AudienceMatchingStrategy, названы выше; четвёртое, JWKSFetcherStrategy, не
+	// названо намеренно — путь запроса церемонии его геттера не достигает.
+	// Предикат всех трёх утверждений — проба
 	// TestEngineSettingsBuiltByNewAreOnlyReadOnTheRequestPath.
-	engineCfg.ClientSecretsHasher = &engine.BCrypt{Config: engineCfg}
+	engineCfg.ClientSecretsHasher = clientSecretHasher{bridge: bridge}
 
-	bridge, store := newStorageBridge(ports, cfg.PortTimeout)
 	coreStore, ok := store.(enginehandler.CoreStorage)
 	if !ok {
 		// Недостижимо: соответствие моста закреплено утверждениями
@@ -350,11 +348,7 @@ var (
 )
 
 func validateConfig(cfg *Config) error {
-	const (
-		minHashCost = 10
-		maxHashCost = 15
-		minEntropy  = 8
-	)
+	const minEntropy = 8
 	switch {
 	case cfg.AccessTokenLifespan <= 0:
 		return misuse("Config.AccessTokenLifespan is not a positive duration")
@@ -376,8 +370,6 @@ func validateConfig(cfg *Config) error {
 		return misuse("Config.RefreshTokenScopes is empty while Config.RefreshTokenIssuance is RefreshTokenIssuanceOnScope")
 	case cfg.RefreshTokenIssuance == RefreshTokenIssuanceAlways && len(cfg.RefreshTokenScopes) != 0:
 		return misuse("Config.RefreshTokenScopes is set while Config.RefreshTokenIssuance is RefreshTokenIssuanceAlways")
-	case cfg.SecretHashCost < minHashCost || cfg.SecretHashCost > maxHashCost:
-		return misuse("Config.SecretHashCost is outside the range [10, 15]")
 	case cfg.MinParameterEntropy < minEntropy:
 		return misuse("Config.MinParameterEntropy is below 8 characters")
 	case cfg.PortTimeout <= 0:
@@ -443,6 +435,8 @@ func validatePorts(ports Ports) error {
 		return misuse("Ports.Grants is not named")
 	case ports.AccessTokenIssuer == nil:
 		return misuse("Ports.AccessTokenIssuer is not named")
+	case ports.ClientSecrets == nil:
+		return misuse("Ports.ClientSecrets is not named; the client secret is verified by the service, not by the engine")
 	}
 	return nil
 }
@@ -1036,7 +1030,13 @@ func (c *Ceremony) Revoke(ctx context.Context, req RevocationRequest) error {
 // ── Сборка запросов для движка ──────────────────────────────────────────────
 
 // postForm собирает запрос точки токена вместе с доказательством клиента.
+//
+// Запрос с доказательством клиента — это и отметка операции: она доказывает
+// клиента, и справочник в ней спрашивают ради доказательства (см.
+// storageBridge.GetClient).
 func (c *Ceremony) postForm(ctx context.Context, form url.Values, clientID, clientSecret string, method ClientAuthMethod) (*http.Request, error) {
+	notesFrom(ctx).expectClientProof()
+
 	if method == "" {
 		if clientSecret == "" {
 			method = ClientAuthNone

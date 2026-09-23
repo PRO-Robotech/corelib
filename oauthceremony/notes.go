@@ -96,6 +96,16 @@ import (
 // Опознание предъявленного токена доступа движок спрашивает методом, который
 // отказать не умеет (artifactStrategy.AccessTokenSignature). Отказ опознания
 // записывается сюда, и мост отвечает им на выборку по пустой подписи.
+//
+// # Шестое: клиент, который доказывает себя
+//
+// Секрет клиента сверяет порт службы, а движок передаёт хешеру настроек только
+// предъявленный секрет и проверочное значение записи, которого у церемонии нет
+// (clientSecretHasher). Кого сверять, хешер узнаёт отсюда: операция, в которой
+// клиент доказывает себя (обмен, интроспекция, отзыв), отмечает это до движка,
+// а мост записывает клиента, о котором движок спросил справочник, — и знает ли
+// его справочник. Без отметки клиент не записывается: вне доказательства
+// сверять некого, и хешер, позванный там, отказывает, не позвав порта.
 type operationNotes struct {
 	mu      sync.Mutex
 	precise *ProtocolError
@@ -118,6 +128,20 @@ type operationNotes struct {
 	// unidentified — отказ последнего опознания токена доступа. Пусто —
 	// опознание либо состоялось, либо ответило «токен не наш».
 	unidentified *ProtocolError
+	// proving — операция доказывает клиента. Ложь — не доказывает (точка
+	// авторизации) или ведомость вне операции.
+	proving bool
+	// claim — клиент, которого операция доказывает; claimed — справочник о
+	// нём спросили.
+	claim   clientClaim
+	claimed bool
+}
+
+// clientClaim — клиент, названный в доказательстве, и знает ли его
+// справочник.
+type clientClaim struct {
+	clientID   string
+	registered bool
 }
 
 // replayedFamily — грант повторённого артефакта, клиент, которому грант
@@ -362,4 +386,50 @@ func (n *operationNotes) unidentifiedFailure() *ProtocolError {
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	return n.unidentified
+}
+
+// expectClientProof отмечает, что операция доказывает клиента.
+func (n *operationNotes) expectClientProof() {
+	if n == nil {
+		return
+	}
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	n.proving = true
+}
+
+// provesClient отвечает, доказывает ли операция клиента. Без ведомости — нет.
+func (n *operationNotes) provesClient() bool {
+	if n == nil {
+		return false
+	}
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	return n.proving
+}
+
+// noteClientClaim записывает клиента, о котором движок спросил справочник, и
+// знает ли его справочник. Вне доказательства клиента не записывает ничего.
+func (n *operationNotes) noteClientClaim(clientID string, registered bool) {
+	if n == nil {
+		return
+	}
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	if !n.proving {
+		return
+	}
+	n.claim = clientClaim{clientID: clientID, registered: registered}
+	n.claimed = true
+}
+
+// claimedClient отдаёт клиента, которого операция доказывает; ложь —
+// справочник о доказывающем в этой операции не спрашивали (или ведомости нет).
+func (n *operationNotes) claimedClient() (clientClaim, bool) {
+	if n == nil {
+		return clientClaim{}, false
+	}
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	return n.claim, n.claimed
 }

@@ -175,6 +175,10 @@ func runtimeRoster() map[string]reflect.Type {
 		"UnitOfWork":        reflect.TypeOf((*oauthceremony.UnitOfWork)(nil)).Elem(),
 		"AccessTokenIssuer": reflect.TypeOf((*oauthceremony.AccessTokenIssuer)(nil)).Elem(),
 		"IssuedAccessToken": reflect.TypeOf(oauthceremony.IssuedAccessToken{}),
+		"ClientSecretVerifier": reflect.TypeOf(
+			(*oauthceremony.ClientSecretVerifier)(nil)).Elem(),
+		"PresentedSecret": reflect.TypeOf(oauthceremony.PresentedSecret{}),
+		"SecretVerdict":   reflect.TypeOf(oauthceremony.SecretVerdict(0)),
 	}
 }
 

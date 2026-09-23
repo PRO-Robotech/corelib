@@ -151,12 +151,13 @@ var offRequestPath = []struct {
 		write: getterWrite{method: "GetJWKSFetcherStrategy", field: "JWKSFetcherStrategy"},
 		why: "набор ключей клиента по адресу движок запрашивает только у клиента, " +
 			"реализующего engine.OpenIDConnectClient (утверждение клиента и объект запроса), " +
-			"а представление клиента церемонии его не реализует (clientViewOf). Назвать поле " +
+			"а представления клиента церемонии его не реализуют (clientViewOf, unregisteredClientOf). Назвать поле " +
 			"умолчанием движка значило бы запустить в New фоновый исполнитель кеша ключей " +
 			"без способа его остановить — ради пути, которого нет",
 		stillOff: func() bool {
-			_, oidc := clientViewOf(ClientRegistration{}).(engine.OpenIDConnectClient)
-			return !oidc
+			_, registered := clientViewOf(ClientRegistration{}).(engine.OpenIDConnectClient)
+			_, unregistered := unregisteredClientOf("probe-client").(engine.OpenIDConnectClient)
+			return !registered && !unregistered
 		},
 	},
 }
@@ -171,6 +172,7 @@ type (
 	uncalledRefreshTokens      struct{ RefreshTokenVault }
 	uncalledGrants             struct{ GrantRevoker }
 	uncalledAccessTokenIssuer  struct{ AccessTokenIssuer }
+	uncalledClientSecrets      struct{ ClientSecretVerifier }
 )
 
 // uncalledGrantIDHook — крючок чеканки идентификатора гранта, которого обход
@@ -194,7 +196,6 @@ func engineConfigOfNewCeremony(t *testing.T) *engine.Config {
 		ScopeMatching:             ScopeMatchingExact,
 		RefreshTokenIssuance:      RefreshTokenIssuanceOnScope,
 		RefreshTokenScopes:        []string{"offline"},
-		SecretHashCost:            10,
 		MinParameterEntropy:       8,
 		PortTimeout:               2 * time.Second,
 		OperationTimeout:          5 * time.Second,
@@ -206,6 +207,7 @@ func engineConfigOfNewCeremony(t *testing.T) *engine.Config {
 		RefreshTokens:      uncalledRefreshTokens{},
 		Grants:             uncalledGrants{},
 		AccessTokenIssuer:  uncalledAccessTokenIssuer{},
+		ClientSecrets:      uncalledClientSecrets{},
 	})
 	if err != nil {
 		t.Fatalf("New не собрал церемонию: %v", err)
@@ -337,8 +339,8 @@ func TestGetterWriteCensusIsSilentWhenEveryLazyFieldIsNamed(t *testing.T) {
 		ScopeStrategy:            engine.ExactScopeStrategy,
 		AudienceMatchingStrategy: engine.DefaultAudienceMatchingStrategy,
 		JWKSFetcherStrategy:      namedFetcher{},
+		ClientSecretsHasher:      clientSecretHasher{},
 	}
-	cfg.ClientSecretsHasher = &engine.BCrypt{Config: cfg}
 
 	census := censusGetterWrites(cfg)
 	requireCensusCovered(t, census)

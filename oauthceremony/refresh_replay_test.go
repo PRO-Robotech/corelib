@@ -342,6 +342,7 @@ func TestReplayOfATokenWhoseClientIsGoneStillRevokesTheFamily(t *testing.T) {
 	other := store.clients[testClientID]
 	other.ClientID = otherClientID
 	store.clients[otherClientID] = other
+	store.secrets[otherClientID] = testSecret
 	ceremony := newTestCeremony(t, store.ports())
 
 	first := exchangeCode(t, ceremony)
