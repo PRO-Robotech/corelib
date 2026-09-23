@@ -46,21 +46,19 @@ func newTestCeremony(t *testing.T, ports oauthceremony.Ports, tweaks ...func(*oa
 	t.Helper()
 
 	cfg := oauthceremony.Config{
-		AuthorizationEndpoint:           testAuthorizationEndpoint,
-		TokenEndpoint:                   testTokenEndpoint,
-		SigningSecret:                   []byte("0123456789abcdef0123456789abcdef"),
-		AccessTokenLifespan:             time.Hour,
-		RefreshTokenLifespan:            24 * time.Hour,
-		AuthorizationCodeLifespan:       10 * time.Minute,
-		ScopeMatching:                   oauthceremony.ScopeMatchingExact,
-		RefreshTokenIssuance:            oauthceremony.RefreshTokenIssuanceOnScope,
-		RefreshTokenScopes:              []string{"offline"},
-		RequireProofKey:                 true,
-		RequireProofKeyForPublicClients: true,
-		SecretHashCost:                  10,
-		MinParameterEntropy:             8,
-		PortTimeout:                     2 * time.Second,
-		OperationTimeout:                5 * time.Second,
+		AuthorizationEndpoint:     testAuthorizationEndpoint,
+		TokenEndpoint:             testTokenEndpoint,
+		SigningSecret:             []byte("0123456789abcdef0123456789abcdef"),
+		AccessTokenLifespan:       time.Hour,
+		RefreshTokenLifespan:      24 * time.Hour,
+		AuthorizationCodeLifespan: 10 * time.Minute,
+		ScopeMatching:             oauthceremony.ScopeMatchingExact,
+		RefreshTokenIssuance:      oauthceremony.RefreshTokenIssuanceOnScope,
+		RefreshTokenScopes:        []string{"offline"},
+		SecretHashCost:            10,
+		MinParameterEntropy:       8,
+		PortTimeout:               2 * time.Second,
+		OperationTimeout:          5 * time.Second,
 	}
 	for _, tweak := range tweaks {
 		tweak(&cfg)
@@ -769,7 +767,6 @@ func TestNewRejectsEveryMissingPort(t *testing.T) {
 		"AccessTokens":       func(p *oauthceremony.Ports) { p.AccessTokens = nil },
 		"RefreshTokens":      func(p *oauthceremony.Ports) { p.RefreshTokens = nil },
 		"Grants":             func(p *oauthceremony.Ports) { p.Grants = nil },
-		"ProofKeys":          func(p *oauthceremony.Ports) { p.ProofKeys = nil },
 	}
 	for name, drop := range cases {
 		t.Run(name, func(t *testing.T) {

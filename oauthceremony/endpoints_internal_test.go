@@ -199,21 +199,19 @@ func driveEverySynthesizedRequest(t *testing.T, c *Ceremony) {
 
 func endpointProbeConfig(authorize, token string) Config {
 	return Config{
-		AuthorizationEndpoint:           authorize,
-		TokenEndpoint:                   token,
-		SigningSecret:                   []byte("0123456789abcdef0123456789abcdef"),
-		AccessTokenLifespan:             time.Hour,
-		RefreshTokenLifespan:            24 * time.Hour,
-		AuthorizationCodeLifespan:       10 * time.Minute,
-		ScopeMatching:                   ScopeMatchingExact,
-		RefreshTokenIssuance:            RefreshTokenIssuanceOnScope,
-		RefreshTokenScopes:              []string{"offline"},
-		RequireProofKey:                 true,
-		RequireProofKeyForPublicClients: true,
-		SecretHashCost:                  10,
-		MinParameterEntropy:             8,
-		PortTimeout:                     2 * time.Second,
-		OperationTimeout:                5 * time.Second,
+		AuthorizationEndpoint:     authorize,
+		TokenEndpoint:             token,
+		SigningSecret:             []byte("0123456789abcdef0123456789abcdef"),
+		AccessTokenLifespan:       time.Hour,
+		RefreshTokenLifespan:      24 * time.Hour,
+		AuthorizationCodeLifespan: 10 * time.Minute,
+		ScopeMatching:             ScopeMatchingExact,
+		RefreshTokenIssuance:      RefreshTokenIssuanceOnScope,
+		RefreshTokenScopes:        []string{"offline"},
+		SecretHashCost:            10,
+		MinParameterEntropy:       8,
+		PortTimeout:               2 * time.Second,
+		OperationTimeout:          5 * time.Second,
 	}
 }
 
@@ -224,6 +222,5 @@ func uncalledPorts() Ports {
 		AccessTokens:       uncalledAccessTokens{},
 		RefreshTokens:      uncalledRefreshTokens{},
 		Grants:             uncalledGrants{},
-		ProofKeys:          uncalledProofKeys{},
 	}
 }

@@ -17,14 +17,21 @@ import (
 	"context"
 	"errors"
 	"sync"
+	"testing"
 	"time"
 
 	"github.com/PRO-Robotech/corelib/oauthceremony"
 )
 
+// codeRow — строка кода авторизации так, как её держит служба: грант, привязка
+// к доказательству владения ключом (вызов и метод — колонки той же строки, как
+// `code_challenge` и `code_challenge_method` у `authorization_codes` службы
+// доступа) и отметка погашения.
 type codeRow struct {
-	grant    oauthceremony.GrantRecord
-	consumed bool
+	grant     oauthceremony.GrantRecord
+	challenge string
+	method    string
+	consumed  bool
 }
 
 type refreshRow struct {
@@ -40,7 +47,6 @@ type memoryPorts struct {
 	codes   map[string]*codeRow
 	access  map[string]oauthceremony.GrantRecord
 	refresh map[string]*refreshRow
-	proof   map[string]oauthceremony.GrantRecord
 
 	// revoked — гранты, чьё семейство отозвано. Ведётся подставкой, чтобы
 	// проба утверждала СОСТОЯНИЕ гранта после отказа, а не только текст
@@ -54,25 +60,16 @@ type memoryPorts struct {
 	// fetchRefreshOverride подменяет исход выборки токена обновления.
 	fetchRefreshOverride func(signature string) (oauthceremony.GrantRecord, error)
 	// fetchCodeOverride подменяет исход выборки кода авторизации.
-	fetchCodeOverride func(signature string) (oauthceremony.GrantRecord, error)
+	fetchCodeOverride func(signature string) (oauthceremony.AuthorizationCodeRecord, error)
 
 	// refreshFetchGate — точка встречи одновременных выборок токена
 	// обновления. Пусто — выборка не ждёт никого.
 	refreshFetchGate *rendezvous
 
-	// codeFetchGate, proofFetchGate, consumeGate — точки встречи
-	// одновременных обменов одного кода: на выборке кода (до выборки PKCE),
-	// на выборке запроса PKCE и перед погашением кода. Пусто — не ждёт никто.
-	codeFetchGate  *rendezvous
-	proofFetchGate *rendezvous
-	consumeGate    *rendezvous
-
-	// proofTaken — если задан, ВТОРАЯ и последующие выборки запроса PKCE ждут,
-	// пока первую запись PKCE не снимут. Так воспроизводится ровно тот
-	// порядок, в котором проигравший обмен находит запись PKCE уже снятой.
-	proofTaken     chan struct{}
-	proofTakenOnce sync.Once
-	proofFetches   int
+	// codeFetchGate, consumeGate — точки встречи одновременных обменов одного
+	// кода: на выборке кода и перед его погашением. Пусто — не ждёт никто.
+	codeFetchGate *rendezvous
+	consumeGate   *rendezvous
 
 	// revokeFailure — отказ порта отзыва. Пусто — отзыв исполняется.
 	revokeFailure error
@@ -189,13 +186,70 @@ func (m *memoryPorts) revocationsOf(grantID string) []revocationCall {
 	return calls
 }
 
+// storedCodeView — единственная выданная запись кода так, как её видит служба.
+type storedCodeView struct {
+	signature string
+	challenge string
+	method    string
+	form      map[string][]string
+}
+
+// storedCode отдаёт единственную запись кода. Запись не одна — проба не
+// создала своего условия, и это «не выполнилось», а не красное.
+func (m *memoryPorts) storedCode(t *testing.T) storedCodeView {
+	t.Helper()
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if len(m.codes) != 1 {
+		t.Fatalf("НЕ ВЫПОЛНИЛОСЬ: в хранилище кодов %d шт, ожидался 1", len(m.codes))
+	}
+	for signature, row := range m.codes {
+		return storedCodeView{signature: signature, challenge: row.challenge, method: row.method, form: row.grant.Form}
+	}
+	return storedCodeView{}
+}
+
+// rebindStoredCode переписывает привязку единственной записи кода — так, как её
+// переписала бы служба (или порча строки) между выдачей и обменом.
+func (m *memoryPorts) rebindStoredCode(t *testing.T, challenge, method string) {
+	t.Helper()
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if len(m.codes) != 1 {
+		t.Fatalf("НЕ ВЫПОЛНИЛОСЬ: в хранилище кодов %d шт, ожидался 1", len(m.codes))
+	}
+	for _, row := range m.codes {
+		row.challenge, row.method = challenge, method
+	}
+}
+
+// recordsUnder — сколько записей ВСЕХ хранилищ подставки лежит под подписью
+// signature. У выданного кода она ровно одна — его собственная.
+func (m *memoryPorts) recordsUnder(signature string) int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	n := 0
+	if _, found := m.codes[signature]; found {
+		n++
+	}
+	if _, found := m.access[signature]; found {
+		n++
+	}
+	if _, found := m.refresh[signature]; found {
+		n++
+	}
+	return n
+}
+
 func newMemoryPorts() *memoryPorts {
 	return &memoryPorts{
 		clients: map[string]oauthceremony.ClientRegistration{},
 		codes:   map[string]*codeRow{},
 		access:  map[string]oauthceremony.GrantRecord{},
 		refresh: map[string]*refreshRow{},
-		proof:   map[string]oauthceremony.GrantRecord{},
 		revoked: map[string]bool{},
 	}
 }
@@ -207,7 +261,6 @@ func (m *memoryPorts) ports() oauthceremony.Ports {
 		AccessTokens:       m,
 		RefreshTokens:      m,
 		Grants:             m,
-		ProofKeys:          m,
 	}
 }
 
@@ -233,7 +286,7 @@ func (m *memoryPorts) LookupClient(ctx context.Context, clientID string) (oauthc
 
 // ── AuthorizationCodeVault ──────────────────────────────────────────────────
 
-func (m *memoryPorts) StoreAuthorizationCode(_ context.Context, signature string, grant oauthceremony.GrantRecord) (oauthceremony.StoreOutcome, error) {
+func (m *memoryPorts) StoreAuthorizationCode(_ context.Context, signature string, code oauthceremony.AuthorizationCodeRecord) (oauthceremony.StoreOutcome, error) {
 	if m.storeOverride != nil {
 		return m.storeOverride(signature)
 	}
@@ -243,23 +296,27 @@ func (m *memoryPorts) StoreAuthorizationCode(_ context.Context, signature string
 	if _, taken := m.codes[signature]; taken {
 		return oauthceremony.StoreOutcome{}, oauthceremony.ErrStorageConflict
 	}
-	m.codes[signature] = &codeRow{grant: grant}
+	m.codes[signature] = &codeRow{
+		grant:     code.Grant,
+		challenge: code.ProofKey.Challenge,
+		method:    string(code.ProofKey.Method),
+	}
 	return oauthceremony.RowsTouched(1), nil
 }
 
 // FetchAuthorizationCode читает строку ДО встречи — по той же причине, что
 // FetchRefreshToken.
-func (m *memoryPorts) FetchAuthorizationCode(ctx context.Context, signature string) (oauthceremony.GrantRecord, error) {
+func (m *memoryPorts) FetchAuthorizationCode(ctx context.Context, signature string) (oauthceremony.AuthorizationCodeRecord, error) {
 	rec, err := m.readCodeRow(signature)
 	if m.codeFetchGate != nil {
 		if meetErr := m.codeFetchGate.meet(ctx); meetErr != nil {
-			return oauthceremony.GrantRecord{}, meetErr
+			return oauthceremony.AuthorizationCodeRecord{}, meetErr
 		}
 	}
 	return rec, err
 }
 
-func (m *memoryPorts) readCodeRow(signature string) (oauthceremony.GrantRecord, error) {
+func (m *memoryPorts) readCodeRow(signature string) (oauthceremony.AuthorizationCodeRecord, error) {
 	if m.fetchCodeOverride != nil {
 		return m.fetchCodeOverride(signature)
 	}
@@ -267,16 +324,22 @@ func (m *memoryPorts) readCodeRow(signature string) (oauthceremony.GrantRecord, 
 	defer m.mu.Unlock()
 
 	row, found := m.codes[signature]
-	switch {
-	case !found:
-		return oauthceremony.GrantRecord{}, oauthceremony.ErrGrantNotFound
-	case row.consumed:
-		// Грант отдаётся ВМЕСТЕ с отказом: по нему движок отзывает
-		// выданные артефакты.
-		return row.grant, oauthceremony.ErrAuthorizationCodeConsumed
-	default:
-		return row.grant, nil
+	if !found {
+		return oauthceremony.AuthorizationCodeRecord{}, oauthceremony.ErrGrantNotFound
 	}
+	rec := oauthceremony.AuthorizationCodeRecord{
+		Grant: row.grant,
+		ProofKey: oauthceremony.ProofKeyBinding{
+			Challenge: row.challenge,
+			Method:    oauthceremony.ProofKeyMethod(row.method),
+		},
+	}
+	if row.consumed {
+		// Запись отдаётся ВМЕСТЕ с отказом: по её гранту движок отзывает
+		// выданные артефакты.
+		return rec, oauthceremony.ErrAuthorizationCodeConsumed
+	}
+	return rec, nil
 }
 
 // ConsumeAuthorizationCode — одна операция под замком, как одна инструкция
@@ -469,68 +532,6 @@ func (m *memoryPorts) RevokeGrantAccessTokens(_ context.Context, grantID string,
 	return oauthceremony.RowsTouched(touched), nil
 }
 
-// ── ProofKeyVault ───────────────────────────────────────────────────────────
-
-func (m *memoryPorts) StoreProofKeyRequest(_ context.Context, signature string, grant oauthceremony.GrantRecord) (oauthceremony.StoreOutcome, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	if _, taken := m.proof[signature]; taken {
-		return oauthceremony.StoreOutcome{}, oauthceremony.ErrStorageConflict
-	}
-	m.proof[signature] = grant
-	return oauthceremony.RowsTouched(1), nil
-}
-
-// FetchProofKeyRequest читает строку ДО встречи — по той же причине, что
-// FetchRefreshToken.
-func (m *memoryPorts) FetchProofKeyRequest(ctx context.Context, signature string) (oauthceremony.GrantRecord, error) {
-	m.mu.Lock()
-	m.proofFetches++
-	later := m.proofFetches > 1
-	m.mu.Unlock()
-	if later && m.proofTaken != nil {
-		select {
-		case <-m.proofTaken:
-		case <-ctx.Done():
-			return oauthceremony.GrantRecord{}, ctx.Err()
-		}
-	}
-
-	rec, err := m.readProofRow(signature)
-	if m.proofFetchGate != nil {
-		if meetErr := m.proofFetchGate.meet(ctx); meetErr != nil {
-			return oauthceremony.GrantRecord{}, meetErr
-		}
-	}
-	return rec, err
-}
-
-func (m *memoryPorts) readProofRow(signature string) (oauthceremony.GrantRecord, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	grant, found := m.proof[signature]
-	if !found {
-		return oauthceremony.GrantRecord{}, oauthceremony.ErrGrantNotFound
-	}
-	return grant, nil
-}
-
-func (m *memoryPorts) DropProofKeyRequest(_ context.Context, signature string) (oauthceremony.StoreOutcome, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	if _, found := m.proof[signature]; !found {
-		return oauthceremony.RowsTouched(0), nil
-	}
-	delete(m.proof, signature)
-	if m.proofTaken != nil {
-		m.proofTakenOnce.Do(func() { close(m.proofTaken) })
-	}
-	return oauthceremony.RowsTouched(1), nil
-}
-
 // Утверждения времени сборки: подставка обязана оставаться полной
 // реализацией портов. Отпавший метод — отказ сборки, а не красная проба с
 // неочевидным текстом.
@@ -540,7 +541,6 @@ var (
 	_ oauthceremony.AccessTokenVault       = (*memoryPorts)(nil)
 	_ oauthceremony.RefreshTokenVault      = (*memoryPorts)(nil)
 	_ oauthceremony.GrantRevoker           = (*memoryPorts)(nil)
-	_ oauthceremony.ProofKeyVault          = (*memoryPorts)(nil)
 )
 
 // ── Единица работы ──────────────────────────────────────────────────────────
