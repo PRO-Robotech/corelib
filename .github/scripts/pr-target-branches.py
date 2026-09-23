@@ -21,8 +21,9 @@
      если задан, содержит opened, synchronize и reopened (умолчание хостинга —
      ровно они). Без `opened` у запроса нет ни одного контекста, без
      `synchronize` вердикт остаётся от прежнего дерева;
-  6. ни одно задание процесса не гаснет на запросе, который событие пустило
-     (см. «Условия»).
+  6. ни одно задание процесса не гаснет на запросе, который событие пустило, —
+     ни собственным условием (см. «Условия»), ни пропуском вышестоящего по
+     цепочке `needs:` (см. «Цепочка needs»).
 Ключи события — закрытый словарь PR_KEYS; ключ вне него — исход 2.
 
 ФИЛЬТР ВЫЧИСЛЯЕТСЯ, А НЕ ИЩЕТСЯ ОБРАЗЦОМ. Разбирается YAML, шаблоны ветки
@@ -52,6 +53,23 @@
 не видит. Условия процесса БЕЗ события запроса не судятся — на запросе его
 задания не исполняются; перепись называет их числом.
 
+Условие без функции статуса хостинг читает как `success() && …`, а задание
+без `if:` — как `success()`; гейт вычисляет именно это, а не запись.
+
+ЦЕПОЧКА needs ТОЖЕ ВЫЧИСЛЯЕТСЯ. `success()` задания истинно, только если ВСЕ
+его вышестоящие по цепочке `needs:` исполнились успешно, а пропуск
+вышестоящего распространяется «на все задания цепочки от точки пропуска»
+(документация хостинга, jobs.<id>.needs). Отчётное задание на зелёном пути
+пропущено — и гасит на зелёном пути каждое задание ниже себя, чьё условие при
+пропуске вышестоящего ложно: без `if:`, `success()`, `true`,
+`success() || failure()`; ниже `always()`-звена — тоже. Гейт строит граф
+`needs:` (имя вне процесса, кольцо, запись не именем — исход 2), вычисляет
+зелёный путь в порядке зависимостей и называет такое задание нарушением
+вместе с пропущенным вышестоящим. Условие, истинное при пропуске (`always()`,
+`!cancelled()`, `!failure()`), — законный близнец. Задание ниже отчётного,
+чьё собственное условие ложно на зелёном и истинно на провале (`failure()`),
+само отчётное и считается отчётным.
+
 ИСХОДОВ ТРИ: 0 — свойство держится у всех; 1 — нарушение, названо файлом и
 веткой, типом события или заданием; 2 — проверка не состоялась (нет
 разборщика YAML, пустой обход, незнакомая форма, предпосылка).
@@ -61,7 +79,11 @@
 ветку-номер); разборщик сверен с примерами шпаргалки фильтров (самопроверка).
 Что отчётное условие стоит у отчёта, а не у проверки: различие не
 синтаксическое, и такие условия перепись называет числом. Условия внутри
-действий, которые зовёт шаг (`uses:`).
+действий, которые зовёт шаг (`uses:`). Что `success()` задания хостинг судит
+по всей цепочке, а не по прямым вышестоящим: так читается документация,
+живым запуском не измерено. Прочтение выбрано строгое: при прямом прочтении
+гейт краснел бы на задании ниже `always()`-звена, которое хостинг исполнил
+бы, — а зелёного без исполнения не дал бы.
 
 Запуск:
   python3 .github/scripts/pr-target-branches.py --self-test
@@ -329,33 +351,59 @@ def parse_condition(cond):
     return tree
 
 
-def evaluate(tree, path):
+def evaluate(tree, values):
+    """Условие на значениях функций статуса `values` (путь PATHS либо контекст задания)."""
     kind = tree[0]
     if kind == "fn":
-        return PATHS[path][tree[1]]
+        return values[tree[1]]
     if kind == "lit":
         return tree[1]
     if kind == "not":
-        return not evaluate(tree[1], path)
+        return not evaluate(tree[1], values)
     if kind == "and":
-        return evaluate(tree[1], path) and evaluate(tree[2], path)
-    return evaluate(tree[1], path) or evaluate(tree[2], path)
+        return evaluate(tree[1], values) and evaluate(tree[2], values)
+    return evaluate(tree[1], values) or evaluate(tree[2], values)
 
 
-def _judge(rel, where, cond, has_upstream, census, findings):
-    if isinstance(cond, bool):
-        cond = "true" if cond else "false"  # как записано в YAML, а не как в Python
+def _has_status_function(tree):
+    if tree[0] == "fn":
+        return True
+    if tree[0] == "lit":
+        return False
+    return any(_has_status_function(t) for t in tree[1:])
+
+
+# Что хостинг вычисляет на месте записи: без `if:` — `success()`; условие без
+# функции статуса — `success() && <условие>` («умолчание success() действует,
+# пока в записи нет ни одной функции статуса»).
+IMPLICIT = ("fn", "success")
+
+
+def effective(tree):
+    if tree is None:
+        return IMPLICIT
+    if _has_status_function(tree):
+        return tree
+    return ("and", IMPLICIT, tree)
+
+
+def _as_written(cond):
+    return ("true" if cond else "false") if isinstance(cond, bool) else cond
+
+
+def _parse(rel, where, cond):
     try:
-        tree = parse_condition(cond)
+        return parse_condition(_as_written(cond))
     except Unknown as e:
         raise Unknown(
             "ПРЕДПОСЫЛКА НЕ ДЕРЖИТСЯ: %s: %s — %s. Условие, зависящее от события, "
             "ветки или окружения, гейт не вычисляет, и зелёное здесь пришло бы без "
             "исполнения; дорастить разбор, а не обойти." % (rel, where, e)) from e
-    census["conditions"] += 1
-    true_on = [p for p in PATHS if evaluate(tree, p)]
-    if "зелёный" in true_on:
-        return
+
+
+def _classify(rel, where, cond, tree, has_upstream, census, findings):
+    """Условие, ложное на зелёном пути: отчётное, гасящее или не исполняемое никогда."""
+    true_on = [p for p in PATHS if evaluate(tree, PATHS[p])]
     if has_upstream and true_on:
         census["reporting"] += 1
         return
@@ -370,12 +418,55 @@ def _judge(rel, where, cond, has_upstream, census, findings):
                         % (rel, where, cond))
 
 
+def _needs(rel, name, job, jobs):
+    """→ прямые вышестоящие задания; запись, которую хостинг отвергнет, — Unknown."""
+    if "needs" not in job:
+        return ()
+    raw = job["needs"]
+    if isinstance(raw, str):
+        raw = [raw]
+    if not isinstance(raw, list) or not all(isinstance(n, str) for n in raw):
+        raise Unknown("%s: задание %s: `needs` — %r, а не имя задания либо список имён"
+                      % (rel, name, job["needs"]))
+    alien = [n for n in raw if n not in jobs]
+    if alien:
+        raise Unknown("%s: задание %s: needs %s — такого задания в процессе нет, "
+                      "хостинг такой процесс отвергает" % (rel, name, ", ".join(alien)))
+    return tuple(raw)
+
+
+def _chain(rel, needs):
+    """→ (порядок зависимостей, {задание: ВСЕ вышестоящие по цепочке}); кольцо — Unknown."""
+    order, ancestors, state = [], {}, {}
+
+    def visit(name, trail):
+        if state.get(name) == "done":
+            return
+        if state.get(name) == "open":
+            ring = trail[trail.index(name):] + [name]
+            raise Unknown("%s: needs замкнуты в кольцо %s — хостинг такой процесс "
+                          "отвергает" % (rel, " → ".join(ring)))
+        state[name] = "open"
+        up = set()
+        for n in needs[name]:
+            visit(n, trail + [name])
+            up |= {n} | ancestors[n]
+        ancestors[name] = up
+        state[name] = "done"
+        order.append(name)
+
+    for name in needs:
+        visit(name, [])
+    return order, ancestors
+
+
 def _conditions(rel, doc, census, findings):
     """Условия процесса С событием запроса: ни одно не гасит задание на запросе."""
     jobs = doc.get("jobs")
     if not isinstance(jobs, dict) or not jobs:
         raise Unknown("%s: `jobs` — %r, а не непустое отображение: процесс, который "
                       "гонится на запрос, без заданий хостинг отвергает" % (rel, jobs))
+    needs, trees = {}, {}
     for name, job in jobs.items():
         census["jobs"] += 1
         if not isinstance(job, dict):
@@ -383,9 +474,9 @@ def _conditions(rel, doc, census, findings):
         if "uses" in job:
             raise Unknown("%s: задание %s зовёт процесс %r — его заданий и условий гейт "
                           "не осматривает" % (rel, name, job["uses"]))
-        if "if" in job:
-            _judge(rel, "задание %s" % name, job["if"], bool(job.get("needs")),
-                   census, findings)
+        needs[name] = _needs(rel, name, job, jobs)
+        census["with_needs"] += bool(needs[name])
+        trees[name] = _parse(rel, "задание %s" % name, job["if"]) if "if" in job else None
         steps = job.get("steps")
         if not isinstance(steps, list) or not steps:
             raise Unknown("%s: задание %s: `steps` — %r, а не непустой список"
@@ -394,10 +485,55 @@ def _conditions(rel, doc, census, findings):
             if not isinstance(step, dict):
                 raise Unknown("%s: задание %s, шаг %d — %r, а не отображение"
                               % (rel, name, n, step))
-            if "if" in step:
+            if "if" not in step:
+                continue
+            where = "задание %s, шаг %d" % (name, n)
+            tree = effective(_parse(rel, where, step["if"]))
+            census["conditions"] += 1
+            if not evaluate(tree, PATHS["зелёный"]):
                 # Вышестоящие шага — шаги до него; у первого их нет.
-                _judge(rel, "задание %s, шаг %d" % (name, n), step["if"], n > 1,
-                       census, findings)
+                _classify(rel, where, _as_written(step["if"]), tree, n > 1,
+                          census, findings)
+
+    # ЗЕЛЁНЫЙ ПУТЬ ПО ГРАФУ: ни одно исполнившееся задание не упало, отмены нет.
+    # Задание исполняется, если его условие истинно в контексте вышестоящих:
+    # success() — все вышестоящие по цепочке исполнились, failure() и
+    # cancelled() — ложны, always() — истинно.
+    order, ancestors = _chain(rel, needs)
+    ran = {}
+    for name in order:
+        context = {"success": all(ran[a] for a in ancestors[name]),
+                   "failure": False, "cancelled": False, "always": True}
+        ran[name] = evaluate(effective(trees[name]), context)
+    for name in jobs:
+        tree = effective(trees[name])
+        census["conditions"] += trees[name] is not None
+        if ran[name]:
+            continue
+        if evaluate(tree, PATHS["зелёный"]):
+            # Своё условие истинно на зелёном — задание гасит пропуск вышестоящего.
+            skipped = [a for a in order if a in ancestors[name] and not ran[a]]
+            census["chain_skipped"] += 1
+            if trees[name] is None:
+                own = "неявное условие success() (`if:` нет)"
+            else:
+                own = "условие «%s»%s" % (
+                    _as_written(jobs[name]["if"]),
+                    "" if _has_status_function(trees[name])
+                    else " (без функции статуса — неявное success() && …)")
+            findings.append(
+                "%s: задание %s — на зелёном пути НЕ исполняется: %s %s на зелёном "
+                "пути %s, а %s при пропуске вышестоящего ложно (пропуск идёт по "
+                "цепочке needs); пропущенное задание защита ствола засчитывает "
+                "успехом — нужно условие, истинное при пропуске: always(), "
+                "!cancelled() или !failure()"
+                % (rel, name, *(("вышестоящее", ", ".join(skipped), "пропущено")
+                                 if len(skipped) == 1 else
+                                 ("вышестоящие", ", ".join(skipped), "пропущены")),
+                   own))
+            continue
+        _classify(rel, "задание %s" % name, _as_written(jobs[name]["if"]), tree,
+                  bool(needs[name]), census, findings)
 
 
 def _other_conditions(doc, census):
@@ -422,7 +558,7 @@ def audit(files, out):
               file=out)
         return 2
     census = {"files": len(files), "jobs": 0, "conditions": 0, "reporting": 0,
-              "conditions_bad": 0, "unjudged": 0,
+              "conditions_bad": 0, "unjudged": 0, "with_needs": 0, "chain_skipped": 0,
               "pull_request": 0, "pull_request_target": 0, "without": 0}
     findings, filters = [], []
     try:
@@ -477,6 +613,8 @@ def audit(files, out):
           "пути %d, гасящих %d; в процессах без события запроса не судится %d)"
           % (census["jobs"], census["conditions"], census["reporting"],
              census["conditions_bad"], census["unjudged"]), file=out)
+    print("цепочка needs       : заданий с needs %d, на зелёном пути гаснут вслед за "
+          "вышестоящим %d" % (census["with_needs"], census["chain_skipped"]), file=out)
     print("образцы             : %s · номер %s · не-номер %s"
           % (TRUNK, ", ".join(NUMBER_BRANCHES), ", ".join(NON_NUMBER_BRANCHES)), file=out)
     if findings:
@@ -486,7 +624,8 @@ def audit(files, out):
         print("КРАСНЫЙ: нарушений %d." % len(findings), file=out)
         return 1
     print("ЗЕЛЁНЫЙ: запрос в main и в ветку-номер гонит конвейер на открытии, движении и "
-          "переоткрытии, и условия заданий его не гасят; в ветку не-номер — нет.", file=out)
+          "переоткрытии, и ни условия заданий, ни цепочка needs его не гасят; в ветку "
+          "не-номер — нет.", file=out)
     return 0
 
 
@@ -558,14 +697,16 @@ def self_test():
             print("  ПРОВАЛ %s" % title, file=sys.stderr)
             failed += 1
 
-    def run(want, title, files, must=()):
+    def run(want, title, files, must=(), must_not=()):
         buf = io.StringIO()
         got = audit(files, buf)
         text = buf.getvalue()
         missing = [m for m in must if m not in text]
-        check("%s (ждали %d, получили %d%s)" % (
-            title, want, got, "; в тексте нет: " + ", ".join(missing) if missing else ""),
-            got == want and not missing)
+        extra = [m for m in must_not if m in text]
+        check("%s (ждали %d, получили %d%s%s)" % (
+            title, want, got, "; в тексте нет: " + ", ".join(missing) if missing else "",
+            "; в тексте лишнее: " + ", ".join(extra) if extra else ""),
+            got == want and not missing and not extra)
 
     def matches(pattern, name):
         negated, rx = compile_pattern(pattern)
@@ -702,6 +843,72 @@ def self_test():
         must=("только вне зелёного пути 1",))
     run(1, "(+) то же задание без needs — не исполняется",
         {F: GOOD + report % ""}, must=("задание report — условие «failure()»",))
+    # ── ЦЕПОЧКА needs: пропуск вышестоящего гасит нижестоящее ──────────────────
+    # Прежде `needs:` не судился вовсе: задание без условия ниже отчётного давало
+    # ЗЕЛЁНЫЙ, хотя на зелёном пути хостинг пропускает его вслед за отчётным, а
+    # пропуск защита засчитывает успехом (приёмка #31, круг 2: N1 — без `if:`,
+    # N1b — `success()`, N1c — needs [build, zz-report], и N1 рядом с близнецом).
+    def job(name, needs, cond=None):
+        return ("  %s:\n    needs: %s\n%s    runs-on: ubuntu-latest\n"
+                "    steps:\n      - run: echo %s\n"
+                % (name, needs, "    if: %s\n" % cond if cond else "", name))
+    chain = GOOD + job("zz-report", "build", "failure()")
+    run(1, "(+) N1: задание без if: ниже отчётного — на зелёном пути гаснет",
+        {F: chain + job("zz-after", "zz-report")},
+        must=("задание zz-after — на зелёном пути НЕ исполняется: вышестоящее zz-report "
+              "на зелёном пути пропущено, а неявное условие success() (`if:` нет)",
+              "гаснут вслед за вышестоящим 1", "КРАСНЫЙ: нарушений 1."))
+    run(0, "(−) близнец N1: то же задание с if: always()",
+        {F: chain + job("zz-after", "zz-report", "always()")},
+        must=("ЗЕЛЁНЫЙ", "заданий с needs 2, на зелёном пути гаснут вслед за вышестоящим 0",
+              "только вне зелёного пути 1"))
+    run(1, "(+) N1b: if: success() ниже отчётного",
+        {F: chain + job("zz-after", "zz-report", "success()")},
+        must=("задание zz-after — на зелёном пути НЕ исполняется",
+              "условие «success()» при пропуске вышестоящего ложно"))
+    run(1, "(+) N1c: needs [build, zz-report] без if:",
+        {F: chain + job("zz-after", "[build, zz-report]")},
+        must=("задание zz-after — на зелёном пути НЕ исполняется: вышестоящее zz-report",
+              "КРАСНЫЙ: нарушений 1."))
+    run(1, "(+) N1 рядом с близнецом — краснеет ровно N1",
+        {F: chain + job("zz-after", "zz-report") + job("zz-twin", "zz-report", "always()")},
+        must=("задание zz-after — на зелёном пути НЕ исполняется", "КРАСНЫЙ: нарушений 1.",
+              "гаснут вслед за вышестоящим 1"),
+        must_not=("задание zz-twin",))
+    run(1, "(+) if: true ниже отчётного — неявное success() && true",
+        {F: chain + job("zz-after", "zz-report", "true")},
+        must=("условие «true» (без функции статуса — неявное success() && …)",))
+    run(1, "(+) success() || failure() ниже отчётного — на зелёном ложно",
+        {F: chain + job("zz-after", "zz-report", "${{ success() || failure() }}")},
+        must=("задание zz-after — на зелёном пути НЕ исполняется",))
+    run(1, "(+) транзитивно: без if: ниже always()-звена под отчётным",
+        {F: chain + job("zz-mid", "zz-report", "always()") + job("zz-after", "zz-mid")},
+        must=("задание zz-after — на зелёном пути НЕ исполняется: вышестоящее zz-report",
+              "КРАСНЫЙ: нарушений 1."),
+        must_not=("задание zz-mid —",))
+    run(1, "(+) два пропущенных вышестоящих названы оба",
+        {F: chain + job("zz-report2", "build", "cancelled()")
+            + job("zz-after", "[zz-report, zz-report2]")},
+        must=("вышестоящие zz-report, zz-report2 на зелёном пути пропущены",))
+    run(0, "(−) транзитивный близнец: !cancelled() ниже always()-звена",
+        {F: chain + job("zz-mid", "zz-report", "always()")
+            + job("zz-after", "zz-mid", "${{ !cancelled() }}")}, must=("ЗЕЛЁНЫЙ",))
+    run(0, "(−) !failure() ниже отчётного — истинно при пропуске",
+        {F: chain + job("zz-after", "zz-report", "'!failure()'")}, must=("ЗЕЛЁНЫЙ",))
+    run(0, "(−) отчётное ниже отчётного — само отчётное",
+        {F: chain + job("zz-after", "zz-report", "failure()")},
+        must=("только вне зелёного пути 2", "гаснут вслед за вышестоящим 0"))
+    run(0, "(−) needs строкой и списком ниже исполняемого — исполняется без if:",
+        {F: GOOD + job("after", "build") + job("after2", "[build, after]")},
+        must=("ЗЕЛЁНЫЙ", "заданий с needs 2, на зелёном пути гаснут вслед за вышестоящим 0"))
+    run(2, "(+) needs на задание, которого в процессе нет",
+        {F: GOOD + job("after", "biuld")}, must=("needs biuld — такого задания в процессе нет",))
+    run(2, "(+) needs замкнуты в кольцо", {F: GOOD + job("a", "b") + job("b", "a")},
+        must=("кольцо a → b → a",))
+    run(2, "(+) задание в своих needs", {F: GOOD + job("a", "a")}, must=("кольцо a → a",))
+    run(2, "(+) needs — не имя и не список имён", {F: GOOD + job("a", "{x: 1}")},
+        must=("задание a: `needs` —",))
+
     run(1, "(+) if: false у шага — не исполняется никогда",
         {F: GOOD.replace("if: always()", "if: false")},
         must=("задание build, шаг 2 — условие «false»",))
