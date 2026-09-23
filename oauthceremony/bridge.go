@@ -180,11 +180,23 @@ func clientAssertionsNotServed() *ProtocolError {
 
 // ── Коды авторизации ────────────────────────────────────────────────────────
 
+// CreateAuthorizeCodeSession кладёт запись кода — грант вместе с привязкой к
+// доказательству владения ключом. Привязка доезжает сюда потому, что
+// церемония называет оба её поля движку в перечне сохраняемых полей
+// (Config.SanitationWhiteList в New).
+//
+// Негодной привязки здесь быть не может: запрос без неё церемония отвергает
+// раньше, чем движок выпускает код (requireProofKey). Если она всё же пришла,
+// запись в хранилище не уезжает.
 func (b *storageBridge) CreateAuthorizeCodeSession(ctx context.Context, code string, request engine.Requester) error {
 	ctx, cancel := b.deadline(ctx)
 	defer cancel()
 
-	out, err := b.ports.AuthorizationCodes.StoreAuthorizationCode(ctx, code, grantFromRequester(request))
+	rec, bad := codeRecordFromRequester(request)
+	if bad != nil {
+		return note(ctx, bad)
+	}
+	out, err := b.ports.AuthorizationCodes.StoreAuthorizationCode(ctx, code, rec)
 	if bad := exactlyOneRow("AuthorizationCodeVault.StoreAuthorizationCode", out, err); bad != nil {
 		return note(ctx, bad)
 	}
@@ -200,59 +212,84 @@ func (b *storageBridge) CreateAuthorizeCodeSession(ctx context.Context, code str
 // отзыва был бы неотличим от успеха. Погашенный код без гранта — нарушение
 // контракта порта: отзывать нечего.
 //
-// Годный код записывается в ведомость как ПРЕДЪЯВЛЕННЫЙ: по нему повтор
-// узнаётся там, где грант мосту не приходит, — на нуле строк погашения и на
-// пропавшей записи PKCE.
+// Код, погашенный ЭТОЙ ЖЕ операцией, повтором не является: движок выбирает
+// код второй раз перед выдачей, уже после того, как церемония погасила его при
+// предъявлении (см. consumeCode).
+//
+// Годный код записывается в ведомость как ПРЕДЪЯВЛЕННЫЙ: по его гранту повтор
+// узнаётся на нуле строк погашения, а из его записи движок получает привязку
+// PKCE. Живой код без годной привязки S256 — порча записи службой, нарушение
+// контракта порта; на погашенном коде привязка не судится — отзыву семейства
+// она не нужна, и порча записи не вправе оставить семейство живым.
 func (b *storageBridge) GetAuthorizeCodeSession(ctx context.Context, code string, session engine.Session) (engine.Requester, error) {
 	ctx, cancel := b.deadline(ctx)
 	defer cancel()
 
 	const op = "AuthorizationCodeVault.FetchAuthorizationCode"
 	rec, err := b.ports.AuthorizationCodes.FetchAuthorizationCode(ctx, code)
-	if err == nil {
-		notesFrom(ctx).notePresentedCode(presentedCode{
-			signature:  code,
-			grantID:    rec.GrantID,
-			clientID:   rec.ClientID,
-			proofBound: proofBound(rec),
-		})
-		return requesterFromGrant(ctx, b.ports.Clients.LookupClient, rec, session)
-	}
-	ours := fromPort(op, err)
-	switch ours.Code {
-	case CodeAuthorizationCodeConsumed:
-		if rec.GrantID == "" {
+	if err != nil {
+		ours := fromPort(op, err)
+		switch {
+		case ours.Code == CodeAuthorizationCodeConsumed && rec.Grant.GrantID == "":
 			return nil, note(ctx, contractBreach(op, "a consumed authorization code was returned without its grant; "+
 				"what was issued under a replayed code cannot be revoked without its identifier"))
+		case ours.Code == CodeAuthorizationCodeConsumed && !notesFrom(ctx).consumedHere(code):
+			return b.replayedCode(ctx, op, rec, session)
+		case ours.Code == CodeAuthorizationCodeConsumed:
+			// Погашен этой операцией при предъявлении — выборка выдачи.
+		case ours.Code == CodeGrantNotFound:
+			return nil, pairEngine(ctx, ours, engine.ErrNotFound)
+		default:
+			return nil, note(ctx, ours)
 		}
-		ours = codeReplayed(op)
-		notesFrom(ctx).markReplayedFamily(rec.GrantID, rec.ClientID, ours, RevocationCodeReplay)
-		requester, buildErr := requesterFromGrant(ctx, b.ports.Clients.LookupClient, rec, session)
-		if buildErr != nil {
-			// Как у токена обновления: движок получит отказ сборки, а
-			// церемония ответит повтором и отзовёт семейство по записанному
-			// гранту.
-			notesFrom(ctx).record(ours)
-			return nil, buildErr
-		}
-		return requester, pairEngine(ctx, ours, engine.ErrInvalidatedAuthorizeCode)
-	case CodeGrantNotFound:
-		return nil, pairEngine(ctx, ours, engine.ErrNotFound)
-	default:
-		return nil, note(ctx, ours)
 	}
+	if defect := bindingDefect(rec.ProofKey); defect != "" {
+		return nil, note(ctx, contractBreach(op, "a live authorization code came back without an S256 proof-key binding: "+defect))
+	}
+	notesFrom(ctx).notePresentedCode(presentedCode{signature: code, record: rec})
+	return requesterFromCode(ctx, b.ports.Clients.LookupClient, rec, session)
 }
 
-// InvalidateAuthorizeCodeSession гасит код.
+// replayedCode — ответ на выборку кода, погашенного не этой операцией: повтор.
+func (b *storageBridge) replayedCode(ctx context.Context, op string, rec AuthorizationCodeRecord, session engine.Session) (engine.Requester, error) {
+	ours := codeReplayed(op)
+	notesFrom(ctx).markReplayedFamily(rec.Grant.GrantID, rec.Grant.ClientID, ours, RevocationCodeReplay)
+	requester, buildErr := requesterFromGrant(ctx, b.ports.Clients.LookupClient, rec.Grant, session)
+	if buildErr != nil {
+		// Как у токена обновления: движок получит отказ сборки, а церемония
+		// ответит повтором и отзовёт семейство по записанному гранту.
+		notesFrom(ctx).record(ours)
+		return nil, buildErr
+	}
+	return requester, pairEngine(ctx, ours, engine.ErrInvalidatedAuthorizeCode)
+}
+
+// InvalidateAuthorizeCodeSession гасит код на выдаче — ту же запись, что и
+// снятие привязки PKCE (см. consumeCode).
+func (b *storageBridge) InvalidateAuthorizeCodeSession(ctx context.Context, code string) error {
+	return b.consumeCode(ctx, code)
+}
+
+// consumeCode гасит код РОВНО ОДИН РАЗ за операцию.
+//
+// Движок гасит код дважды за обмен и разными словами: снимает привязку PKCE
+// при предъявлении, до сверки доказательства (DeletePKCERequestSession), и
+// гасит код на выдаче (InvalidateAuthorizeCodeSession). У службы и привязка, и
+// код — одна запись, и оба действия означают одно: код использован. Первое из
+// них гасит запись и заносит погашение в ведомость; второе, найдя его там,
+// порта не зовёт.
 //
 // ЗДЕСЬ И ТОЛЬКО ЗДЕСЬ решается, состоится ли обмен: ноль затронутых строк
 // означает, что код погасил кто-то другой, — ОДНОВРЕМЕННЫЙ ПОВТОР: выборку
 // кода прошли двое. Обмен обязан не состояться, а семейство гранта — умереть
 // вместе с парой, которую получил опередивший: сервер не знает, который из
-// двоих законный. Движок на этом исходе откатывает свою единицу работы и не
-// отзывает ничего; грант берётся из ведомости (код выбран в этой же операции),
+// двоих законный. Грант берётся из ведомости (код выбран в этой же операции),
 // и отзыв исполняет церемония.
-func (b *storageBridge) InvalidateAuthorizeCodeSession(ctx context.Context, code string) error {
+func (b *storageBridge) consumeCode(ctx context.Context, code string) error {
+	if notesFrom(ctx).consumedHere(code) {
+		return nil
+	}
+
 	ctx, cancel := b.deadline(ctx)
 	defer cancel()
 
@@ -263,11 +300,13 @@ func (b *storageBridge) InvalidateAuthorizeCodeSession(ctx context.Context, code
 	}
 	switch {
 	case out.Rows() == 1:
+		notesFrom(ctx).noteConsumed(code)
 		return nil
 	case out.Rows() == 0:
 		ours := codeReplayed(op)
 		if presented, known := notesFrom(ctx).presentedCodeOf(code); known {
-			notesFrom(ctx).markReplayedFamily(presented.grantID, presented.clientID, ours, RevocationCodeReplay)
+			notesFrom(ctx).markReplayedFamily(presented.record.Grant.GrantID, presented.record.Grant.ClientID,
+				ours, RevocationCodeReplay)
 		}
 		return pairEngine(ctx, ours, engine.ErrInvalidatedAuthorizeCode)
 	default:
@@ -276,24 +315,11 @@ func (b *storageBridge) InvalidateAuthorizeCodeSession(ctx context.Context, code
 }
 
 // codeReplayed — наш отказ на повтор кода. Один конструктор на все пути,
-// которыми повтор замечается: выборку погашенного кода, ноль строк погашения
-// и пропавшую запись PKCE у кода, к PKCE привязанного.
+// которыми повтор замечается: выборку погашенного кода и ноль строк погашения.
 func codeReplayed(op string) *ProtocolError {
 	return failf(CodeAuthorizationCodeConsumed, nil,
 		"The authorization code was already redeemed.",
 		"Every authorization code may be redeemed exactly once; what was issued under it has been revoked.", op)
-}
-
-// proofBound — привязан ли код к PKCE: у его записи есть `code_challenge`.
-// Поле доезжает до записи кода потому, что церемония называет его движку в
-// перечне сохраняемых полей (Config.SanitationWhiteList в New).
-func proofBound(rec GrantRecord) bool {
-	for _, challenge := range rec.Form["code_challenge"] {
-		if challenge != "" {
-			return true
-		}
-	}
-	return false
 }
 
 // ── Токены доступа ──────────────────────────────────────────────────────────
@@ -497,61 +523,47 @@ func revocationReasonFor(ctx context.Context, op string) (RevocationReason, *Pro
 }
 
 // ── Доказательство владения ключом ──────────────────────────────────────────
+//
+// Привязка кода к доказательству — поля ЗАПИСИ КОДА (AuthorizationCodeRecord),
+// и отдельного хранилища у неё нет. Три метода ниже — часть контракта
+// хранилища обработчика PKCE движка, и каждый переводит его слово на эту одну
+// запись.
 
-func (b *storageBridge) CreatePKCERequestSession(ctx context.Context, signature string, request engine.Requester) error {
-	ctx, cancel := b.deadline(ctx)
-	defer cancel()
-
-	out, err := b.ports.ProofKeys.StoreProofKeyRequest(ctx, signature, grantFromRequester(request))
-	if bad := exactlyOneRow("ProofKeyVault.StoreProofKeyRequest", out, err); bad != nil {
-		return note(ctx, bad)
-	}
+// CreatePKCERequestSession: писать нечего. Обработчик PKCE движка стоит ПОСЛЕ
+// обработчика кода (порядок закреплён в New) и привязывает к коду то, что уже
+// уехало в хранилище вместе с кодом: оба берут поля из одного и того же
+// запроса авторизации. Вторая запись под подписью кода была бы вторым ходом
+// там, где служба держит одну строку.
+func (b *storageBridge) CreatePKCERequestSession(context.Context, string, engine.Requester) error {
 	return nil
 }
 
-// GetPKCERequestSession отдаёт запрос PKCE по подписи кода.
-//
-// # Пропавшая запись у кода, привязанного к PKCE, — ПОВТОР
-//
-// Запись PKCE снимает движок при предъявлении кода, ДО сверки доказательства
-// и до погашения кода. Значит у кода, привязанного к PKCE (запись кода,
-// выбранная в этой же операции, несёт `code_challenge`), запись пропадает
-// ровно тогда, когда код уже предъявлялся: одновременно — и тот обмен ещё
-// идёт, — либо раньше, с неверным доказательством. Это второе предъявление
-// кода (RFC 6749 §4.1.2), и отвечается оно как повтор: семейство гранта
-// отзывается, а движок получает НЕ «записи нет» — на «записи нет» при пустом
-// доказательстве и PKCE, не требуемом настройками, он выдал бы токены по коду,
-// к PKCE привязанному.
-//
-// У кода без привязки к PKCE записи не было никогда, и «записи нет» —
-// законный исход.
+// GetPKCERequestSession отдаёт привязку PKCE по подписи кода — из записи кода,
+// выбранной в этой же операции: обработчик кода движка выбирает код раньше,
+// чем обработчик PKCE спрашивает привязку, и отказ той выборки до обработчика
+// PKCE не доходит. Спрос привязки у кода, которого операция не выбирала, —
+// дефект провязки, а не «PKCE не было»: ответить «записи нет» значило бы
+// позволить движку судить код без привязки.
 func (b *storageBridge) GetPKCERequestSession(ctx context.Context, signature string, session engine.Session) (engine.Requester, error) {
+	presented, known := notesFrom(ctx).presentedCodeOf(signature)
+	if !known {
+		return nil, failf(CodeCeremonyMisuse, nil,
+			"The authorization server was asked for the proof key of a code it did not read.", "",
+			"engine storage: GetPKCERequestSession came before GetAuthorizeCodeSession of the same code")
+	}
+
 	ctx, cancel := b.deadline(ctx)
 	defer cancel()
 
-	const op = "ProofKeyVault.FetchProofKeyRequest"
-	rec, err := b.ports.ProofKeys.FetchProofKeyRequest(ctx, signature)
-	if err != nil {
-		ours := fromPort(op, err)
-		if presented, known := notesFrom(ctx).presentedCodeOf(signature); ours.Code == CodeGrantNotFound && known && presented.proofBound {
-			replay := codeReplayed(op)
-			notesFrom(ctx).markReplayedFamily(presented.grantID, presented.clientID, replay, RevocationCodeReplay)
-			return nil, pairEngine(ctx, replay, engine.ErrInvalidatedAuthorizeCode)
-		}
-		return nil, notFoundAware(ctx, op, err)
-	}
-	return requesterFromGrant(ctx, b.ports.Clients.LookupClient, rec, session)
+	return requesterFromCode(ctx, b.ports.Clients.LookupClient, presented.record, session)
 }
 
+// DeletePKCERequestSession — привязку снимают вместе с кодом: при
+// предъявлении, до сверки доказательства, код гасится (см. consumeCode).
+// Предъявление и есть использование кода: код, предъявленный с неверным
+// доказательством, второго предъявления не получает — оно отвечается повтором.
 func (b *storageBridge) DeletePKCERequestSession(ctx context.Context, signature string) error {
-	ctx, cancel := b.deadline(ctx)
-	defer cancel()
-
-	out, err := b.ports.ProofKeys.DropProofKeyRequest(ctx, signature)
-	if bad := atMostOneRow("ProofKeyVault.DropProofKeyRequest", out, err); bad != nil {
-		return note(ctx, bad)
-	}
-	return nil
+	return b.consumeCode(ctx, signature)
 }
 
 // ── Единица работы ──────────────────────────────────────────────────────────

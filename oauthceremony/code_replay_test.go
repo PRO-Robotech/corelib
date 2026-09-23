@@ -11,16 +11,12 @@
 // церемония по завершении операции, а отказ отзыва — отказ операции, а не
 // случай «код погашен», за которым живое семейство.
 //
-// Одновременный повтор воспроизводится в двух окнах, потому что проигравший
-// замечает его в разных местах:
-//
-//   - ДО ВЫБОРКИ PKCE — оба обмена прошли выборку кода, запись PKCE снял
-//     первый, и второй находит её снятой: код, привязанный к PKCE, уже
-//     предъявлялся;
-//   - ПОСЛЕ ПРОВЕРКИ PKCE — оба прошли и выборку кода, и PKCE, и повтор виден
-//     только по нулю строк погашения.
-//
-// Каждое окно прогоняется с единицей работы и без неё.
+// Код гасится РОВНО ОДИН РАЗ за обмен — при предъявлении, до сверки
+// доказательства (привязка PKCE — поле той же записи и снимается вместе с
+// кодом). Поэтому одновременный повтор у кода один путь, которым его замечает
+// проигравший: оба обмена прошли выборку кода, и погашение одного из них
+// затрагивает ноль строк. Окно воспроизводится двумя встречами — на выборке
+// кода и перед погашением, — с единицей работы и без неё.
 package oauthceremony_test
 
 import (
@@ -186,30 +182,22 @@ func TestSequentialRefreshReplayWithAFailingRevokerFailsTheOperation(t *testing.
 	}
 }
 
-// TestCodePresentedAfterItsProofKeyWasTakenIsAReplay — последовательная форма
-// окна «до выборки PKCE»: первое предъявление с неверным доказательством сняло
-// запись PKCE и не выдало ничего, второе — с верным. Код, привязанный к PKCE и
-// лишившийся записи, уже предъявлялся: это повтор, а не «данных PKCE нет».
-//
-// Второй прогон — тот же порядок при PKCE, не требуемом настройками, и без
-// доказательства во втором предъявлении: такой обмен не имеет права выдать
-// токены по коду, привязанному к PKCE.
-func TestCodePresentedAfterItsProofKeyWasTakenIsAReplay(t *testing.T) {
+// TestCodePresentedAgainAfterAFailedProofIsAReplay — первое предъявление с
+// неверным доказательством погасило код и не выдало ничего, второе — с верным
+// доказательством либо без него. Предъявление и есть использование кода: код
+// уже предъявлялся, и это повтор, а не второй шанс сверить доказательство.
+func TestCodePresentedAgainAfterAFailedProofIsAReplay(t *testing.T) {
 	for _, tc := range []struct {
 		name           string
-		requireProof   bool
 		secondVerifier string
 	}{
-		{name: "pkce-required", requireProof: true, secondVerifier: testVerifier},
-		{name: "pkce-optional-no-verifier", requireProof: false, secondVerifier: ""},
+		{name: "second-with-the-right-verifier", secondVerifier: testVerifier},
+		{name: "second-without-a-verifier", secondVerifier: ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			store := newMemoryPorts()
 			registerTestClient(t, store)
-			ceremony := newTestCeremony(t, store.ports(), func(cfg *oauthceremony.Config) {
-				cfg.RequireProofKey = tc.requireProof
-				cfg.RequireProofKeyForPublicClients = tc.requireProof
-			})
+			ceremony := newTestCeremony(t, store.ports())
 
 			code, _ := issueCode(t, ceremony)
 			wrong := codeExchange(code)
@@ -229,7 +217,7 @@ func TestCodePresentedAfterItsProofKeyWasTakenIsAReplay(t *testing.T) {
 			issued := len(store.access)
 			store.mu.Unlock()
 			if issued != 0 {
-				t.Errorf("по коду, лишившемуся записи PKCE, положено токенов доступа %d шт", issued)
+				t.Errorf("по коду, предъявленному второй раз, положено токенов доступа %d шт", issued)
 			}
 			requireRevokedFor(t, store, grantOfStored(t, store), oauthceremony.RevocationCodeReplay)
 		})
@@ -245,24 +233,14 @@ type codeRace struct {
 func codeRaces() []codeRace {
 	return []codeRace{
 		{
-			// Встреча на выборке кода; вторая выборка PKCE ждёт, пока первую
-			// запись PKCE снимут, — проигравший находит её снятой.
-			name: "before-proof-key",
+			// Встреча на выборке кода (оба прочли код непогашенным) и перед
+			// погашением при предъявлении (оба дошли до него): повтор виден
+			// только по нулю строк погашения.
+			name: "both-read-then-consume",
 			setup: func(store *memoryPorts) []*rendezvous {
 				store.codeFetchGate = newRendezvous(2)
-				store.proofTaken = make(chan struct{})
-				return []*rendezvous{store.codeFetchGate}
-			},
-		},
-		{
-			// Встреча на выборке PKCE (оба прочли запись) и перед погашением
-			// (оба прошли выборку кода в выдаче): повтор виден только по нулю
-			// строк погашения.
-			name: "after-proof-key",
-			setup: func(store *memoryPorts) []*rendezvous {
-				store.proofFetchGate = newRendezvous(2)
 				store.consumeGate = newRendezvous(2)
-				return []*rendezvous{store.proofFetchGate, store.consumeGate}
+				return []*rendezvous{store.codeFetchGate, store.consumeGate}
 			},
 		},
 	}
@@ -362,8 +340,9 @@ func TestConsumedCodeWithoutItsGrantIsAContractBreach(t *testing.T) {
 	ceremony := newTestCeremony(t, store.ports())
 
 	code, _ := issueCode(t, ceremony)
-	store.fetchCodeOverride = func(string) (oauthceremony.GrantRecord, error) {
-		return oauthceremony.GrantRecord{ClientID: testClientID}, oauthceremony.ErrAuthorizationCodeConsumed
+	store.fetchCodeOverride = func(string) (oauthceremony.AuthorizationCodeRecord, error) {
+		return oauthceremony.AuthorizationCodeRecord{Grant: oauthceremony.GrantRecord{ClientID: testClientID}},
+			oauthceremony.ErrAuthorizationCodeConsumed
 	}
 
 	_, err := ceremony.Exchange(context.Background(), codeExchange(code))
