@@ -170,6 +170,7 @@ type (
 	uncalledAccessTokens       struct{ AccessTokenVault }
 	uncalledRefreshTokens      struct{ RefreshTokenVault }
 	uncalledGrants             struct{ GrantRevoker }
+	uncalledAccessTokenIssuer  struct{ AccessTokenIssuer }
 )
 
 // uncalledGrantIDHook — крючок чеканки идентификатора гранта, которого обход
@@ -187,8 +188,7 @@ func engineConfigOfNewCeremony(t *testing.T) *engine.Config {
 	c, err := New(Config{
 		AuthorizationEndpoint:     "https://iam.example.net/iam/v1/authorize",
 		TokenEndpoint:             "https://iam.example.net/iam/v1/token",
-		SigningSecret:             []byte("0123456789abcdef0123456789abcdef"),
-		AccessTokenLifespan:       time.Hour,
+		AccessTokenLifespan:       20 * time.Minute,
 		RefreshTokenLifespan:      24 * time.Hour,
 		AuthorizationCodeLifespan: 10 * time.Minute,
 		ScopeMatching:             ScopeMatchingExact,
@@ -205,6 +205,7 @@ func engineConfigOfNewCeremony(t *testing.T) *engine.Config {
 		AccessTokens:       uncalledAccessTokens{},
 		RefreshTokens:      uncalledRefreshTokens{},
 		Grants:             uncalledGrants{},
+		AccessTokenIssuer:  uncalledAccessTokenIssuer{},
 	})
 	if err != nil {
 		t.Fatalf("New не собрал церемонию: %v", err)

@@ -23,6 +23,7 @@ import (
 	"context"
 	"errors"
 	"sync"
+	"sync/atomic"
 	"testing"
 
 	"github.com/PRO-Robotech/corelib/oauthceremony"
@@ -310,6 +311,113 @@ func TestConcurrentCodeRedemptionRevokesTheFamily(t *testing.T) {
 			})
 		}
 	}
+}
+
+// revocationSignal — порт отзыва подставки, который сообщает об отзыве
+// токенов доступа, исполненном без отказа: по этому сообщению проба ставит
+// выпуск ПОСЛЕ отметки отзыва.
+type revocationSignal struct {
+	oauthceremony.GrantRevoker
+	once sync.Once
+	done chan struct{}
+}
+
+func (r *revocationSignal) RevokeGrantAccessTokens(ctx context.Context, grantID string, reason oauthceremony.RevocationReason) (oauthceremony.StoreOutcome, error) {
+	out, err := r.GrantRevoker.RevokeGrantAccessTokens(ctx, grantID, reason)
+	if err == nil {
+		r.once.Do(func() { close(r.done) })
+	}
+	return out, err
+}
+
+// TestConcurrentCodeReplayWinnerMayIssueAfterTheRevocation — предпосылка
+// абзаца GrantRevoker «Отсечка действует на ВСЯКИЙ токен семейства»: на
+// одновременном повторе кода опередивший гасит код при предъявлении, раньше
+// своего выпуска, и его выпуск достижим ПОСЛЕ того, как отставший отозвал
+// семейство.
+//
+// Выпуск задержан до исполненного отзыва (recordingIssuer.hold). Встань выпуск
+// раньше погашения кода, оба обмена ждали бы отзыва, которого никто не
+// исполнит, и проба покраснела бы отказом выпуска по сроку вызова: у абзаца
+// пропал бы довод «и после». Пара, выпущенная после отметки, в хранилище
+// негодна: отметку семейства выборка сверяет, когда бы запись ни легла.
+//
+// Законный близнец — TestConcurrentCodeRedemptionRevokesTheFamily: та же гонка
+// без задержки выпуска.
+func TestConcurrentCodeReplayWinnerMayIssueAfterTheRevocation(t *testing.T) {
+	store := newMemoryPorts()
+	registerTestClient(t, store)
+	revoker := &revocationSignal{GrantRevoker: store, done: make(chan struct{})}
+	ports := store.ports()
+	ports.Grants = revoker
+	ceremony := newTestCeremony(t, ports)
+	code, _ := issueCode(t, ceremony)
+	// Встречи на выборке кода довольно: оба обмена прочли код непогашенным, и
+	// погашение второго затрагивает ноль строк, где бы ни стояло погашение.
+	store.codeFetchGate = newRendezvous(2)
+
+	var heldPastRevocation atomic.Int32
+	store.issuer.mu.Lock()
+	store.issuer.hold = func(ctx context.Context) error {
+		select {
+		case <-revoker.done:
+			heldPastRevocation.Add(1)
+			return nil
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+	store.issuer.mu.Unlock()
+
+	type outcome struct {
+		tokens oauthceremony.TokenResult
+		err    error
+	}
+	outcomes := make([]outcome, 2)
+	var wg sync.WaitGroup
+	for i := range outcomes {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			tokens, err := ceremony.Exchange(context.Background(), codeExchange(code))
+			outcomes[i] = outcome{tokens: tokens, err: err}
+		}()
+	}
+	wg.Wait()
+
+	if !store.codeFetchGate.met() {
+		t.Fatalf("НЕ ВЫПОЛНИЛОСЬ: встреча на выборке кода не состоялась — одновременность не создана (исходы: %v; %v)",
+			outcomes[0].err, outcomes[1].err)
+	}
+
+	var winners []oauthceremony.TokenResult
+	var refusals []error
+	for _, o := range outcomes {
+		if o.err == nil {
+			winners = append(winners, o.tokens)
+			continue
+		}
+		refusals = append(refusals, o.err)
+	}
+	if len(winners) == 0 && errors.Is(refusals[0], oauthceremony.ErrPortDeadline) &&
+		errors.Is(refusals[1], oauthceremony.ErrPortDeadline) {
+		t.Fatalf("ни один обмен не прошёл: выпуск не дождался отзыва (%v; %v) — выпуск стоит раньше "+
+			"погашения кода, и довод «и после» абзаца GrantRevoker снят", refusals[0], refusals[1])
+	}
+	if len(winners) != 1 || len(refusals) != 1 {
+		t.Fatalf("из 2 одновременных обменов прошло %d и отказано %d; ожидалось 1 и 1 (отказы: %v)",
+			len(winners), len(refusals), refusals)
+	}
+	requireCodeReplayRefusal(t, refusals[0])
+
+	issuances := store.issuer.issuances()
+	if len(issuances) != 1 || issuances[0].issued.Token != winners[0].AccessToken {
+		t.Fatalf("выпусков %d, ожидался 1 — токен опередившего", len(issuances))
+	}
+	if held := heldPastRevocation.Load(); held != 1 {
+		t.Fatalf("выпусков, начатых после отзыва, %d; ожидался 1", held)
+	}
+	requirePairDead(t, ceremony, store, grantOfStored(t, store), winners[0])
 }
 
 // grantOfStored — грант единственного выданного кода. Берётся из хранилища:
