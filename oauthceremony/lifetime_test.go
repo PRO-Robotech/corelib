@@ -61,8 +61,8 @@ func exchangeGrant(t *testing.T, ceremony *oauthceremony.Ceremony, grant oauthce
 }
 
 // TestEveryArtifactCarriesItsLifetimeFromTheSettings — граница не названа:
-// сроки из настроек (час и сутки), и они ЗАПИСАНЫ у каждого артефакта — у
-// первой пары и у пары оборота.
+// сроки из настроек (testAccessLifespan и сутки), и они ЗАПИСАНЫ у каждого
+// артефакта — у первой пары и у пары оборота.
 func TestEveryArtifactCarriesItsLifetimeFromTheSettings(t *testing.T) {
 	store := newMemoryPorts()
 	registerTestClient(t, store)
@@ -70,11 +70,11 @@ func TestEveryArtifactCarriesItsLifetimeFromTheSettings(t *testing.T) {
 
 	issuedAt := time.Now().UTC()
 	first := exchangeGrant(t, ceremony, grantOfScopes("openid", "offline"))
-	if first.ExpiresIn <= time.Hour-slack || first.ExpiresIn > time.Hour {
-		t.Errorf("первая пара: ответ называет срок %s, ожидался час", first.ExpiresIn)
+	if first.ExpiresIn <= testAccessLifespan-slack || first.ExpiresIn > testAccessLifespan {
+		t.Errorf("первая пара: ответ называет срок %s, ожидался %s", first.ExpiresIn, testAccessLifespan)
 	}
 	requireWithin(t, "первый токен доступа", introspect(t, ceremony, first.AccessToken, oauthceremony.TokenKindAccess).ExpiresAt,
-		issuedAt.Add(time.Hour))
+		issuedAt.Add(testAccessLifespan))
 	requireWithin(t, "первый токен обновления", introspect(t, ceremony, first.RefreshToken, oauthceremony.TokenKindRefresh).ExpiresAt,
 		issuedAt.Add(24*time.Hour))
 
@@ -84,7 +84,7 @@ func TestEveryArtifactCarriesItsLifetimeFromTheSettings(t *testing.T) {
 		t.Fatalf("оборот отказал: %v", err)
 	}
 	requireWithin(t, "токен доступа оборота", introspect(t, ceremony, second.AccessToken, oauthceremony.TokenKindAccess).ExpiresAt,
-		rotatedAt.Add(time.Hour))
+		rotatedAt.Add(testAccessLifespan))
 	requireWithin(t, "токен обновления оборота", introspect(t, ceremony, second.RefreshToken, oauthceremony.TokenKindRefresh).ExpiresAt,
 		rotatedAt.Add(24*time.Hour))
 }

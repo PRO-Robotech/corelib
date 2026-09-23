@@ -171,6 +171,7 @@ type (
 	uncalledRefreshTokens      struct{ RefreshTokenVault }
 	uncalledGrants             struct{ GrantRevoker }
 	uncalledProofKeys          struct{ ProofKeyVault }
+	uncalledAccessTokenIssuer  struct{ AccessTokenIssuer }
 )
 
 // engineConfigOfNewCeremony собирает церемонию через New и достаёт настройки,
@@ -181,8 +182,7 @@ func engineConfigOfNewCeremony(t *testing.T) *engine.Config {
 
 	c, err := New(Config{
 		Issuer:                          "https://iam.example.net",
-		SigningSecret:                   []byte("0123456789abcdef0123456789abcdef"),
-		AccessTokenLifespan:             time.Hour,
+		AccessTokenLifespan:             20 * time.Minute,
 		RefreshTokenLifespan:            24 * time.Hour,
 		AuthorizationCodeLifespan:       10 * time.Minute,
 		ScopeMatching:                   ScopeMatchingExact,
@@ -201,6 +201,7 @@ func engineConfigOfNewCeremony(t *testing.T) *engine.Config {
 		RefreshTokens:      uncalledRefreshTokens{},
 		Grants:             uncalledGrants{},
 		ProofKeys:          uncalledProofKeys{},
+		AccessTokenIssuer:  uncalledAccessTokenIssuer{},
 	})
 	if err != nil {
 		t.Fatalf("New не собрал церемонию: %v", err)

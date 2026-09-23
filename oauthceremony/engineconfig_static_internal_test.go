@@ -1022,10 +1022,16 @@ func TestEmptySourceWalkIsNotAVerdict(t *testing.T) {
 // marker отмечает в инъекции строку, которую находка обязана назвать.
 const marker = "// ← предмет"
 
-// injectedMapField — поле-карта, которое копия добавляет в тип настроек: у
-// настоящего типа ссылочных полей вида карты нет, а инъекция записи в
-// содержимое карты должна быть записью в НАСТОЯЩЕЕ поле-карту.
-const injectedMapField = "\n\t// InjectedMap — поле-карта копии для инъекций.\n\tInjectedMap map[string]string\n"
+// injectedFields — поля, которые копия добавляет в тип настроек: инъекция
+// записи в содержимое обязана быть записью в НАСТОЯЩЕЕ поле копии. Поле-карта —
+// потому что у настоящего типа ссылочных полей вида карты нет. Поля байтов и
+// среза байтов — потому что такие поля настоящего типа (общий секрет подписи и
+// прежние секреты) церемония больше не называет: подпись артефактов у неё не
+// движка, и инъекция, привязанная к ним, судила бы поле, которого у церемонии
+// нет.
+const injectedFields = "\n\t// InjectedMap — поле-карта копии для инъекций.\n\tInjectedMap map[string]string\n" +
+	"\n\t// InjectedBytes — поле байтов копии для инъекций.\n\tInjectedBytes []byte\n" +
+	"\n\t// InjectedKeys — поле среза байтов копии для инъекций.\n\tInjectedKeys [][]byte\n"
 
 // controlMethod — метод настроек, который каждая копия поддерева получает с
 // СИНТЕТИЧЕСКОЙ записью глубины 1 в поле-карту копии. Это положительный
@@ -1089,7 +1095,7 @@ func engineCopy(t *testing.T) (dir, pkgName, typeName string) {
 		writeFile(t, dir, name, string(b))
 	}
 	replaceOnce(t, dir, "config_default.go", "\tIsPushedAuthorizeEnforced bool\n}",
-		"\tIsPushedAuthorizeEnforced bool\n"+injectedMapField+"}")
+		"\tIsPushedAuthorizeEnforced bool\n"+injectedFields+"}")
 	if _, err := os.Stat(filepath.Join(dir, controlFile)); err == nil {
 		t.Fatalf("ФИКСТУРА: %s уже есть в пакете движка — контроль лёг бы поверх чужого файла", controlFile)
 	}
@@ -1223,7 +1229,7 @@ func (c *Config) Mark() {
 `)}, formOpAssign, 2},
 		{injection{name: "инкремент элемента", file: "injected.go", src: newMethod("", `
 func (c *Config) Bump() {
-	c.GlobalSecret[0]++ `+marker+`
+	c.InjectedBytes[0]++ `+marker+`
 }
 `)}, formIncDec, 2},
 		{injection{name: "присваивание в range", file: "injected.go", src: newMethod("", `
@@ -1244,12 +1250,12 @@ func (c *Config) Forget() {
 `)}, "встроенная delete", 2},
 		{injection{name: "clear поля", file: "injected.go", src: newMethod("", `
 func (c *Config) Wipe() {
-	clear(c.GlobalSecret) `+marker+`
+	clear(c.InjectedBytes) `+marker+`
 }
 `)}, "встроенная clear", 2},
 		{injection{name: "copy в поле", file: "injected.go", src: newMethod("", `
 func (c *Config) Overwrite(b []byte) {
-	copy(c.GlobalSecret, b) `+marker+`
+	copy(c.InjectedBytes, b) `+marker+`
 }
 `)}, "встроенная copy", 2},
 		{injection{name: "мутатор slices", file: "injected.go", src: newMethod(`"slices"`, `
@@ -1296,7 +1302,7 @@ func (c *Config) Retype() {
 `)}, formAssign, 2},
 		{injection{name: "псевдоним элемента range", file: "injected.go", src: newMethod("", `
 func (c *Config) ZeroRotated() {
-	for _, key := range c.RotatedGlobalSecrets {
+	for _, key := range c.InjectedKeys {
 		key[0] = 0 `+marker+`
 	}
 }
@@ -1524,11 +1530,11 @@ func (c *Config) Reads(dst []byte) (int, string) {
 	h = nil
 	_ = h
 	_ = append([]string{}, c.RefreshTokenScopes...)
-	copy(dst, c.GlobalSecret)
+	copy(dst, c.InjectedBytes)
 	_ = c.ScopeStrategy(nil, "x")
 	_ = []string{c.TokenURL}
 	_ = strconv.Itoa(c.HashCost)
-	_ = string(c.GlobalSecret)
+	_ = string(c.InjectedBytes)
 	return len(c.SanitationWhiteList), v `+marker+`
 }
 `)}, false, false},

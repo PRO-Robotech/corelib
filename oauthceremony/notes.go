@@ -64,6 +64,16 @@ import (
 // пропавшая запись PKCE — без гранта и без признака, была ли она вообще.
 // Выборка кода в той же операции стоит раньше обоих, и её грант и признак
 // привязки к PKCE мост записывает сюда: по ним повтор узнаётся и там.
+//
+// # Четвёртое: токен доступа — выпущенный и предъявленный
+//
+// Выпуск токена доступа портом службы записывается сюда целиком: срок в ответе
+// обмена церемония берёт у ЭТОГО выпуска (exp минус момент выпуска), а не у
+// движка, который пересчитал бы его от своих часов (withIssuedLifetime).
+//
+// Опознание предъявленного токена доступа движок спрашивает методом, который
+// отказать не умеет (artifactStrategy.AccessTokenSignature). Отказ опознания
+// записывается сюда, и мост отвечает им на выборку по пустой подписи.
 type operationNotes struct {
 	mu      sync.Mutex
 	precise *ProtocolError
@@ -73,6 +83,13 @@ type operationNotes struct {
 	// presented — код, предъявленный в этой операции. Нулевое значение —
 	// кода не предъявляли.
 	presented presentedCode
+	// issuedAccess — токен доступа, выпущенный портом в этой операции;
+	// issuedAccessNoted — выпуск был.
+	issuedAccess      IssuedAccessToken
+	issuedAccessNoted bool
+	// unidentified — отказ последнего опознания токена доступа. Пусто —
+	// опознание либо состоялось, либо ответило «токен не наш».
+	unidentified *ProtocolError
 }
 
 // replayedFamily — грант повторённого артефакта, клиент, которому грант
@@ -221,4 +238,48 @@ func note(ctx context.Context, p *ProtocolError) *ProtocolError {
 		notesFrom(ctx).record(p)
 	}
 	return p
+}
+
+// noteIssuedAccessToken записывает выпуск токена доступа этой операции.
+func (n *operationNotes) noteIssuedAccessToken(issued IssuedAccessToken) {
+	if n == nil {
+		return
+	}
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	n.issuedAccess = issued
+	n.issuedAccessNoted = true
+}
+
+// issuedAccessToken отдаёт выпуск токена доступа этой операции; ложь — выпуска
+// не было (или ведомости нет).
+func (n *operationNotes) issuedAccessToken() (IssuedAccessToken, bool) {
+	if n == nil {
+		return IssuedAccessToken{}, false
+	}
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	return n.issuedAccess, n.issuedAccessNoted
+}
+
+// noteUnidentified записывает исход последнего опознания токена доступа:
+// отказ либо пусто, если опознание состоялось или ответило «не наш».
+func (n *operationNotes) noteUnidentified(failure *ProtocolError) {
+	if n == nil {
+		return
+	}
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	n.unidentified = failure
+}
+
+// unidentifiedFailure отдаёт отказ последнего опознания токена доступа; пусто
+// — отказа не было.
+func (n *operationNotes) unidentifiedFailure() *ProtocolError {
+	if n == nil {
+		return nil
+	}
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	return n.unidentified
 }

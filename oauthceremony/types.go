@@ -412,7 +412,9 @@ type TokenResult struct {
 	// TokenType — тип токена доступа; для церемонии всегда "bearer".
 	TokenType string
 
-	// ExpiresIn — сколько токену доступа осталось жить.
+	// ExpiresIn — срок жизни выпущенного токена доступа: его exp минус
+	// момент выпуска, ровно те, что порт выпуска положил в токен
+	// (AccessTokenIssuer, RFC 6749 §5.1 `expires_in`).
 	ExpiresIn time.Duration
 
 	// RefreshToken — токен обновления. Пусто, если не выдавался.

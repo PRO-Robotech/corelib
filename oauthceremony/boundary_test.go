@@ -169,6 +169,8 @@ func runtimeRoster() map[string]reflect.Type {
 		"GrantRevoker":      reflect.TypeOf((*oauthceremony.GrantRevoker)(nil)).Elem(),
 		"ProofKeyVault":     reflect.TypeOf((*oauthceremony.ProofKeyVault)(nil)).Elem(),
 		"UnitOfWork":        reflect.TypeOf((*oauthceremony.UnitOfWork)(nil)).Elem(),
+		"AccessTokenIssuer": reflect.TypeOf((*oauthceremony.AccessTokenIssuer)(nil)).Elem(),
+		"IssuedAccessToken": reflect.TypeOf(oauthceremony.IssuedAccessToken{}),
 	}
 }
 

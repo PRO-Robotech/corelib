@@ -3,7 +3,10 @@
 
 package oauthceremony
 
-import "context"
+import (
+	"context"
+	"time"
+)
 
 // ── Число затронутых строк как ТИП ──────────────────────────────────────────
 
@@ -122,7 +125,9 @@ type ClientDirectory interface {
 // Значит защита от повторного использования кода — РОВНО ОДНА инструкция
 // ConsumeAuthorizationCode, и никакая часть её не лежит в движке.
 type AuthorizationCodeVault interface {
-	// StoreAuthorizationCode кладёт грант под подписью кода.
+	// StoreAuthorizationCode кладёт грант под подписью кода — sha256
+	// значения кода в hex, 64 знака. Само значение сюда не приходит: код
+	// непрозрачен, и строка хранилища его не выдаёт.
 	//
 	// Подпись уникальна: ожидается INSERT, затронувший ровно одну строку.
 	// Затронуто 0 → ErrPortContract (вставка, ничего не вставившая, —
@@ -177,8 +182,9 @@ type AuthorizationCodeVault interface {
 //
 // Реализует СЛУЖБА.
 type AccessTokenVault interface {
-	// StoreAccessToken кладёт грант под подписью токена доступа.
-	// Ожидается ровно одна затронутая строка.
+	// StoreAccessToken кладёт грант под подписью токена доступа — его jti,
+	// названным при выпуске (AccessTokenIssuer.IssueAccessToken). Ожидается
+	// ровно одна затронутая строка.
 	StoreAccessToken(ctx context.Context, signature string, grant GrantRecord) (StoreOutcome, error)
 
 	// FetchAccessToken отдаёт грант по подписи. Нет → ErrGrantNotFound.
@@ -199,9 +205,10 @@ type AccessTokenVault interface {
 //
 // Реализует СЛУЖБА.
 type RefreshTokenVault interface {
-	// StoreRefreshToken кладёт грант под подписью токена обновления,
-	// связывая его с подписью выпущенного вместе с ним токена доступа.
-	// Связь нужна, чтобы отзыв одного снимал второй.
+	// StoreRefreshToken кладёт грант под подписью токена обновления —
+	// sha256 его значения в hex, — связывая его с подписью (jti)
+	// выпущенного вместе с ним токена доступа. Связь нужна, чтобы отзыв
+	// одного снимал второй.
 	StoreRefreshToken(ctx context.Context, signature, accessSignature string, grant GrantRecord) (StoreOutcome, error)
 
 	// FetchRefreshToken отдаёт грант по подписи.
@@ -295,6 +302,70 @@ type ProofKeyVault interface {
 	DropProofKeyRequest(ctx context.Context, signature string) (StoreOutcome, error)
 }
 
+// AccessTokenIssuer — выпуск и опознание токена доступа.
+//
+// Реализует СЛУЖБА — своим подписантом токенов. Подписного материала у
+// церемонии нет: ни ключа, ни общего секрета, ни библиотеки подписи. Токен
+// доступа подписывает тот, кто публикует ключи его проверки, и его
+// предъявления сверяют по тем же ключам; второй подписант с отдельным
+// секретом был бы вторым материалом, который служба обязана хранить, вращать
+// и беречь.
+//
+// Код авторизации и токен обновления этот порт НЕ выпускает: они
+// непрозрачны, их значение — случайные байты церемонии, а в хранилище лежит
+// подпись значения (см. AuthorizationCodeVault, RefreshTokenVault).
+type AccessTokenIssuer interface {
+	// IssueAccessToken выпускает токен доступа по гранту.
+	//
+	// Срок назначает церемония: grant.Session.ExpiresAt[TokenKindAccess] —
+	// граница, позже которой токен истечь НЕ ВПРАВЕ (срок из
+	// Config.AccessTokenLifespan от мига обмена, сжатый границей семейства).
+	// Выпуск раньше неё законен: подписант режет срок до своего потолка или
+	// до целых секунд. Позже неё — ErrPortContract, и выпуск клиенту не
+	// уезжает.
+	//
+	// Исход — IssuedAccessToken, у которого названо всё: значение, jti,
+	// момент выпуска и exp, причём exp позже момента выпуска. Под jti
+	// церемония кладёт грант (AccessTokenVault.StoreAccessToken), а срок в
+	// ответе обмена считает как ExpiresAt − IssuedAt — те же exp и iat, что
+	// лежат в самом токене; незаполненное поле — ErrPortContract.
+	IssueAccessToken(ctx context.Context, grant GrantRecord) (IssuedAccessToken, error)
+
+	// IdentifyAccessToken проверяет предъявленный токен и отдаёт его jti.
+	//
+	// Проверяет ПОДЛИННОСТЬ: подпись ключом издателя и форму. Срок судить
+	// вправе, но не обязан — его сверяет церемония по записи гранта. Исходов
+	// три, и все три названы:
+	//
+	//  1. Токен выпущен этим издателем → (jti, nil). Пустой jti при nil —
+	//     ErrPortContract.
+	//  2. Токен не его: чужая подпись, неизвестный ключ, не та форма →
+	//     ("", ErrGrantNotFound). На интроспекции это `active: false`, на
+	//     отзыве — успех без действия (RFC 7662 §2.2, RFC 7009 §2.2).
+	//  3. Иной отказ → отказ ОПЕРАЦИИ. Опознание, которое не состоялось, не
+	//     вправе стать ни «негоден», ни «отозвано»: отзыв ответил бы успехом,
+	//     не сняв живой токен.
+	//
+	// Грант ищется ТОЛЬКО по опознанному jti. Поэтому значение, jti которого
+	// взято из чужого токена, а подпись не сходится, гранта не находит.
+	IdentifyAccessToken(ctx context.Context, token string) (string, error)
+}
+
+// IssuedAccessToken — выпущенный токен доступа.
+type IssuedAccessToken struct {
+	// Token — значение токена, которое уезжает клиенту как есть.
+	Token string
+
+	// ID — идентификатор токена (утверждение `jti`). Под ним церемония кладёт
+	// грант и под ним же ищет его при предъявлении.
+	ID string
+
+	// IssuedAt, ExpiresAt — момент выпуска и срок годности, ровно те, что
+	// лежат в токене (`iat`, `exp`).
+	IssuedAt  time.Time
+	ExpiresAt time.Time
+}
+
 // UnitOfWork — НЕОБЯЗАТЕЛЬНЫЙ порт единицы работы.
 //
 // Реализует СЛУЖБА, если её хранилище умеет транзакции.
@@ -335,6 +406,7 @@ type Ports struct {
 	RefreshTokens      RefreshTokenVault
 	Grants             GrantRevoker
 	ProofKeys          ProofKeyVault
+	AccessTokenIssuer  AccessTokenIssuer
 
 	// Transaction — необязателен. Пусто означает «хранилище службы не
 	// умеет транзакций», и церемония ведёт себя соответственно.

@@ -16,7 +16,7 @@ import (
 	engine "github.com/PRO-Robotech/corelib/internal/oauth2"
 	enginehandler "github.com/PRO-Robotech/corelib/internal/oauth2/handler/oauth2"
 	engineproofkey "github.com/PRO-Robotech/corelib/internal/oauth2/handler/pkce"
-	enginehmac "github.com/PRO-Robotech/corelib/internal/oauth2/token/hmac"
+	"github.com/PRO-Robotech/corelib/tokenpolicy"
 )
 
 // ── Настройки ───────────────────────────────────────────────────────────────
@@ -50,16 +50,17 @@ type Config struct {
 	// которые церемония подставляет в синтезированные запросы.
 	Issuer string
 
-	// SigningSecret — ключ подписи артефактов. Не короче 32 байт: подпись
-	// HMAC-SHA256 на более коротком ключе не даёт заявленной стойкости.
-	SigningSecret []byte
-
-	// RotatedSigningSecrets — прежние ключи подписи на время оборота.
-	// Ими артефакты ПРОВЕРЯЮТСЯ, но не подписываются.
-	RotatedSigningSecrets [][]byte
-
 	// AccessTokenLifespan, RefreshTokenLifespan, AuthorizationCodeLifespan
 	// — сроки жизни артефактов. Все три обязаны быть положительными.
+	//
+	// AccessTokenLifespan к тому же не длиннее tokenpolicy.MaxTokenTTL:
+	// токен доступа подписывает служба (Ports.AccessTokenIssuer), а её
+	// подписант выше потолка платформы не выпускает — церемония со сроком
+	// длиннее отказывала бы на каждом обмене, а не при сборке.
+	//
+	// Подписного материала в настройках нет: код авторизации и токен
+	// обновления непрозрачны (случайные байты, в хранилище — sha256
+	// значения), а токен доступа подписывает порт службы.
 	AccessTokenLifespan       time.Duration
 	RefreshTokenLifespan      time.Duration
 	AuthorizationCodeLifespan time.Duration
@@ -126,8 +127,8 @@ type Config struct {
 // локального значения, получившая содержимое присваиванием; канал, через
 // который прошло содержимое; получатель отданного содержимого, то есть код
 // движка, пишущий в то, что вернул ему геттер; прочее состояние движка —
-// обработчики, стратегию подписи. У форм слепой зоны держателя нет ни на одном
-// пути запроса: статическая проба на них молчит — её ноль находок и
+// обработчики, стратегию выпуска артефактов. У форм слепой зоны держателя нет
+// ни на одном пути запроса: статическая проба на них молчит — её ноль находок и
 // неразобранных стоит и при такой записи в дереве (это утверждает
 // TestNamedBlindZoneFormsStaySilent), — а перепись по тождеству содержимого не
 // видит. -race проба TestConcurrentExchangesOnAFreshCeremonyShareNoEngineState
@@ -174,8 +175,6 @@ func New(cfg Config, ports Ports) (*Ceremony, error) {
 		AccessTokenLifespan:            cfg.AccessTokenLifespan,
 		RefreshTokenLifespan:           cfg.RefreshTokenLifespan,
 		AuthorizeCodeLifespan:          cfg.AuthorizationCodeLifespan,
-		GlobalSecret:                   cfg.SigningSecret,
-		RotatedGlobalSecrets:           cfg.RotatedSigningSecrets,
 		HashCost:                       cfg.SecretHashCost,
 		MinParameterEntropy:            cfg.MinParameterEntropy,
 		ScopeStrategy:                  scopeStrategyOf(cfg.ScopeMatching),
@@ -227,8 +226,13 @@ func New(cfg Config, ports Ports) (*Ceremony, error) {
 		return nil, misuse("the storage bridge does not satisfy the client storage contract")
 	}
 
-	strategy := enginehandler.NewHMACSHAStrategyUnPrefixed(
-		&enginehmac.HMACStrategy{Config: engineCfg}, engineCfg)
+	// Стратегия выпуска артефактов — своя (artifactStrategy): подписного
+	// материала у церемонии нет, токен доступа выпускает порт службы.
+	strategy := &artifactStrategy{
+		issuer:    ports.AccessTokenIssuer,
+		timeout:   cfg.PortTimeout,
+		lifespans: engineCfg,
+	}
 
 	explicitGrant := &enginehandler.AuthorizeExplicitGrantHandler{
 		AccessTokenStrategy:    strategy,
@@ -299,18 +303,19 @@ var (
 
 func validateConfig(cfg *Config) error {
 	const (
-		minSigningSecret = 32
-		minHashCost      = 10
-		maxHashCost      = 15
-		minEntropy       = 8
+		minHashCost = 10
+		maxHashCost = 15
+		minEntropy  = 8
 	)
 	switch {
 	case strings.TrimSpace(cfg.Issuer) == "":
 		return misuse("Config.Issuer is not named")
-	case len(cfg.SigningSecret) < minSigningSecret:
-		return misuse("Config.SigningSecret is shorter than 32 bytes")
 	case cfg.AccessTokenLifespan <= 0:
 		return misuse("Config.AccessTokenLifespan is not a positive duration")
+	case cfg.AccessTokenLifespan > tokenpolicy.MaxTokenTTL:
+		return misuse("Config.AccessTokenLifespan " + cfg.AccessTokenLifespan.String() +
+			" exceeds tokenpolicy.MaxTokenTTL " + tokenpolicy.MaxTokenTTL.String() +
+			"; the access token is signed by the service, whose signer issues nothing longer")
 	case cfg.RefreshTokenLifespan <= 0:
 		return misuse("Config.RefreshTokenLifespan is not a positive duration")
 	case cfg.AuthorizationCodeLifespan <= 0:
@@ -353,6 +358,8 @@ func validatePorts(ports Ports) error {
 		return misuse("Ports.Grants is not named")
 	case ports.ProofKeys == nil:
 		return misuse("Ports.ProofKeys is not named")
+	case ports.AccessTokenIssuer == nil:
+		return misuse("Ports.AccessTokenIssuer is not named")
 	}
 	return nil
 }
@@ -709,7 +716,28 @@ func (c *Ceremony) Exchange(ctx context.Context, req TokenRequest) (TokenResult,
 	if engineErr != nil {
 		return TokenResult{}, notes.preferRecorded(fromEngine(engineErr))
 	}
-	return tokenResultOf(responder), nil
+	issued, noted := notes.issuedAccessToken()
+	return withIssuedLifetime(tokenResultOf(responder), issued, noted)
+}
+
+// withIssuedLifetime ставит в ответ обмена срок ЕГО выпуска.
+//
+// Срок жизни токена доступа (RFC 6749 §5.1, `expires_in`) — exp минус момент
+// выпуска, ровно те, что порт службы положил в токен. Движок считает срок
+// сам, от своих часов и своего срока в сеансе, — это был бы второй источник
+// одного значения, и они разошлись бы на ходе часов между выпуском и ответом.
+//
+// Ответ, токен доступа которого не выпущен портом в ЭТОЙ операции, не
+// собирается вовсе: срок, взятый у чужого выпуска или ни у какого, был бы
+// ложью, и отдать токен без срока — тоже.
+func withIssuedLifetime(result TokenResult, issued IssuedAccessToken, noted bool) (TokenResult, error) {
+	if !noted || issued.Token == "" || issued.Token != result.AccessToken {
+		return TokenResult{}, failf(CodeServerError, nil,
+			"The token response carries an access token that the access token issuer did not issue in this exchange.",
+			"", "")
+	}
+	result.ExpiresIn = issued.ExpiresAt.Sub(issued.IssuedAt)
+	return result, nil
 }
 
 // revokeReplayedFamily отзывает семейство гранта, у которого замечен повтор.
@@ -1012,9 +1040,8 @@ func tokenResultOf(responder engine.AccessResponder) TokenResult {
 		case "access_token", "token_type":
 			// Уже названы полями; второй раз не кладём.
 		case "expires_in":
-			if seconds, ok := value.(int64); ok {
-				result.ExpiresIn = time.Duration(seconds) * time.Second
-			}
+			// Срок в ответе — срок выпуска (withIssuedLifetime), а не пересчёт
+			// движка от его часов; второй раз не кладём.
 		case "scope":
 			if scope, ok := value.(string); ok && scope != "" {
 				result.Scopes = strings.Split(scope, " ")

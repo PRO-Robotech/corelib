@@ -15,10 +15,14 @@ package oauthceremony_test
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
+	"errors"
 	"sync"
 	"time"
 
 	"github.com/PRO-Robotech/corelib/oauthceremony"
+	"github.com/PRO-Robotech/corelib/tokenpolicy"
 )
 
 type codeRow struct {
@@ -75,6 +79,139 @@ type memoryPorts struct {
 
 	// revokeFailure — отказ порта отзыва. Пусто — отзыв исполняется.
 	revokeFailure error
+
+	// issuer — порт выпуска токена доступа: у службы он живёт рядом с её
+	// хранилищем и подписантом, здесь — рядом с подставкой хранилища.
+	issuer *recordingIssuer
+}
+
+// recordingIssuer — подставка порта выпуска токена доступа.
+//
+// Держит СЕМАНТИКУ порта так, как её держит подписант службы: момент выпуска
+// берётся с часов, которые проба вправе остановить; срок — не дальше границы,
+// названной церемонией (Session.ExpiresAt[TokenKindAccess]), и не длиннее
+// своего потолка, в целых секундах. Опознание отвечает идентификатором ТОЛЬКО
+// на токен, выпущенный этой подставкой: чужое значение — ErrGrantNotFound, как
+// токен с чужой подписью у настоящего подписанта. Подставка, опознающая
+// всякое предъявленное, сделала бы пробу подделки бессмысленной.
+type recordingIssuer struct {
+	mu sync.Mutex
+
+	// now — часы выпуска. Проба, утверждающая срок в ответе точным
+	// равенством, останавливает их.
+	now func() time.Time
+	// ceiling — потолок срока, как MaxTokenTTL у подписанта службы.
+	ceiling time.Duration
+
+	// byToken — выпущенное: значение токена → выпуск.
+	byToken map[string]oauthceremony.IssuedAccessToken
+	// log — выпуски по порядку, с грантом, который церемония назвала.
+	log []issuance
+
+	// reshape правит выпуск перед возвратом: так проба контракта порта
+	// меняет в выпуске РОВНО ОДИН факт. Пусто — выпуск как есть.
+	reshape func(grant oauthceremony.GrantRecord, issued *oauthceremony.IssuedAccessToken)
+	// issueFailure — отказ выпуска. Пусто — выпуск исполняется.
+	issueFailure error
+	// identifyFailure — отказ опознания. Пусто — опознание исполняется.
+	identifyFailure error
+	// identifyEmpty — опознание отвечает пустым идентификатором без отказа.
+	identifyEmpty bool
+}
+
+// issuance — один выпуск: что церемония назвала и что подставка вернула.
+type issuance struct {
+	grant  oauthceremony.GrantRecord
+	issued oauthceremony.IssuedAccessToken
+}
+
+func newRecordingIssuer() *recordingIssuer {
+	return &recordingIssuer{
+		now:     time.Now,
+		ceiling: tokenpolicy.MaxTokenTTL,
+		byToken: map[string]oauthceremony.IssuedAccessToken{},
+	}
+}
+
+// IssueAccessToken выпускает токен сроком не дальше границы церемонии.
+func (f *recordingIssuer) IssueAccessToken(_ context.Context, grant oauthceremony.GrantRecord) (oauthceremony.IssuedAccessToken, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	if f.issueFailure != nil {
+		return oauthceremony.IssuedAccessToken{}, f.issueFailure
+	}
+	notAfter, named := grant.Session.ExpiresAt[oauthceremony.TokenKindAccess]
+	if !named {
+		return oauthceremony.IssuedAccessToken{}, errors.New("recording issuer: the ceremony named no expiry bound for the access token")
+	}
+	issuedAt := f.now()
+	lifetime := min(f.ceiling, notAfter.Sub(issuedAt)).Truncate(time.Second)
+	if lifetime <= 0 {
+		return oauthceremony.IssuedAccessToken{}, errors.New("recording issuer: the expiry bound has already passed")
+	}
+
+	token, id := randomHex(24), "jti-"+randomHex(12)
+	issued := oauthceremony.IssuedAccessToken{
+		Token:     "at." + token,
+		ID:        id,
+		IssuedAt:  issuedAt,
+		ExpiresAt: issuedAt.Add(lifetime),
+	}
+	if f.reshape != nil {
+		f.reshape(grant, &issued)
+	}
+	f.byToken[issued.Token] = issued
+	f.log = append(f.log, issuance{grant: grant, issued: issued})
+	return issued, nil
+}
+
+// IdentifyAccessToken отвечает идентификатором выпущенного здесь токена.
+func (f *recordingIssuer) IdentifyAccessToken(_ context.Context, token string) (string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	switch {
+	case f.identifyFailure != nil:
+		return "", f.identifyFailure
+	case f.identifyEmpty:
+		return "", nil
+	}
+	issued, found := f.byToken[token]
+	if !found {
+		return "", oauthceremony.ErrGrantNotFound
+	}
+	return issued.ID, nil
+}
+
+// issuances отдаёт копию журнала выпусков.
+func (f *recordingIssuer) issuances() []issuance {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]issuance(nil), f.log...)
+}
+
+// setIdentifyFailure меняет отказ опознания под замком: проба ставит и снимает
+// его между операциями.
+func (f *recordingIssuer) setIdentifyFailure(err error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.identifyFailure = err
+}
+
+// setIssueFailure — то же для отказа выпуска.
+func (f *recordingIssuer) setIssueFailure(err error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.issueFailure = err
+}
+
+func randomHex(n int) string {
+	b := make([]byte, n)
+	if _, err := rand.Read(b); err != nil {
+		panic("НЕ ВЫПОЛНИЛОСЬ: источник случайности подставки отказал: " + err.Error())
+	}
+	return hex.EncodeToString(b)
 }
 
 // rendezvous — встреча ровно n участников. Пока не собрались все, каждый
@@ -170,6 +307,7 @@ func newMemoryPorts() *memoryPorts {
 		refresh: map[string]*refreshRow{},
 		proof:   map[string]oauthceremony.GrantRecord{},
 		revoked: map[string]bool{},
+		issuer:  newRecordingIssuer(),
 	}
 }
 
@@ -181,6 +319,7 @@ func (m *memoryPorts) ports() oauthceremony.Ports {
 		RefreshTokens:      m,
 		Grants:             m,
 		ProofKeys:          m,
+		AccessTokenIssuer:  m.issuer,
 	}
 }
 
@@ -496,6 +635,7 @@ var (
 	_ oauthceremony.RefreshTokenVault      = (*memoryPorts)(nil)
 	_ oauthceremony.GrantRevoker           = (*memoryPorts)(nil)
 	_ oauthceremony.ProofKeyVault          = (*memoryPorts)(nil)
+	_ oauthceremony.AccessTokenIssuer      = (*recordingIssuer)(nil)
 )
 
 // ── Единица работы ──────────────────────────────────────────────────────────

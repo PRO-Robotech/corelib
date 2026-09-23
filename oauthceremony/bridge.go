@@ -309,9 +309,31 @@ func (b *storageBridge) CreateAccessTokenSession(ctx context.Context, signature 
 	return nil
 }
 
+// GetAccessTokenSession отдаёт грант по подписи токена доступа — его jti.
+//
+// Пустая подпись — токен, который порт выпуска НЕ ОПОЗНАЛ
+// (artifactStrategy.AccessTokenSignature): пустого jti у выпущенного токена не
+// бывает, его отвергает выпуск (checkIssued). Хранилище по пустой подписи не
+// спрашивается. Если порт ответил «не наш», ответ — «записи нет». Если
+// опознание ОТКАЗАЛО, ответ — этот отказ, и он пишется в ведомость операции
+// любым случаем, а не только из перечня coarsenable: движок сжимает всякий
+// отказ интроспекции в «токен неактивен», а отказ отзыва — в «временно
+// недоступно», и без записи интроспекция назвала бы годный токен негодным.
+// Отказ опознания — (а) точнее любого вердикта движка и (б) означает, что
+// опознать токен доступа эта операция не смогла; операцию, которая всё же
+// нашла артефакт иным путём (токен обновления), запись не трогает —
+// ведомость читается только на отказе.
 func (b *storageBridge) GetAccessTokenSession(ctx context.Context, signature string, session engine.Session) (engine.Requester, error) {
 	ctx, cancel := b.deadline(ctx)
 	defer cancel()
+
+	if signature == "" {
+		if failure := notesFrom(ctx).unidentifiedFailure(); failure != nil {
+			notesFrom(ctx).record(failure)
+			return nil, failure
+		}
+		return nil, pairEngine(ctx, fromPort("AccessTokenIssuer.IdentifyAccessToken", ErrGrantNotFound), engine.ErrNotFound)
+	}
 
 	rec, err := b.ports.AccessTokens.FetchAccessToken(ctx, signature)
 	if err != nil {
