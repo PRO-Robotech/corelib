@@ -75,13 +75,6 @@ type Config struct {
 	// RefreshTokenIssuanceAlways, иначе у правила было бы два места.
 	RefreshTokenScopes []string
 
-	// RequireProofKey — требовать PKCE (RFC 7636) от ВСЕХ клиентов.
-	RequireProofKey bool
-
-	// RequireProofKeyForPublicClients — требовать PKCE от публичных
-	// клиентов. Действует независимо от RequireProofKey.
-	RequireProofKeyForPublicClients bool
-
 	// SecretHashCost — цена хеширования секрета клиента. Обязана быть в
 	// пределах [10, 15]: ниже — подбор дёшев, выше — сверка секрета
 	// становится прибором для отказа в обслуживании.
@@ -170,6 +163,11 @@ func New(cfg Config, ports Ports) (*Ceremony, error) {
 	authorizeURL := issuer.JoinPath("oauth2", "authorize").String()
 	tokenURL := issuer.JoinPath("oauth2", "token").String()
 
+	// PKCE (RFC 7636) обязателен ВСЕМ клиентам и только с методом S256
+	// (EnforcePKCE, EnforcePKCEForPublicClients, EnablePKCEPlainChallengeMethod
+	// ниже): запись кода без привязки невыразима (AuthorizationCodeRecord), и
+	// ручки, которая её разрешала бы, нет. Оба требования движка названы, чтобы
+	// ни один его путь не читал более мягкого правила.
 	engineCfg := &engine.Config{
 		AccessTokenLifespan:            cfg.AccessTokenLifespan,
 		RefreshTokenLifespan:           cfg.RefreshTokenLifespan,
@@ -180,8 +178,8 @@ func New(cfg Config, ports Ports) (*Ceremony, error) {
 		MinParameterEntropy:            cfg.MinParameterEntropy,
 		ScopeStrategy:                  scopeStrategyOf(cfg.ScopeMatching),
 		AudienceMatchingStrategy:       engine.DefaultAudienceMatchingStrategy,
-		EnforcePKCE:                    cfg.RequireProofKey,
-		EnforcePKCEForPublicClients:    cfg.RequireProofKeyForPublicClients,
+		EnforcePKCE:                    true,
+		EnforcePKCEForPublicClients:    true,
 		EnablePKCEPlainChallengeMethod: false,
 		SendDebugMessagesToClients:     false,
 		AccessTokenIssuer:              cfg.Issuer,
@@ -189,11 +187,11 @@ func New(cfg Config, ports Ports) (*Ceremony, error) {
 		TokenURL:                       tokenURL,
 		RefreshTokenScopes:             refreshTokenScopesOf(cfg),
 		// Поля запроса авторизации, доезжающие до записи кода. Сверх
-		// умолчания движка (`code`, `redirect_uri`) — `code_challenge`: по
-		// нему мост узнаёт, что код привязан к PKCE, и пропавшая запись PKCE
-		// у такого кода — повтор, а не «данных PKCE нет» (см.
-		// storageBridge.GetPKCERequestSession).
-		SanitationWhiteList: []string{"code", "redirect_uri", "code_challenge"},
+		// умолчания движка (`code`, `redirect_uri`) — привязка PKCE, вызов и
+		// метод: мост переносит их в поля записи кода
+		// (AuthorizationCodeRecord.ProofKey), из которой их потом и читает
+		// обработчик PKCE движка (см. storageBridge.GetPKCERequestSession).
+		SanitationWhiteList: []string{"code", "redirect_uri", formCodeChallenge, formCodeChallengeMethod},
 	}
 	// Хешер секрета клиента назван ЗДЕСЬ, а не оставлен движку. Геттер движка
 	// заполняет неназванное поле ЛЕНИВО — первым вызовом и без синхронизации,
@@ -351,8 +349,6 @@ func validatePorts(ports Ports) error {
 		return misuse("Ports.RefreshTokens is not named")
 	case ports.Grants == nil:
 		return misuse("Ports.Grants is not named")
-	case ports.ProofKeys == nil:
-		return misuse("Ports.ProofKeys is not named")
 	}
 	return nil
 }
@@ -516,7 +512,32 @@ func (c *Ceremony) Authorize(ctx context.Context, req AuthorizationRequest) (Aut
 	if engineErr != nil {
 		return intent, notes.preferRecorded(fromEngine(engineErr))
 	}
+	if err := requireProofKey(requester); err != nil {
+		return intent, err
+	}
 	return intent, nil
+}
+
+// requireProofKey отвергает запрос кода без годной привязки PKCE S256 случаем
+// CodeInvalidRequest (RFC 7636 §4.4.1).
+//
+// # Почему церемония, а не движок
+//
+// Обработчик PKCE движка сверяет привязку, когда код УЖЕ выпущен и положен в
+// хранилище обработчиком кода (он стоит раньше, см. New), и отказывает уже
+// после записи. Здесь отказ приходит раньше: в Authorize — до согласия, чтобы
+// служба не спрашивала человека о запросе, который кода не получит, и в
+// CompleteAuthorization — до выпуска кода, для намерения, чей отказ служба не
+// доставила. Запрос без типа ответа `code` кода не выпускает, и привязка ему
+// не нужна — так же судит и движок.
+func requireProofKey(requester engine.AuthorizeRequester) error {
+	if requester == nil || !requester.GetResponseTypes().Has(string(ResponseKindCode)) {
+		return nil
+	}
+	if _, bad := proofKeyBindingOf(requester.GetRequestForm()); bad != nil {
+		return bad
+	}
+	return nil
 }
 
 // CompleteAuthorization закрывает намерение выдачей.
@@ -533,6 +554,9 @@ func (c *Ceremony) CompleteAuthorization(ctx context.Context, intent Authorizati
 	ctx, notes := withNotes(ctx)
 
 	if err := c.checkIntent(intent); err != nil {
+		return AuthorizationResult{}, err
+	}
+	if err := requireProofKey(intent.requester); err != nil {
 		return AuthorizationResult{}, err
 	}
 	if strings.TrimSpace(grant.Subject) == "" {
@@ -693,8 +717,8 @@ func (c *Ceremony) Exchange(ctx context.Context, req TokenRequest) (TokenResult,
 
 	// Повтор кода авторизации (RFC 6749 §4.1.2) и токена обновления (RFC 9700
 	// §4.14.2) отзывает семейство гранта — и последовательный, замеченный
-	// выборкой, и одновременный, замеченный нулём строк погашения или оборота
-	// либо пропавшей записью PKCE. Правило не зависит от того, чем кончил
+	// выборкой, и одновременный, замеченный нулём строк погашения или
+	// оборота. Правило не зависит от того, чем кончил
 	// движок: если повтор замечен, выданное этим обменом принадлежит
 	// отозванному семейству, и отдать его вызывающему как успех значило бы
 	// отдать мёртвые токены. Отказ отзыва — отказ операции.

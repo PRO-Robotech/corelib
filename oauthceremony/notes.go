@@ -58,12 +58,18 @@ import (
 // Церемония отзывает ВНЕ единицы работы движка и называет отказ отзыва
 // отказом операции — а не «повтор», за которым живое семейство.
 //
-// # Третье: код, предъявленный в этой операции
+// # Третье: код, предъявленный и погашенный в этой операции
 //
 // Ноль строк погашения приходит мосту БЕЗ гранта (порт гасит по подписи), а
-// пропавшая запись PKCE — без гранта и без признака, была ли она вообще.
-// Выборка кода в той же операции стоит раньше обоих, и её грант и признак
-// привязки к PKCE мост записывает сюда: по ним повтор узнаётся и там.
+// движок спрашивает привязку PKCE отдельно от кода. Выборка кода в той же
+// операции стоит раньше обоих, и её запись мост заносит сюда: по её гранту
+// повтор узнаётся на нуле строк погашения, а привязку PKCE движок получает из
+// неё же — из записи кода, а не из второго хранилища.
+//
+// Погашение кода мост тоже заносит сюда: код гасится РОВНО ОДИН РАЗ за обмен —
+// при снятии привязки PKCE, — и выборка выдачи, нашедшая код погашенным ЭТОЙ
+// ЖЕ операцией, повтором не является, как и погашение на выдаче, которому
+// остаётся лишь это признать.
 //
 // # Четвёртое: почему в этой операции отзывают
 //
@@ -89,6 +95,9 @@ type operationNotes struct {
 	// presented — код, предъявленный в этой операции. Нулевое значение —
 	// кода не предъявляли.
 	presented presentedCode
+	// consumed — подпись кода, погашенного этой операцией. Пусто — операция
+	// кода не гасила.
+	consumed string
 	// requested — причина отзыва, названная самой операцией. Нулевое
 	// значение — операция причины не называет.
 	requested RevocationReason
@@ -115,13 +124,11 @@ type replayedFamily struct {
 	reason   RevocationReason
 }
 
-// presentedCode — код, выбранный в этой операции: подпись, грант, клиент и
-// привязан ли код к PKCE (у записи кода есть `code_challenge`).
+// presentedCode — код, выбранный в этой операции: подпись и запись кода
+// такой, какой её отдало хранилище.
 type presentedCode struct {
-	signature  string
-	grantID    string
-	clientID   string
-	proofBound bool
+	signature string
+	record    AuthorizationCodeRecord
 }
 
 type operationNotesKey struct{}
@@ -216,7 +223,7 @@ func (n *operationNotes) revocationReason() (RevocationReason, bool) {
 
 // notePresentedCode записывает код, выбранный в этой операции.
 func (n *operationNotes) notePresentedCode(code presentedCode) {
-	if n == nil || code.grantID == "" {
+	if n == nil || code.signature == "" {
 		return
 	}
 	n.mu.Lock()
@@ -232,10 +239,33 @@ func (n *operationNotes) presentedCodeOf(signature string) (presentedCode, bool)
 	}
 	n.mu.Lock()
 	defer n.mu.Unlock()
-	if n.presented.grantID == "" || n.presented.signature != signature {
+	if n.presented.signature == "" || n.presented.signature != signature {
 		return presentedCode{}, false
 	}
 	return n.presented, true
+}
+
+// noteConsumed записывает, что код под подписью signature погасила эта
+// операция.
+func (n *operationNotes) noteConsumed(signature string) {
+	if n == nil {
+		return
+	}
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	n.consumed = signature
+}
+
+// consumedHere отвечает, погасила ли код под подписью signature эта операция.
+// Без ведомости — нет: мосту, вызванному вне операции, признать погашение
+// своим нечем.
+func (n *operationNotes) consumedHere(signature string) bool {
+	if n == nil {
+		return false
+	}
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	return signature != "" && n.consumed == signature
 }
 
 // replayed отдаёт семейство, у которого замечен повтор; нулевое значение —
