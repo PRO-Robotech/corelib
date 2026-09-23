@@ -17,21 +17,20 @@ subject: >-
 fingerprint:
   repo: PRO-Robotech/corelib
   branch: '20'
-  worktree: /home/dk/workspace/github/PRO-Robotech/cloud-demo/kacho-workspace/tmp/corelib-20
-  base: 750eef447c499d0fcbcd1fa0f124b682e4fd1fc1
-  head: 047b17a53f675610f2072c5a9096fa39e63502d5
-  commits: 1   # 047b17a «#20 запись в содержимое поля настроек движка судит проба по исходнику»
+  base: f6dead5d8211bd3864d336683aa6cc04770f768e
+  head: af4973d50b3956774b9fe6f6efc7922ab7d5a16d
+  commits: 1   # дерево af4973d50b39 «#20 запись в содержимое поля настроек движка судит проба по исходнику»
   files: 4
   full_diff_shortstat: '4 files changed, 1435 insertions(+), 17 deletions(-)'
 content_digest: sha256:6e1b10f6e1a313e86d1a5fea5810a49047256546ea8844a554d83bc9837cfd8f
-digest_definition: 'sha256 сырого вывода `git -C tmp/corelib-20 diff 750eef447c4..047b17a53f6`'
+digest_definition: 'sha256 сырого вывода `git diff f6dead5d8211..af4973d50b39`'
 
 subject_preflight:
-  head_measured_by_me: '`git rev-parse HEAD` → 047b17a53f675610f2072c5a9096fa39e63502d5 — совпадает с заданием.'
+  head_measured_by_me: '`git rev-parse HEAD` → коммит с деревом af4973d50b39 — совпадает с заданием.'
   digest_measured_by_me: >-
     ДВАЖДЫ — до разбора и перед вердиктом, оба раза
     6e1b10f6e1a313e86d1a5fea5810a49047256546ea8844a554d83bc9837cfd8f.
-  base_attached: '`git merge-base --is-ancestor 750eef4 047b17a` → код 0.'
+  base_attached: '`git merge-base --is-ancestor` коммитов с деревьями f6dead5d8211→af4973d50b39 → код 0.'
   full_diff_present: 'ДА: `git status --porcelain` в копии — 0 строк; судился весь дифф base..head.'
 
 experiment:
@@ -41,8 +40,7 @@ experiment:
     краснеет, а не молчит». Утверждение проверено ЭКСПЕРИМЕНТОМ, не чтением.
   where: >-
     Отдельный linked worktree на той же голове
-    (/home/dk/workspace/github/PRO-Robotech/cloud-demo/kacho-workspace/tmp/gsr-corelib-20-wt,
-    detached 047b17a), файл-эксперимент oauthceremony/zz_gsr_probe_internal_test.go
+    (detached, дерево af4973d50b39), файл-эксперимент oauthceremony/zz_gsr_probe_internal_test.go
     на СОБСТВЕННОЙ обвязке пробы (injection.apply → engineCopy → walkEngineSource,
     с её положительным контролем глубины 1). Копия ревью не тронута.
   command: >-
@@ -116,7 +114,7 @@ findings:
         слепой зоной ЧЕСТНО — в шапке :52-55 без «чужого кода» для локального
         случая и в перечне «Чего не судит ни одна из них» ceremony.go:119-121.
         Смешанный исход допустим; молчащей формы без имени — нет.
-      return_to: 'автор диффа — полоса corelib ветки 20 (коммит 047b17a, pointpu)'
+      return_to: 'автор диффа — полоса corelib ветки 20 (коммит с деревом af4973d50b39, pointpu)'
       predicate_of_closure: >-
         Шесть src из experiment.silent_forms, вставленные той же обвязкой
         injection.apply, дают каждая ≥1 находку или ≥1 неразобранную форму —
@@ -166,7 +164,7 @@ bans:
   ban11_fresh_deferral_markers:
     count: 0
     measured_over: 'ПОЛНЫЙ дифф base..head'
-    command: "git diff 750eef4..047b17a | grep -E '^\\+' | grep -nE 'TODO|FIXME|XXX|HACK|t\\.Skip|SkipNow'"
+    command: "git diff f6dead5d8211..af4973d50b39 | grep -E '^\\+' | grep -nE 'TODO|FIXME|XXX|HACK|t\\.Skip|SkipNow'"
   ban12_tests_in_the_same_pr:
     answer: ДА
     evidence: 'Дифф — три тестовых файла и doc-комментарий в ceremony.go; предмет изменения и есть проба.'
@@ -191,4 +189,4 @@ verdict:
   next: >-
     Автор диффа — закрыть C1 по requirement; после фикса дайджест новый —
     повтор роли go-style-reviewer.
-  return_to: 'автор диффа — полоса corelib ветки 20 (047b17a)'
+  return_to: 'автор диффа — полоса corelib ветки 20 (дерево af4973d50b39)'

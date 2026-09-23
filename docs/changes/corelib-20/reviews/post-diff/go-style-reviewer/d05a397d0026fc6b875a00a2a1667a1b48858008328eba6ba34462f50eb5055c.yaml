@@ -12,34 +12,31 @@ subject: >-
   дельта ветки волны 27 фундамента после аудита безопасности: страж F1-51
   без учёта регистра пути импорта; нулевая граница и нулевой срок не делают
   токен обновления бессрочным; маркер отсрочки апстрима в PROVENANCE;
-  хешер секрета клиента назван в New (гонка ленивой инициализации, d0c5fb3)
+  хешер секрета клиента назван в New (гонка ленивой инициализации, дерево f6dead5d8211)
 
 fingerprint:
   repo: PRO-Robotech/corelib
-  clone: /home/dk/workspace/github/PRO-Robotech/cloud-demo/kacho-workspace/project/corelib
-  review_copy: /home/dk/workspace/github/PRO-Robotech/cloud-demo/kacho-workspace/tmp/gsr-corelib-750eef4
-  base: 0c8bf7ea2021d6a74256ac0a1061212a61b45683
+  base: 790f829d573bcd13315038dcd54389a4b75367cf
   base_is: >-
     дерево 790f829 — на нём стоит ✅ аудита безопасности (перемерено:
-    `git cat-file -p 0c8bf7e` → tree 790f829d573). 241a62b (первый родитель
-    слияния 172dfe6, голова волны до слияния) — предок 0c8bf7e
-    (`git merge-base --is-ancestor 241a62b 0c8bf7e` → да), поэтому диапазон
+    `git cat-file -p <коммит аудита>` → tree 790f829d573). 241a62b (первый родитель
+    слияния с деревом b2995848f400, голова волны до слияния) — предок коммита аудита
+    (`git merge-base --is-ancestor 241a62b <коммит аудита>` → да), поэтому диапазон
     не тянет чужой работы.
-  head: 750eef447c499d0fcbcd1fa0f124b682e4fd1fc1
-  head_is: 'origin/27 (`git branch -a --contains 750eef4` → remotes/origin/27)'
+  head: f6dead5d8211bd3864d336683aa6cc04770f768e
+  head_is: 'origin/27 (`git branch -a --contains <коммит с деревом f6dead5d8211>` → remotes/origin/27)'
   shortstat: '13 файлов, +857 / -40'
   commits:
-    - 'e8bcffd #20 страж F1-51 сравнивает путь импорта без учёта регистра'
-    - '546851b #20 нулевая граница срока не делает токен обновления бессрочным'
-    - 'f91b667 #20 маркер отсрочки апстрима записан в происхождении поддерева'
-    - '9b491ce #20 отказ о нулевом времени в записи не обобщает на все виды'
-    - '172dfe6 #27 merge #20 (дерево = 9b491ce, `git diff 172dfe6 9b491ce` пуст)'
-    - 'd0c5fb3 #20 настройки движка на пути запроса только читаются: хешер секрета назван в New'
-    - '750eef4 #27 merge #20 (дерево = d0c5fb3, `git diff 750eef4 d0c5fb3` пуст)'
+    - 'дерево f68caa8c590b #20 страж F1-51 сравнивает путь импорта без учёта регистра'
+    - 'дерево bfbe3ab9bfc1 #20 нулевая граница срока не делает токен обновления бессрочным'
+    - 'дерево b25cc9f848f1 #20 маркер отсрочки апстрима записан в происхождении поддерева'
+    - 'дерево b2995848f400 #20 отказ о нулевом времени в записи не обобщает на все виды'
+    - 'дерево b2995848f400 #27 merge #20 (дерево = дерево строки выше, `git diff` слияния и коммита строки выше пуст)'
+    - 'дерево f6dead5d8211 #20 настройки движка на пути запроса только читаются: хешер секрета назван в New'
+    - 'дерево f6dead5d8211 #27 merge #20 (дерево = дерево строки выше, `git diff` слияния и коммита строки выше пуст)'
 content_digest: sha256:d05a397d0026fc6b875a00a2a1667a1b48858008328eba6ba34462f50eb5055c
 digest_definition: |
-  cd /home/dk/workspace/github/PRO-Robotech/cloud-demo/kacho-workspace/project/corelib
-  git diff 0c8bf7e..750eef4 | sha256sum
+  git diff 790f829d573b..f6dead5d8211 | sha256sum
   (перемерено тем же выражением и в копии ревьюера — совпадает)
 
 verdict: accepted              # ✅ принято
@@ -47,7 +44,7 @@ blocks_landing: false
 timestamp: '2026-09-23T00:00:00Z'
 return_to: 'автор диффа — pointpu <pointpu@in-cloud.io> (автор всех пяти своих коммитов дельты); только неблокирующее'
 review_scope: >-
-  ПОЛНЫЙ закоммиченный дифф 0c8bf7e..750eef4, все 13 файлов; прод-код
+  ПОЛНЫЙ закоммиченный дифф деревьев 790f829d573b..f6dead5d8211, все 13 файлов; прод-код
   прочитан вместе с окружением (New, CompleteAuthorization, hydrateSession,
   requesterFromGrant, пути моста к нему, геттеры настроек движка
   internal/oauth2/config_default.go, стратегия HMAC, достижимость
@@ -112,7 +109,7 @@ premise_checks:
   - claim: 'PROVENANCE: «прочитано 762 из 762, находок 1»'
     result: вывод подтверждён, число — нет (см. important I3)
     how: >-
-      treehygiene.AuditDeferredWork(корень копии @750eef4, без вычитаний):
+      treehygiene.AuditDeferredWork(корень копии на дереве f6dead5d8211, без вычитаний):
       в индексе 765, прочитано 765, находок 1 —
       internal/oauth2/handler/oauth2/introspector_jwt.go:78, маркер апстрима.
 
@@ -148,8 +145,8 @@ important:
     at: internal/oauth2/PROVENANCE.md:377
     summary: >-
       «прочитано 762 из 762 файлов индекса» не называет ревизии. 762 — индекс
-      0c8bf7e/e8bcffd, а текст внесён в f91b667, где файлов 763; на голове
-      750eef4 их 765 (`git ls-tree -r --name-only <rev> | wc -l`). Вывод
+      деревьев 790f829d573b/f68caa8c590b, а текст внесён коммитом с деревом b25cc9f848f1, где файлов 763; на голове
+      (дерево f6dead5d8211) их 765 (`git ls-tree -r --name-only <rev> | wc -l`). Вывод
       («находка одна, и это маркер апстрима») на голове верен — перемерено.
     requirement: >-
       назвать ревизию замера либо переснять на ревизии, которая несёт текст.
@@ -192,22 +189,22 @@ style:
 fresh_deferral_markers: 0
 fresh_deferral_markers_predicate: >-
   разбором запрета, а не образцом: treehygiene.AuditDeferredWork по дереву
-  750eef4 — находка одна, в файле, которого дельта не трогает (маркер
+  f6dead5d8211 — находка одна, в файле, которого дельта не трогает (маркер
   апстрима introspector_jwt.go). Цитата маркера в PROVENANCE.md стоит в
   обратных кавычках, и разбор её находкой не называет.
 tests_in_same_pr: true
 tests_in_same_pr_evidence: >-
-  каждый коммит с прод-правкой несёт свою пробу: e8bcffd (imports.go +
-  imports_injection_test/forms_test), 546851b (ceremony/translate/types +
-  lifetime_test/session_internal_test), d0c5fb3 (ceremony + engineconfig_internal_test/
-  settings_race_test). 9b491ce меняет только текст отказа, и поведение под
-  ним держат пробы 546851b.
+  каждый коммит с прод-правкой несёт свою пробу: дерево f68caa8c590b (imports.go +
+  imports_injection_test/forms_test), дерево bfbe3ab9bfc1 (ceremony/translate/types +
+  lifetime_test/session_internal_test), дерево f6dead5d8211 (ceremony + engineconfig_internal_test/
+  settings_race_test). Коммит #20 с деревом b2995848f400 меняет только текст отказа, и поведение под
+  ним держат пробы коммита с деревом bfbe3ab9bfc1.
 
 security_comments_contradicting_code: []
 security_comments_note: >-
   комментарии о сроках (SetExpiresAt, hydrateSession, types.go) сверены с
   кодом: ноль токена обновления движок читает как «без срока», и это
-  утверждение нигде не обобщено на другие виды — 9b491ce снял последнее
+  утверждение нигде не обобщено на другие виды — коммит #20 с деревом b2995848f400 снял последнее
   обобщение.
 
 approved:
@@ -222,7 +219,7 @@ approved:
 
 linter_probes_outcome: not-claimed-by-this-role
 experiments_run: >-
-  ради находок, не вердикт: go vet по трём пакетам — rc 0; пробы d0c5fb3 и
+  ради находок, не вердикт: go vet по трём пакетам — rc 0; пробы коммита #20 с деревом f6dead5d8211 и
   пробы нулевой границы на голове — PASS; две инъекции — FAIL в ожидаемом
   подслучае; `go test -race` — НЕ ВЫПОЛНИЛОСЬ (на машине нет gcc, cgo
   недоступен), поэтому силу одновременной пробы под детектором я не мерил.

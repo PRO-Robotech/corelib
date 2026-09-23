@@ -7,7 +7,7 @@ change_id: corelib-20
 holder: post-diff/go-style-reviewer
 owner: go-style-reviewer
 round: 2
-previous_record: 6e1b10f6e1a313e86d1a5fea5810a49047256546ea8844a554d83bc9837cfd8f.yaml   # круг 1, ⛔ возврат по C1 на 047b17a
+previous_record: 6e1b10f6e1a313e86d1a5fea5810a49047256546ea8844a554d83bc9837cfd8f.yaml   # круг 1, ⛔ возврат по C1 на дереве af4973d50b39
 subject: >-
   oauthceremony — статическая проба по исходнику движка переведена из
   «закрытого распознавателя» в «ограждение известных форм со слепой зоной
@@ -18,28 +18,26 @@ subject: >-
 fingerprint:
   repo: PRO-Robotech/corelib
   branch: '20'
-  worktree: /home/dk/workspace/github/PRO-Robotech/cloud-demo/kacho-workspace/tmp/corelib-20
-  base: 750eef447c499d0fcbcd1fa0f124b682e4fd1fc1
-  head: d2b1aaccac521169f8557d842dc21e9e0bc90fbe
-  delta_base: 047b17a53f675610f2072c5a9096fa39e63502d5
-  commits: 2   # 047b17a, d2b1aac
+  base: f6dead5d8211bd3864d336683aa6cc04770f768e
+  head: ddee75b75f1344060944c8b9d8bdf1221df0e50a
+  delta_base: af4973d50b3956774b9fe6f6efc7922ab7d5a16d
+  commits: 2   # дерево af4973d50b39, дерево ddee75b75f13
   files: 4
   full_diff_shortstat: '4 files changed, 1809 insertions(+), 17 deletions(-)'
   delta_shortstat: '4 files changed, 476 insertions(+), 102 deletions(-)'
 content_digest: sha256:6c83fae70e76033f4625be880a1eecd0aefbbee1e4d92591725b410ada7619e1
-digest_definition: "sha256 вывода `git -C tmp/corelib-20 diff 750eef447c4..d2b1aaccac5 -- . ':!docs/changes'`"
+digest_definition: "sha256 вывода `git diff f6dead5d8211..ddee75b75f13 -- . ':!docs/changes'`"
 
 subject_preflight:
-  head_measured_by_me: '`git rev-parse HEAD` → d2b1aaccac521169f8557d842dc21e9e0bc90fbe — совпадает с заданием.'
+  head_measured_by_me: '`git rev-parse HEAD` → коммит с деревом ddee75b75f13 — совпадает с заданием.'
   digest_measured_by_me: 'ДВАЖДЫ — до разбора и перед вердиктом, оба раза 6c83fae7…19e1.'
-  base_attached: '`git merge-base --is-ancestor` 750eef4→d2b1aac и 047b17a→d2b1aac — код 0 оба.'
+  base_attached: '`git merge-base --is-ancestor` коммитов с деревьями f6dead5d8211→ddee75b75f13 и af4973d50b39→ddee75b75f13 — код 0 оба.'
   full_diff_present: 'ДА: вне docs/ `git status --porcelain` — 0 строк; судился весь дифф base..head, дельта — отдельно.'
 
 experiment:
   where: >-
     Отдельный linked worktree на той же голове
-    (/home/dk/workspace/github/PRO-Robotech/cloud-demo/kacho-workspace/tmp/gsr-corelib-20-r2-wt,
-    detached d2b1aac), файлы-эксперименты oauthceremony/zz_gsr_r2_probe_internal_test.go и
+    (detached, дерево ddee75b75f13), файлы-эксперименты oauthceremony/zz_gsr_r2_probe_internal_test.go и
     zz_gsr_r2b_probe_internal_test.go на СОБСТВЕННОЙ обвязке пробы (injection.apply →
     engineCopy → walkEngineSource с её контролем controlWrite). Копия ревью не тронута.
   c1_forms:   # шесть src из experiment.silent_forms круга 1, дословно
@@ -108,7 +106,7 @@ findings:
     - 'gofmt -l — пусто; go vet ./oauthceremony/ — 0 (вход находок, исход линтера ролью не объявляется).'
 
 bans:
-  ban11_fresh_deferral_markers: {count: 0, measured_over: 'ПОЛНЫЙ дифф 750eef4..d2b1aac', command: "git diff … | grep -E '^\\+' | grep -E 'TODO|FIXME|XXX|HACK|t\\.Skip|SkipNow'"}
+  ban11_fresh_deferral_markers: {count: 0, measured_over: 'ПОЛНЫЙ дифф деревьев f6dead5d8211..ddee75b75f13', command: "git diff … | grep -E '^\\+' | grep -E 'TODO|FIXME|XXX|HACK|t\\.Skip|SkipNow'"}
   ban12_tests_in_the_same_pr: {answer: ДА, evidence: 'три тестовых файла + комментарий ceremony.go'}
   ban17_latin_identifiers: {violations: 0, measured: 'go/scanner по 4 файлам: идентификаторов 5903, не-ASCII 0; контроль `var В = 1` — 1 найден.'}
   security_comments_contradicting_code:
