@@ -170,7 +170,6 @@ type (
 	uncalledAccessTokens       struct{ AccessTokenVault }
 	uncalledRefreshTokens      struct{ RefreshTokenVault }
 	uncalledGrants             struct{ GrantRevoker }
-	uncalledProofKeys          struct{ ProofKeyVault }
 	uncalledAccessTokenIssuer  struct{ AccessTokenIssuer }
 )
 
@@ -181,26 +180,24 @@ func engineConfigOfNewCeremony(t *testing.T) *engine.Config {
 	t.Helper()
 
 	c, err := New(Config{
-		Issuer:                          "https://iam.example.net",
-		AccessTokenLifespan:             20 * time.Minute,
-		RefreshTokenLifespan:            24 * time.Hour,
-		AuthorizationCodeLifespan:       10 * time.Minute,
-		ScopeMatching:                   ScopeMatchingExact,
-		RefreshTokenIssuance:            RefreshTokenIssuanceOnScope,
-		RefreshTokenScopes:              []string{"offline"},
-		RequireProofKey:                 true,
-		RequireProofKeyForPublicClients: true,
-		SecretHashCost:                  10,
-		MinParameterEntropy:             8,
-		PortTimeout:                     2 * time.Second,
-		OperationTimeout:                5 * time.Second,
+		AuthorizationEndpoint:     "https://iam.example.net/iam/v1/authorize",
+		TokenEndpoint:             "https://iam.example.net/iam/v1/token",
+		AccessTokenLifespan:       20 * time.Minute,
+		RefreshTokenLifespan:      24 * time.Hour,
+		AuthorizationCodeLifespan: 10 * time.Minute,
+		ScopeMatching:             ScopeMatchingExact,
+		RefreshTokenIssuance:      RefreshTokenIssuanceOnScope,
+		RefreshTokenScopes:        []string{"offline"},
+		SecretHashCost:            10,
+		MinParameterEntropy:       8,
+		PortTimeout:               2 * time.Second,
+		OperationTimeout:          5 * time.Second,
 	}, Ports{
 		Clients:            uncalledClients{},
 		AuthorizationCodes: uncalledAuthorizationCodes{},
 		AccessTokens:       uncalledAccessTokens{},
 		RefreshTokens:      uncalledRefreshTokens{},
 		Grants:             uncalledGrants{},
-		ProofKeys:          uncalledProofKeys{},
 		AccessTokenIssuer:  uncalledAccessTokenIssuer{},
 	})
 	if err != nil {

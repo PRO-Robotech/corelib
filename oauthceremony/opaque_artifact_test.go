@@ -55,14 +55,20 @@ func TestOpaqueArtifactsAreRandomAndStoredUnderTheirDigest(t *testing.T) {
 	for name, code := range map[string]string{"первый код": firstCode, "второй код": secondCode} {
 		requireOpaque(t, name, code)
 		store.mu.Lock()
-		_, stored := store.codes[opaqueDigest(code)]
-		_, proof := store.proof[opaqueDigest(code)]
+		row, stored := store.codes[opaqueDigest(code)]
+		var challenge, method string
+		if stored {
+			challenge, method = row.challenge, row.method
+		}
 		store.mu.Unlock()
 		if !stored {
 			t.Errorf("%s: запись кода лежит не под sha256 его значения", name)
+			continue
 		}
-		if !proof {
-			t.Errorf("%s: запись PKCE лежит не под sha256 значения кода", name)
+		// Привязка PKCE — поле той же записи (AuthorizationCodeRecord.ProofKey),
+		// и под sha256 значения кода она лежит тем, что лежит там сама запись.
+		if challenge == "" || method == "" {
+			t.Errorf("%s: запись под sha256 его значения лежит без привязки PKCE", name)
 		}
 	}
 

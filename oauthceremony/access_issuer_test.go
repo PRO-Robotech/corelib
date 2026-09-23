@@ -226,7 +226,7 @@ func TestAnIssuanceBreakingThePortContractIsRefused(t *testing.T) {
 // TestFailedIssuanceFailsTheExchange — порт выпуска отказал: обмен отказывает
 // ЭТИМ отказом, клиенту не уезжает ничего и в хранилище не ложится ничего.
 // Законный близнец — следующий код того же клиента при здоровом порте: обмен
-// проходит. Тот же код второй раз не предъявляется: запись PKCE снята первым
+// проходит. Тот же код второй раз не предъявляется: код погашен первым
 // предъявлением, и второе — повтор (code_replay_test.go), а не предмет этой
 // пробы.
 func TestFailedIssuanceFailsTheExchange(t *testing.T) {
