@@ -1,0 +1,194 @@
+# Пост-дифф ревью Go-кода — роль go-style-reviewer.
+#
+# Имя файла — content_digest. Прежние записи не правятся; сменился дайджест —
+# новый запуск и новый файл (change-graph §2).
+schema_version: 1
+change_id: corelib-20
+holder: post-diff/go-style-reviewer
+owner: go-style-reviewer
+round: 1
+subject: >-
+  oauthceremony — статическая проба по исходнику движка
+  (TestEngineSettingsMethodsWriteNoFieldContent): методы engine.Config не пишут
+  в СОДЕРЖИМОЕ полей. Плюс правка шапок переписи отражением, race-пробы и
+  doc-комментария типа Ceremony (единственная правка не-тестового файла —
+  только комментарий).
+
+fingerprint:
+  repo: PRO-Robotech/corelib
+  branch: '20'
+  worktree: /home/dk/workspace/github/PRO-Robotech/cloud-demo/kacho-workspace/tmp/corelib-20
+  base: 750eef447c499d0fcbcd1fa0f124b682e4fd1fc1
+  head: 047b17a53f675610f2072c5a9096fa39e63502d5
+  commits: 1   # 047b17a «#20 запись в содержимое поля настроек движка судит проба по исходнику»
+  files: 4
+  full_diff_shortstat: '4 files changed, 1435 insertions(+), 17 deletions(-)'
+content_digest: sha256:6e1b10f6e1a313e86d1a5fea5810a49047256546ea8844a554d83bc9837cfd8f
+digest_definition: 'sha256 сырого вывода `git -C tmp/corelib-20 diff 750eef447c4..047b17a53f6`'
+
+subject_preflight:
+  head_measured_by_me: '`git rev-parse HEAD` → 047b17a53f675610f2072c5a9096fa39e63502d5 — совпадает с заданием.'
+  digest_measured_by_me: >-
+    ДВАЖДЫ — до разбора и перед вердиктом, оба раза
+    6e1b10f6e1a313e86d1a5fea5810a49047256546ea8844a554d83bc9837cfd8f.
+  base_attached: '`git merge-base --is-ancestor 750eef4 047b17a` → код 0.'
+  full_diff_present: 'ДА: `git status --porcelain` в копии — 0 строк; судился весь дифф base..head.'
+
+experiment:
+  why: >-
+    Шапка пробы (engineconfig_static_internal_test.go:38-46) и сообщение коммита
+    утверждают: «Форму, которую без типов не судить, называет неразобранной и
+    краснеет, а не молчит». Утверждение проверено ЭКСПЕРИМЕНТОМ, не чтением.
+  where: >-
+    Отдельный linked worktree на той же голове
+    (/home/dk/workspace/github/PRO-Robotech/cloud-demo/kacho-workspace/tmp/gsr-corelib-20-wt,
+    detached 047b17a), файл-эксперимент oauthceremony/zz_gsr_probe_internal_test.go
+    на СОБСТВЕННОЙ обвязке пробы (injection.apply → engineCopy → walkEngineSource,
+    с её положительным контролем глубины 1). Копия ревью не тронута.
+  command: >-
+    TMPDIR=<worktree>/.gsr-tmp go test -count=1 -v -run
+    'TestEngineSettingsMethodsWriteNoFieldContent|TestSourceAndReflectiveCensusesNameTheSameLazyWrites|TestEmptySourceWalkIsNotAVerdict|TestContentWriteInjectionIsFoundWithItsCoordinate|TestUnjudgedFormInjectionIsRedNotSilent|TestLawfulTwinOfAContentWriteIsSilent|TestEngineSettingsBuiltByNewAreOnlyReadOnTheRequestPath|TestReplacedFieldFindingTextKeepsNamingInNewToLazyFill|TestGSRProbeSilentForms'
+    ./oauthceremony/
+  outcome_raw: >-
+    Код 1. PASS 44 (все пробы диффа и их подпробы), FAIL 7 = 1 родитель + 6
+    подслучаев эксперимента; контрольный подслучай эксперимента (форма, которую
+    шапка НАЗЫВАЕТ неразобранной: `mutateInjected(c.InjectedMap)`) — красный,
+    т.е. обвязка эксперимента работает. Перепись живого дерева:
+    файлов 43 · методов типа настроек 47 · обращений к приёмнику 70 · записей 4
+    (глубина 1) · глубже поля 0 · неразобранных 0; в копиях эксперимента
+    файлов 44 — инъекция легла.
+  silent_forms:   # находок 0 · неразобранных 0 — молчание
+    - form: 'значение-метод НАСТРОЕК, вызов результата по индексу'
+      src: "f := c.GetSanitationWhiteList\nf(ctx)[0] = \"x\""
+      mechanism: 'root() :478-481 — `c.M` для метода настроек возвращает «не содержимое», хотя значение-метод несёт приёмник'
+    - form: 'значение-метод настроек аргументом функции'
+      src: "runGetter(c.pairMap)   // func runGetter(f func() map[string]string) { f()[\"k\"] = \"v\" }"
+      mechanism: 'тот же root() :478-481 → passesContent :618-625 отвечает «нет»'
+    - form: 'второй результат метода настроек'
+      src: "_, m := c.pair()\nm[\"k\"] = \"v\""
+      mechanism: 'collectAliases :563-565 и :571-573 — при n:1 связывается только Lhs[0]/Names[0]'
+    - form: 'замыкание отдаёт содержимое'
+      src: "get := func() map[string]string { return c.InjectedMap }\nget()[\"k\"] = \"v\""
+      mechanism: 'root() :466-517 не знает *ast.FuncLit; judgeCall на get() — contentArgsUnjudged по аргументам, их нет'
+    - form: 'локальный составной литерал в том же методе'
+      src: "s := struct{ m map[string]string }{c.InjectedMap}\ns.m[\"k\"] = \"v\""
+      mechanism: 'root() :466-517 не знает *ast.CompositeLit — bind не связывает s'
+    - form: 'содержимое в литерале аргументом функции'
+      src: "mutateWrapped([]map[string]string{c.InjectedMap})"
+      mechanism: 'passesContent :618-625 → root(CompositeLit) = «нет»; та же передача без литерала — неразобранная (контроль красный)'
+
+findings:
+  critical:
+    - id: C1
+      tag: '[DOC-TRUTH / RECOGNIZER-SILENT-FORM]'
+      at:
+        - oauthceremony/engineconfig_static_internal_test.go:38-46
+        - oauthceremony/engineconfig_static_internal_test.go:52-55
+        - oauthceremony/engineconfig_static_internal_test.go:478-481
+        - oauthceremony/engineconfig_static_internal_test.go:563-565
+        - oauthceremony/engineconfig_static_internal_test.go:571-573
+        - oauthceremony/engineconfig_static_internal_test.go:618-625
+        - oauthceremony/ceremony.go:109-124
+      claim: >-
+        Шапка пробы обещает закрытость: чего разбор без типов судить не умеет,
+        он «не пропускает, а называет НЕРАЗОБРАННЫМ». Эксперимент нашёл ШЕСТЬ
+        форм записи в содержимое настроек из метода engine.Config, на которых
+        проба молчит (experiment.silent_forms). Четыре из них (значение-метод
+        настроек ×2, второй результат, замыкание) шапка не называет вовсе; две
+        (составной литерал) подпадают под слова слепой зоны :52-55, но её
+        обоснование «это чужой код, а не метод настроек» для локального
+        литерала ложно — пишет сам метод настроек. Doc-комментарий Ceremony
+        (не-тестовый файл, ceremony.go:109-124) повторяет обещание, перечисляя
+        «чего не судит ни одна из них», и этих форм не называет. Это класс
+        recognizer-knows-all-lawful-forms (testing.md) и arch-doc-truthfulness
+        на утверждении о безопасности одновременного использования движка
+        OAuth — запрет роли «комментарий о защите, противоречащий коду».
+      requirement: >-
+        Одно из двух, по каждой из шести форм. (а) Предпочтительно — по
+        собственному принципу шапки «цена упрощения — лишнее красное, а не
+        молчание»: научить разбор, чтобы форма давала находку либо
+        неразобранную форму — значение-метод настроек вне позиции вызова;
+        все Lhs/Names при n:1 из корня-содержимого; *ast.FuncLit и
+        *ast.CompositeLit, несущие корень, в root()/passesContent. Каждая форма
+        — инъекцией в TestContentWriteInjectionIsFoundWithItsCoordinate либо
+        TestUnjudgedFormInjectionIsRedNotSilent, с законным близнецом той же
+        формы в TestLawfulTwinOfAContentWriteIsSilent. (б) Либо назвать форму
+        слепой зоной ЧЕСТНО — в шапке :52-55 без «чужого кода» для локального
+        случая и в перечне «Чего не судит ни одна из них» ceremony.go:119-121.
+        Смешанный исход допустим; молчащей формы без имени — нет.
+      return_to: 'автор диффа — полоса corelib ветки 20 (коммит 047b17a, pointpu)'
+      predicate_of_closure: >-
+        Шесть src из experiment.silent_forms, вставленные той же обвязкой
+        injection.apply, дают каждая ≥1 находку или ≥1 неразобранную форму —
+        либо каждая названа в шапке и в ceremony.go поимённо.
+  important: []
+  foundation_candidates: []   # дифф — сама corelib; горизонтального дубля фундамента нет
+  style:
+    - id: S1
+      at: oauthceremony/engineconfig_static_internal_test.go:455-463
+      what: 'Локальный unparen дублирует stdlib `ast.Unparen` (go/ast, есть в go1.26.8 — `go doc go/ast.Unparen`). Заменить импортом.'
+    - id: S2
+      at: oauthceremony/engineconfig_static_internal_test.go:18-19
+      what: >-
+        «читает те файлы, которые компилятор собирает в пакет движка: все
+        не-тестовые .go каталога» — не тождество: ограничения сборки
+        (//go:build, суффиксы GOOS/GOARCH) не учитываются. Сегодня в
+        internal/oauth2 таких файлов 0 (`grep -l '^//go:build' internal/oauth2/*.go`
+        — пусто), и разбор читает НАДМНОЖЕСТВО (сдвиг в красное через
+        requireSameTypeAsCompiled), но слова утверждают равенство. Сказать
+        «надмножество» либо отбирать go/build.Context.MatchFile.
+    - id: S3
+      at: 'oauthceremony/engineconfig_static_internal_test.go:199, :823-824'
+      what: 'sort.Ints / sort.Strings рядом с slices.* в том же файле — одна идиома: slices.Sort.'
+    - id: S4
+      at: 'oauthceremony/engineconfig_static_internal_test.go:924, :957, :966, :259, :1000'
+      what: >-
+        Имена уровня пакета общего вида (marker, writeFile, replaceOnce,
+        origin, injection) в пространстве внутренних проб пакета oauthceremony
+        — следующий внутренний тест пакета столкнётся по имени. Нестрого.
+    - id: S5
+      at: oauthceremony/engineconfig_static_internal_test.go:781-787
+      what: >-
+        Ручной разбор строки `module` go.mod (`len(Fields)==2`): форма
+        `module path // комментарий` уронит пробу в ПРЕДПОСЫЛКУ (fail-closed,
+        не молчание). Допустимо; отмечено.
+  approved:
+    - 'Ошибки обхода обёрнуты `fmt.Errorf(... %w)` с содержательным контекстом (walkEngineSource :284-299).'
+    - 'Паники нет; t.Helper на всех вспомогательных; t.Fatalf на НЕ ВЫПОЛНИЛОСЬ/ПРЕДПОСЫЛКА отделены от находок t.Error.'
+    - 'Перепись печатается отдельно от находок, пустой обход — не вердикт (emptyWalk + TestEmptySourceWalkIsNotAVerdict).'
+    - 'Предпосылка проверяется: поля и экспортированные методы по разбору = отражению собранного типа; глубина 1 сверена с переписью отражением (два независимых прибора).'
+    - 'Инъекции в копии поддерева с законными близнецами; красное атрибутировано ровно одной находке на копию; текст находки утверждается (finding-text-is-part-of-property).'
+    - 'maxAliasDepth и формы записи — именованные константы; магических чисел нет.'
+    - 'gofmt -l oauthceremony/ — пусто; go vet ./oauthceremony/ — код 0 (замерено как вход находок, исход линтера этой ролью не объявляется).'
+    - 'Правка не-тестового файла — только doc-комментарий (ceremony.go); поведения не меняет.'
+
+bans:
+  ban11_fresh_deferral_markers:
+    count: 0
+    measured_over: 'ПОЛНЫЙ дифф base..head'
+    command: "git diff 750eef4..047b17a | grep -E '^\\+' | grep -nE 'TODO|FIXME|XXX|HACK|t\\.Skip|SkipNow'"
+  ban12_tests_in_the_same_pr:
+    answer: ДА
+    evidence: 'Дифф — три тестовых файла и doc-комментарий в ceremony.go; предмет изменения и есть проба.'
+  ban17_latin_identifiers:
+    violations: 0
+    measured: >-
+      go/scanner по четырём файлам диффа: идентификаторов 5327, не-ASCII 0;
+      положительный контроль того же сканера на `var В = 1` — 1 найден.
+  security_comments_contradicting_code:
+    - 'oauthceremony/ceremony.go:109-124 — см. C1 (утверждение об одновременном использовании шире того, что держат пробы).'
+    - 'oauthceremony/engineconfig_static_internal_test.go:38-46, :52-55 — см. C1.'
+
+verdict:
+  value: '⛔ возврат'
+  blocking: ДА
+  rationale: >-
+    Изменение существует ради одного свойства — проба не молчит на форме,
+    которой не судит, — и это свойство опровергнуто экспериментом на
+    собственной обвязке пробы: шесть форм молчат, четыре из них не названы
+    нигде, и то же обещание повторено в doc-комментарии не-тестового типа
+    Ceremony. Остальное (стиль S1–S5) посадку не держит.
+  next: >-
+    Автор диффа — закрыть C1 по requirement; после фикса дайджест новый —
+    повтор роли go-style-reviewer.
+  return_to: 'автор диффа — полоса corelib ветки 20 (047b17a)'

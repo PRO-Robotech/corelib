@@ -1,0 +1,234 @@
+# Пост-дифф ревью Go-кода — роль go-style-reviewer.
+#
+# Имя файла — content_digest отсуженного диффа. Прежние записи не правятся;
+# сменился дайджест — новый запуск и новый файл (change-graph §2).
+# Запись лежит в одноразовой копии ревьюера (detached worktree его клона) и
+# НЕ закоммичена — по заданию.
+schema_version: 1
+change_id: corelib-20
+holder: post-diff/go-style-reviewer
+owner: go-style-reviewer
+subject: >-
+  дельта ветки волны 27 фундамента после аудита безопасности: страж F1-51
+  без учёта регистра пути импорта; нулевая граница и нулевой срок не делают
+  токен обновления бессрочным; маркер отсрочки апстрима в PROVENANCE;
+  хешер секрета клиента назван в New (гонка ленивой инициализации, d0c5fb3)
+
+fingerprint:
+  repo: PRO-Robotech/corelib
+  clone: /home/dk/workspace/github/PRO-Robotech/cloud-demo/kacho-workspace/project/corelib
+  review_copy: /home/dk/workspace/github/PRO-Robotech/cloud-demo/kacho-workspace/tmp/gsr-corelib-750eef4
+  base: 0c8bf7ea2021d6a74256ac0a1061212a61b45683
+  base_is: >-
+    дерево 790f829 — на нём стоит ✅ аудита безопасности (перемерено:
+    `git cat-file -p 0c8bf7e` → tree 790f829d573). 241a62b (первый родитель
+    слияния 172dfe6, голова волны до слияния) — предок 0c8bf7e
+    (`git merge-base --is-ancestor 241a62b 0c8bf7e` → да), поэтому диапазон
+    не тянет чужой работы.
+  head: 750eef447c499d0fcbcd1fa0f124b682e4fd1fc1
+  head_is: 'origin/27 (`git branch -a --contains 750eef4` → remotes/origin/27)'
+  shortstat: '13 файлов, +857 / -40'
+  commits:
+    - 'e8bcffd #20 страж F1-51 сравнивает путь импорта без учёта регистра'
+    - '546851b #20 нулевая граница срока не делает токен обновления бессрочным'
+    - 'f91b667 #20 маркер отсрочки апстрима записан в происхождении поддерева'
+    - '9b491ce #20 отказ о нулевом времени в записи не обобщает на все виды'
+    - '172dfe6 #27 merge #20 (дерево = 9b491ce, `git diff 172dfe6 9b491ce` пуст)'
+    - 'd0c5fb3 #20 настройки движка на пути запроса только читаются: хешер секрета назван в New'
+    - '750eef4 #27 merge #20 (дерево = d0c5fb3, `git diff 750eef4 d0c5fb3` пуст)'
+content_digest: sha256:d05a397d0026fc6b875a00a2a1667a1b48858008328eba6ba34462f50eb5055c
+digest_definition: |
+  cd /home/dk/workspace/github/PRO-Robotech/cloud-demo/kacho-workspace/project/corelib
+  git diff 0c8bf7e..750eef4 | sha256sum
+  (перемерено тем же выражением и в копии ревьюера — совпадает)
+
+verdict: accepted              # ✅ принято
+blocks_landing: false
+timestamp: '2026-09-23T00:00:00Z'
+return_to: 'автор диффа — pointpu <pointpu@in-cloud.io> (автор всех пяти своих коммитов дельты); только неблокирующее'
+review_scope: >-
+  ПОЛНЫЙ закоммиченный дифф 0c8bf7e..750eef4, все 13 файлов; прод-код
+  прочитан вместе с окружением (New, CompleteAuthorization, hydrateSession,
+  requesterFromGrant, пути моста к нему, геттеры настроек движка
+  internal/oauth2/config_default.go, стратегия HMAC, достижимость
+  GetJWKSFetcherStrategy).
+
+files_reviewed:
+  prod:
+    - oauthceremony/ceremony.go
+    - oauthceremony/translate.go
+    - oauthceremony/types.go
+    - treehygiene/imports.go
+    - internal/engineconfinement/doc.go
+    - internal/oauth2/PROVENANCE.md
+  probes:
+    - oauthceremony/engineconfig_internal_test.go
+    - oauthceremony/settings_race_test.go
+    - oauthceremony/session_internal_test.go
+    - oauthceremony/lifetime_test.go
+    - internal/engineconfinement/forms_test.go
+    - internal/engineconfinement/confinement_test.go
+    - treehygiene/imports_injection_test.go
+
+premise_checks:
+  - claim: 'ленивых писателей в настройках движка ровно четыре'
+    result: подтверждено
+    how: >-
+      grep по internal/oauth2/config_default.go: 47 методов *Config, ветки
+      `== nil` у семи геттеров, из них пишут в поле четыре (GetSecretsHasher,
+      GetScopeStrategy, GetAudienceStrategy, GetJWKSFetcherStrategy);
+      GetHTTPClient, GetRedirectSecureChecker, GetRefreshTokenScopes
+      возвращают умолчание без записи. Число полей Config — 47, независимо от
+      пробы (совпадение «методов 47 · полей 47» в выводе пробы настоящее).
+  - claim: 'путь запроса церемонии не достигает GetJWKSFetcherStrategy'
+    result: подтверждено
+    how: >-
+      оба вызова — в findClientPublicJWK (client_authentication.go), куда
+      приходят только через приведение к OpenIDConnectClient;
+      clientViewOf всегда возвращает *clientView, так что предикат
+      исключения на нулевой регистрации судит единственный тип.
+  - claim: 'проба переписи краснеет без -race, одновременная — только под -race'
+    result: подтверждено опытом
+    how: >-
+      в копии снята строка `engineCfg.ClientSecretsHasher = ...`:
+      TestEngineSettingsBuiltByNewAreOnlyReadOnTheRequestPath — FAIL с
+      координатой «GetSecretsHasher → ClientSecretsHasher»;
+      TestConcurrentExchangesOnAFreshCeremonyShareNoEngineState без детектора
+      — PASS, ровно как сказано в её шапке. Строка возвращена
+      (`git checkout`), дерево копии чистое.
+  - claim: 'проба записи из хранилища ловит нулевой срок'
+    result: подтверждено опытом
+    how: >-
+      в копии снята проверка checkStoredInstants для ExpiresAt:
+      TestStoredZeroInstantIsAContractBreach/SessionRecord.ExpiresAt — FAIL
+      («запись … принята: оборот прошёл»), близнец и подслучай NotAfter —
+      PASS. Возвращено.
+  - claim: 'сеанс — единственный писатель срока'
+    result: подтверждено
+    how: >-
+      в internal/oauth2 (без проб и integration) карту ExpiresAt сеанса
+      пишут только SetExpiresAt у DefaultSession; ceremonySession
+      перехватывает этот метод, hydrateSession кладёт сроки через него же.
+  - claim: 'PROVENANCE: «прочитано 762 из 762, находок 1»'
+    result: вывод подтверждён, число — нет (см. important I3)
+    how: >-
+      treehygiene.AuditDeferredWork(корень копии @750eef4, без вычитаний):
+      в индексе 765, прочитано 765, находок 1 —
+      internal/oauth2/handler/oauth2/introspector_jwt.go:78, маркер апстрима.
+
+critical: []
+
+important:
+  - id: I1
+    tag: DOC-PREDICATE-SCOPE
+    at: oauthceremony/ceremony.go:109
+    summary: >-
+      шапка Ceremony говорит «движок и настройки после сборки только
+      читаются» и называет предикатом TestEngineSettingsBuiltByNewAreOnlyReadOnTheRequestPath,
+      а проба судит только методы *engine.Config. Половину про движок
+      (обработчики, стратегия HMAC) она не осматривает. Утверждение
+      верно: стратегия HMAC держит мьютекс, у Fosite ленивых полей нет. Но
+      предикат приписан шире своего предмета.
+    requirement: >-
+      сузить скобку до «настройки (предикат — …)» либо назвать, чем держится
+      половина о движке.
+  - id: I2
+    tag: TWO-PLACES-ONE-SUBJECT
+    at: 'oauthceremony/ceremony.go:613 · oauthceremony/translate.go:507'
+    summary: >-
+      checkGrantBounds и checkStoredInstants — один и тот же обход «первый
+      нулевой вид по порядку имени», различаются только конструктором
+      отказа. Правило «ноль — не граница» живёт в двух местах, и порядок
+      обхода или предикат нуля разъедутся на первой правке одного из них.
+    requirement: >-
+      вынести общий помощник (например firstZeroKind(map[TokenKind]time.Time)
+      (TokenKind, bool)) и звать его из обоих мест, отказы оставить разными.
+  - id: I3
+    tag: NUMBER-WITHOUT-REVISION
+    at: internal/oauth2/PROVENANCE.md:377
+    summary: >-
+      «прочитано 762 из 762 файлов индекса» не называет ревизии. 762 — индекс
+      0c8bf7e/e8bcffd, а текст внесён в f91b667, где файлов 763; на голове
+      750eef4 их 765 (`git ls-tree -r --name-only <rev> | wc -l`). Вывод
+      («находка одна, и это маркер апстрима») на голове верен — перемерено.
+    requirement: >-
+      назвать ревизию замера либо переснять на ревизии, которая несёт текст.
+
+foundation_candidates: []
+foundation_candidates_note: >-
+  дельта — сам фундамент (PRO-Robotech/corelib); горизонтального кода,
+  который жил бы копией в платформе, в ней нет.
+
+style:
+  - id: S1
+    at: oauthceremony/engineconfig_internal_test.go:11
+    summary: >-
+      в шапке пробы координата дана номерами строк
+      (`config_default.go:261` / `:262`). Сейчас они верны, но уедут при
+      первой правке заголовка файла поддерева. PROVENANCE.md этой же дельты
+      прямо говорит, что координата — файл и метод, а не номер строки.
+      Раскрытием это не считаю: дефект закрыт в том же дереве и до main не
+      доехал.
+    requirement: 'оставить имя метода GetSecretsHasher, номера строк снять'
+  - id: S2
+    at: oauthceremony/lifetime_test.go:209
+    summary: >-
+      TestGSR_ZeroRefreshBound — префикс-аббревиатура без референта
+      (`git grep GSR` в corelib находит только эту пробу; в воркспейсе
+      docs/.claude — ноль). Соседи по файлу названы по предмету.
+    requirement: 'назвать по предмету, в форме соседей'
+  - id: S3
+    at: oauthceremony/engineconfig_internal_test.go:70
+    summary: >-
+      перепись вызывает отражением КАЖДЫЙ геттер, в том числе
+      GetJWKSFetcherStrategy, на обеих настройках (собранных New и пустых).
+      NewDefaultJWKSFetcherStrategy заводит кеш ristretto с фоновыми
+      исполнителями, а метода остановки у стратегии нет. Проба сама
+      запускает то, ради незапуска чего заведено исключение offRequestPath;
+      исполнители живут до конца бинаря проб. Стража утечки горутин в
+      пакете нет, так что это не красное.
+    requirement: 'назвать это в шапке переписи (цена обхода «каждый метод»)'
+
+fresh_deferral_markers: 0
+fresh_deferral_markers_predicate: >-
+  разбором запрета, а не образцом: treehygiene.AuditDeferredWork по дереву
+  750eef4 — находка одна, в файле, которого дельта не трогает (маркер
+  апстрима introspector_jwt.go). Цитата маркера в PROVENANCE.md стоит в
+  обратных кавычках, и разбор её находкой не называет.
+tests_in_same_pr: true
+tests_in_same_pr_evidence: >-
+  каждый коммит с прод-правкой несёт свою пробу: e8bcffd (imports.go +
+  imports_injection_test/forms_test), 546851b (ceremony/translate/types +
+  lifetime_test/session_internal_test), d0c5fb3 (ceremony + engineconfig_internal_test/
+  settings_race_test). 9b491ce меняет только текст отказа, и поведение под
+  ним держат пробы 546851b.
+
+security_comments_contradicting_code: []
+security_comments_note: >-
+  комментарии о сроках (SetExpiresAt, hydrateSession, types.go) сверены с
+  кодом: ноль токена обновления движок читает как «без срока», и это
+  утверждение нигде не обобщено на другие виды — 9b491ce снял последнее
+  обобщение.
+
+approved:
+  - 'ошибки: отказы строятся своими конструкторами со случаем (misuse → ErrCeremonyMisuse, contractBreach → ErrPortContract), типизированного nil в error нет, пробы судят через errors.Is/errors.As'
+  - 'порядок в CompleteAuthorization: проверка нулевой границы стоит до hydrateSession и до записи кода, поэтому ошибка службы не подменяется «порчей хранилища»; проба подтверждает, что кода в хранилище нет'
+  - 'контекст: WithTimeout операции на месте, новых внешних вызовов нет; context.Background() — только в пробах'
+  - 'паники в рабочем пути нет; slices.Sorted(maps.Keys) детерминирует текст отказа'
+  - 'журналирования дельта не вводит'
+  - 'InImportSet — единственное место сравнения путей импорта (строки 183/186/188), расширение без учёта регистра покрывает и Set, и ForbiddenAtHome; сравнение путей ФАЙЛОВ (Homes) остаётся с учётом регистра — верно'
+  - 'имена латиницей; defer cancel сразу после создания; магических чисел в прод-правке нет (пороги проб — именованные константы)'
+  - 'перепись ленивых геттеров: объём осмотренного печатается, пустой обход — «не выполнилось», невызываемый метод — красное, исключение с предикатом истечения, законный близнец молчит'
+
+linter_probes_outcome: not-claimed-by-this-role
+experiments_run: >-
+  ради находок, не вердикт: go vet по трём пакетам — rc 0; пробы d0c5fb3 и
+  пробы нулевой границы на голове — PASS; две инъекции — FAIL в ожидаемом
+  подслучае; `go test -race` — НЕ ВЫПОЛНИЛОСЬ (на машине нет gcc, cgo
+  недоступен), поэтому силу одновременной пробы под детектором я не мерил.
+  Сырой вывод читает landing-reviewer, перемер делает check-verifier.
+
+next_requested: >-
+  сбор пост-дифф записей (convergence-reviewer либо landing-reviewer) на
+  дайджесте d05a397d…; неблокирующее I1–I3, S1–S3 — автору диффа по его
+  решению; если он правит, дайджест станет новым и роль нужно повторить.
