@@ -377,6 +377,41 @@ func (m *memoryPorts) rebindStoredCode(t *testing.T, challenge, method string) {
 	}
 }
 
+// sweepConsumedCode снимает запись погашенного кода под подписью signature —
+// так, как её сняла бы уборка службы. Под подписью нет погашенного кода —
+// проба не создала своего условия, и это «не выполнилось», а не красное.
+func (m *memoryPorts) sweepConsumedCode(t *testing.T, signature string) {
+	t.Helper()
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	row, found := m.codes[signature]
+	if !found || !row.consumed {
+		t.Fatalf("НЕ ВЫПОЛНИЛОСЬ: под подписью %s погашенного кода нет (запись есть: %t) — снимать нечего",
+			signature, found)
+	}
+	delete(m.codes, signature)
+}
+
+// codeExpiresAt — срок, записанный у кода под подписью signature: его движок
+// читает, решая, истёк ли код. Записи нет или срока в ней нет — проба не
+// создала своего условия.
+func (m *memoryPorts) codeExpiresAt(t *testing.T, signature string) time.Time {
+	t.Helper()
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	row, found := m.codes[signature]
+	if !found {
+		t.Fatalf("НЕ ВЫПОЛНИЛОСЬ: под подписью %s записи кода нет", signature)
+	}
+	expiresAt := row.grant.Session.ExpiresAt[oauthceremony.TokenKindAuthorizationCode]
+	if expiresAt.IsZero() {
+		t.Fatalf("НЕ ВЫПОЛНИЛОСЬ: у записи кода под подписью %s срока нет: %v", signature, row.grant.Session.ExpiresAt)
+	}
+	return expiresAt
+}
+
 // recordsUnder — сколько записей ВСЕХ хранилищ подставки лежит под подписью
 // signature. У выданного кода она ровно одна — его собственная.
 func (m *memoryPorts) recordsUnder(signature string) int {
