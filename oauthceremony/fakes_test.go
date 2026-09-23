@@ -18,6 +18,8 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"errors"
+	"reflect"
+	"slices"
 	"sync"
 	"testing"
 	"time"
@@ -410,6 +412,111 @@ func (m *memoryPorts) codeExpiresAt(t *testing.T, signature string) time.Time {
 		t.Fatalf("НЕ ВЫПОЛНИЛОСЬ: у записи кода под подписью %s срока нет: %v", signature, row.grant.Session.ExpiresAt)
 	}
 	return expiresAt
+}
+
+// ageCodeRecord старит запись кода под подписью signature на by: каждое
+// мгновение записи сдвигается на by назад. Всякий, кто сравнивает записанное
+// мгновение с нынешним — движок, мост, служба, — видит у этой записи by
+// прошедшего времени. Истечение кода поэтому наблюдается без паузы на часах, и
+// исход пробы не зависит от того, сколько процессора досталось её шагам.
+//
+// Сдвигаются ВСЕ мгновения записи гранта (agedGrantInstants), а не один срок:
+// запись со сдвинутым сроком и прежним мигом выдачи — не прошедшее время, а
+// другая запись, и проверка, судящая срок от мига выдачи, её не узнала бы.
+// Записи нет, или у записи гранта появилось мгновение, которого подставка не
+// старит, — проба не создала своего условия.
+func (m *memoryPorts) ageCodeRecord(t *testing.T, signature string, by time.Duration) {
+	t.Helper()
+	requireGrantInstantsAged(t)
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	row, found := m.codes[signature]
+	if !found {
+		t.Fatalf("НЕ ВЫПОЛНИЛОСЬ: под подписью %s записи кода нет — старить нечего", signature)
+	}
+	if row.grant.IssuedAt.IsZero() {
+		t.Fatalf("НЕ ВЫПОЛНИЛОСЬ: у записи кода под подписью %s нет мига выдачи — сдвигать не от чего", signature)
+	}
+	row.grant.IssuedAt = row.grant.IssuedAt.Add(-by)
+	row.grant.Session.ExpiresAt = shiftedInstants(row.grant.Session.ExpiresAt, -by)
+	row.grant.Session.NotAfter = shiftedInstants(row.grant.Session.NotAfter, -by)
+}
+
+// shiftedInstants — копия карты мгновений, сдвинутых на by. Копия, а не
+// правка на месте: карта записи могла прийти из сеанса движка, и правка на
+// месте тронула бы его.
+func shiftedInstants(instants map[oauthceremony.TokenKind]time.Time, by time.Duration) map[oauthceremony.TokenKind]time.Time {
+	if instants == nil {
+		return nil
+	}
+	shifted := make(map[oauthceremony.TokenKind]time.Time, len(instants))
+	for kind, at := range instants {
+		shifted[kind] = at.Add(by)
+	}
+	return shifted
+}
+
+// agedGrantInstants — поля GrantRecord, несущие мгновения, которые старит
+// ageCodeRecord, в порядке объявления.
+var agedGrantInstants = []string{"IssuedAt", "Session.ExpiresAt", "Session.NotAfter"}
+
+// requireGrantInstantsAged — предпосылка ageCodeRecord: ageCodeRecord старит
+// ровно те поля, что несут мгновения. Перечень берётся обходом типа
+// GrantRecord, а не по памяти: поле, в чьём типе где угодно есть time.Time —
+// само, под указателем, в срезе, в ключе или значении карты, во вложенной
+// структуре, — несёт мгновение. Значения под `any` (Claims) статически не
+// видны; сроков по ним церемония не судит.
+func requireGrantInstantsAged(t *testing.T) {
+	t.Helper()
+	if carried := grantInstantFields(); !slices.Equal(carried, agedGrantInstants) {
+		t.Fatalf("НЕ ВЫПОЛНИЛОСЬ: мгновения GrantRecord — %v, ageCodeRecord старит %v: состаренная запись "+
+			"не была бы прошедшим временем", carried, agedGrantInstants)
+	}
+}
+
+func grantInstantFields() []string {
+	var carried []string
+	var walk func(typ reflect.Type, prefix string)
+	walk = func(typ reflect.Type, prefix string) {
+		for field := range typ.Fields() {
+			path := prefix + field.Name
+			switch {
+			case field.Type.Kind() == reflect.Struct && field.Type != timeType:
+				walk(field.Type, path+".")
+			case carriesInstant(field.Type, map[reflect.Type]bool{}):
+				carried = append(carried, path)
+			}
+		}
+	}
+	walk(reflect.TypeFor[oauthceremony.GrantRecord](), "")
+	return carried
+}
+
+var timeType = reflect.TypeFor[time.Time]()
+
+// carriesInstant — есть ли в типе typ time.Time где угодно по его составу.
+func carriesInstant(typ reflect.Type, seen map[reflect.Type]bool) bool {
+	if typ == timeType {
+		return true
+	}
+	if seen[typ] {
+		return false
+	}
+	seen[typ] = true
+	switch typ.Kind() {
+	case reflect.Pointer, reflect.Slice, reflect.Array:
+		return carriesInstant(typ.Elem(), seen)
+	case reflect.Map:
+		return carriesInstant(typ.Key(), seen) || carriesInstant(typ.Elem(), seen)
+	case reflect.Struct:
+		for field := range typ.Fields() {
+			if carriesInstant(field.Type, seen) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // recordsUnder — сколько записей ВСЕХ хранилищ подставки лежит под подписью
