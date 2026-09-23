@@ -92,6 +92,7 @@ expect() {
     fi
 }
 fact() { local name="$1"; shift; if "$@"; then ok "$name"; else bad "$name"; fi; }
+not() { ! "$@"; }
 not_same() { ! cmp -s "$1" "$2"; }
 no_ref() { [ -z "$(git -C "$1" ls-remote origin "refs/heads/$2")" ]; }
 has_ref() { [ -n "$(git -C "$1" ls-remote origin "refs/heads/$2")" ]; }
@@ -158,16 +159,27 @@ expect "make без цели перечисляет цели провязки" 0
 # нечем. Перечень выводится из текстов, а не выписывается; пустой — находка.
 named="$( { cat "$INSTALL" "$HOOK"; bash "$INSTALL" stub pre-push; } |
     grep -oE '(^|[^[:alnum:]_-])make [a-z][a-z0-9-]*' | sed -E 's/^.*make //' | sort -u)"
+# Засчитывается цель, чей рецепт зовёт scripts/hooks: цель, объявленная одним
+# .PHONY без рецепта, у make «исполняется» кодом 0, не делая ничего, — и код
+# `make -n` её от настоящей не отличает.
+delegates() {
+    local o
+    o="$(make -C "$1" --no-print-directory -n "$2" 2>&1)" &&
+        printf '%s\n' "$o" | grep -q 'bash scripts/hooks/'
+}
 nnamed=0
 for t in $named; do
     nnamed=$((nnamed + 1))
-    if mk -n "$t" >/dev/null 2>&1; then ok "названная цель make $t в Makefile есть"
-    else bad "тексты называют «make $t», а в Makefile такой цели нет"; fi
+    if delegates "$A" "$t"; then ok "названная цель make $t в Makefile есть и зовёт scripts/hooks"
+    else bad "тексты называют «make $t», а в Makefile нет цели с таким рецептом"; fi
 done
-[ "$nnamed" -gt 0 ] && ok "тексты хука и провязки называют целей make: $nnamed" ||
-    bad "тексты хука и провязки не называют ни одной цели make — отказ советует команду, которой нет в Makefile"
-runc mk -n corelib-probe-no-such-target
-expect "близнец сверки имён: несуществующая цель make — отказ" nz
+if [ "$nnamed" -gt 0 ]; then ok "тексты хука и провязки называют целей make: $nnamed"
+else bad "тексты хука и провязки не называют ни одной цели make — отказ советует команду, которой нет в Makefile"; fi
+G="$work/ghost"
+mkdir -p "$G"
+printf '.PHONY: ghost\n' > "$G/Makefile"
+fact "близнец сверки имён: цель лишь в .PHONY, без рецепта — не засчитана" not delegates "$G" ghost
+fact "близнец сверки имён: несуществующая цель — не засчитана" not delegates "$A" corelib-probe-no-such-target
 
 fact "переходник побайтно равен тексту производителя (install.sh stub)" \
     cmp -s "$AH/pre-push" <(bash "$INSTALL" stub pre-push)
