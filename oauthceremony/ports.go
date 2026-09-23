@@ -5,6 +5,7 @@ package oauthceremony
 
 import (
 	"context"
+	"slices"
 	"time"
 )
 
@@ -249,6 +250,61 @@ type RefreshTokenVault interface {
 	RotateRefreshToken(ctx context.Context, grantID, signature string) (StoreOutcome, error)
 }
 
+// RevocationReason — почему церемония отзывает семейство гранта.
+//
+// # Зачем причина в порте
+//
+// Все пути отзыва снимают одно и то же семейство одними и теми же методами
+// GrantRevoker. По одному факту вызова служба не различила бы повтор кода
+// авторизации, повтор токена обновления и отзыв клиентом, а различать их ей
+// обязательно: причина ложится в её журнал и в её закрытый словарь, и разные
+// причины означают разные события — атаку на код, атаку на токен и выход
+// клиента из сеанса.
+//
+// # Почему у типа нет значения «причина не названа»
+//
+// Отзыв без причины до порта не доходит: мост, не знающий, почему отзывает,
+// отказывает случаем CodeCeremonyMisuse, не позвав порта. Значение «не
+// названа» служба была бы вынуждена либо записать — и её закрытый словарь
+// перестал бы быть закрытым, — либо отвергнуть, то есть оставить семейство
+// живым. Нулевое значение типа словарю не принадлежит (Declared отвечает
+// «нет»), и церемония его порту не передаёт.
+type RevocationReason string
+
+// Причины отзыва. Перечень ЗАКРЫТ: значение вне его церемония порту не
+// передаёт, и служба вправе отвергать его как нарушение контракта.
+// Написание — контракт со службой: она сопрягает его со своим словарём по
+// значению.
+const (
+	// RevocationCodeReplay — код авторизации предъявлен повторно (RFC 6749
+	// §4.1.2): последовательно, после обмена, либо одновременно с другим
+	// обменом того же кода.
+	RevocationCodeReplay RevocationReason = "code-replay"
+
+	// RevocationRefreshReplay — предъявлен уже обёрнутый токен обновления
+	// (RFC 9700 §4.14.2): последовательно, после оборота, либо одновременно
+	// с другим оборотом того же токена.
+	RevocationRefreshReplay RevocationReason = "refresh-replay"
+
+	// RevocationClientRevoke — клиент попросил отзыва через точку отзыва
+	// (RFC 7009 §2.1), в том числе прежним, уже обёрнутым токеном
+	// обновления: семейство снимается по просьбе клиента, а не потому, что
+	// токеном владеют двое.
+	RevocationClientRevoke RevocationReason = "client-revoke"
+)
+
+// RevocationReasons возвращает словарь целиком — службе, которая сопрягает его
+// со своим и обязана убедиться, что сопряжение полное.
+func RevocationReasons() []RevocationReason {
+	return []RevocationReason{RevocationCodeReplay, RevocationRefreshReplay, RevocationClientRevoke}
+}
+
+// Declared отвечает, входит ли причина в словарь. Нулевое значение НЕ входит:
+// «причина не названа» — не причина.
+func (r RevocationReason) Declared() bool {
+	return slices.Contains(RevocationReasons(), r)
+}
+
 // GrantRevoker — отзыв всех артефактов одного гранта.
 //
 // Реализует СЛУЖБА.
@@ -267,14 +323,22 @@ type RefreshTokenVault interface {
 // которой отзыв и исполнялся. Ожидаемая форма — отметка отзыва у самого
 // семейства (`token_families.revoked_at`), которую выборка сверяет, а не
 // удаление строк.
+//
+// # Причина отзыва
+//
+// Каждый вызов несёт причину (RevocationReason) — всегда одну из словаря.
+// Семейство отзывают оба метода одной операции, и причина у них одна и та же.
+// Повторный отзыв уже отозванного семейства законен (ноль строк — не отказ);
+// причину уже отозванного семейства служба вправе не переписывать: первая
+// причина и есть та, по которой семейство умерло.
 type GrantRevoker interface {
-	// RevokeGrantRefreshTokens снимает ВСЕ токены обновления гранта.
-	// Ноль строк — законный исход (нечего снимать).
-	RevokeGrantRefreshTokens(ctx context.Context, grantID string) (StoreOutcome, error)
+	// RevokeGrantRefreshTokens снимает ВСЕ токены обновления гранта по
+	// причине reason. Ноль строк — законный исход (нечего снимать).
+	RevokeGrantRefreshTokens(ctx context.Context, grantID string, reason RevocationReason) (StoreOutcome, error)
 
-	// RevokeGrantAccessTokens снимает ВСЕ токены доступа гранта.
-	// Ноль строк — законный исход.
-	RevokeGrantAccessTokens(ctx context.Context, grantID string) (StoreOutcome, error)
+	// RevokeGrantAccessTokens снимает ВСЕ токены доступа гранта по причине
+	// reason. Ноль строк — законный исход.
+	RevokeGrantAccessTokens(ctx context.Context, grantID string, reason RevocationReason) (StoreOutcome, error)
 }
 
 // ProofKeyVault — хранилище доказательств владения ключом (PKCE, RFC 7636).

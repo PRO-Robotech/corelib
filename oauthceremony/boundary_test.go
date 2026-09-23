@@ -154,6 +154,7 @@ func runtimeRoster() map[string]reflect.Type {
 		"IntrospectionRequest": reflect.TypeOf(oauthceremony.IntrospectionRequest{}),
 		"IntrospectionResult":  reflect.TypeOf(oauthceremony.IntrospectionResult{}),
 		"RevocationRequest":    reflect.TypeOf(oauthceremony.RevocationRequest{}),
+		"RevocationReason":     reflect.TypeOf(oauthceremony.RevocationReason("")),
 		"GrantKind":            reflect.TypeOf(oauthceremony.GrantKind("")),
 		"ResponseKind":         reflect.TypeOf(oauthceremony.ResponseKind("")),
 		"ResponseDelivery":     reflect.TypeOf(oauthceremony.ResponseDelivery("")),

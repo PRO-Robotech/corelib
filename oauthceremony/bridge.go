@@ -226,7 +226,7 @@ func (b *storageBridge) GetAuthorizeCodeSession(ctx context.Context, code string
 				"what was issued under a replayed code cannot be revoked without its identifier"))
 		}
 		ours = codeReplayed(op)
-		notesFrom(ctx).markReplayedFamily(rec.GrantID, rec.ClientID, ours)
+		notesFrom(ctx).markReplayedFamily(rec.GrantID, rec.ClientID, ours, RevocationCodeReplay)
 		requester, buildErr := requesterFromGrant(ctx, b.ports.Clients.LookupClient, rec, session)
 		if buildErr != nil {
 			// Как у токена обновления: движок получит отказ сборки, а
@@ -267,7 +267,7 @@ func (b *storageBridge) InvalidateAuthorizeCodeSession(ctx context.Context, code
 	case out.Rows() == 0:
 		ours := codeReplayed(op)
 		if presented, known := notesFrom(ctx).presentedCodeOf(code); known {
-			notesFrom(ctx).markReplayedFamily(presented.grantID, presented.clientID, ours)
+			notesFrom(ctx).markReplayedFamily(presented.grantID, presented.clientID, ours, RevocationCodeReplay)
 		}
 		return pairEngine(ctx, ours, engine.ErrInvalidatedAuthorizeCode)
 	default:
@@ -391,7 +391,7 @@ func (b *storageBridge) GetRefreshTokenSession(ctx context.Context, signature st
 				"the family of a replayed token cannot be revoked without its identifier"))
 		}
 		ours = refreshReplayed(op)
-		notesFrom(ctx).markReplayedFamily(rec.GrantID, rec.ClientID, ours)
+		notesFrom(ctx).markReplayedFamily(rec.GrantID, rec.ClientID, ours, RevocationRefreshReplay)
 		requester, buildErr := requesterFromGrant(ctx, b.ports.Clients.LookupClient, rec, session)
 		if buildErr != nil {
 			// Случай повтора записывается и тогда, когда запрос собрать не
@@ -443,7 +443,7 @@ func (b *storageBridge) RotateRefreshToken(ctx context.Context, grantID, signatu
 				"the family of a replayed token cannot be revoked without it"))
 		}
 		ours := refreshReplayed(op)
-		notesFrom(ctx).markReplayedFamily(grantID, "", ours)
+		notesFrom(ctx).markReplayedFamily(grantID, "", ours, RevocationRefreshReplay)
 		return pairEngine(ctx, ours, engine.ErrInactiveToken)
 	default:
 		return note(ctx, contractBreach(op, "the single statement touched more than one row"))
@@ -459,27 +459,63 @@ func refreshReplayed(op string) *ProtocolError {
 }
 
 // ── Отзыв по гранту ─────────────────────────────────────────────────────────
+//
+// Оба отзыва зовут двое: движок (последовательный повтор кода и токена
+// обновления, отзыв живого артефакта клиентом) и церемония
+// (revokeReplayedFamily). Движок причины не передаёт — его хранилище отзывает
+// по одному идентификатору запроса, — поэтому причину порту называет ведомость
+// операции (operationNotes.revocationReason).
 
 func (b *storageBridge) RevokeRefreshToken(ctx context.Context, grantID string) error {
+	const op = "GrantRevoker.RevokeGrantRefreshTokens"
+	reason, bad := revocationReasonFor(ctx, op)
+	if bad != nil {
+		return bad
+	}
+
 	ctx, cancel := b.deadline(ctx)
 	defer cancel()
 
-	out, err := b.ports.Grants.RevokeGrantRefreshTokens(ctx, grantID)
-	if bad := anyRows("GrantRevoker.RevokeGrantRefreshTokens", out, err); bad != nil {
+	out, err := b.ports.Grants.RevokeGrantRefreshTokens(ctx, grantID, reason)
+	if bad := anyRows(op, out, err); bad != nil {
 		return note(ctx, bad)
 	}
 	return nil
 }
 
 func (b *storageBridge) RevokeAccessToken(ctx context.Context, grantID string) error {
+	const op = "GrantRevoker.RevokeGrantAccessTokens"
+	reason, bad := revocationReasonFor(ctx, op)
+	if bad != nil {
+		return bad
+	}
+
 	ctx, cancel := b.deadline(ctx)
 	defer cancel()
 
-	out, err := b.ports.Grants.RevokeGrantAccessTokens(ctx, grantID)
-	if bad := anyRows("GrantRevoker.RevokeGrantAccessTokens", out, err); bad != nil {
+	out, err := b.ports.Grants.RevokeGrantAccessTokens(ctx, grantID, reason)
+	if bad := anyRows(op, out, err); bad != nil {
 		return note(ctx, bad)
 	}
 	return nil
+}
+
+// revocationReasonFor — причина отзыва в операции, которой принадлежит ctx.
+//
+// Причины нет — порт не зовётся. Подставить её нечем: значения «не названа» у
+// словаря нет, а любое из трёх было бы ложью службе в её журнал. Отзыв в
+// операции, которая причины не называет и повтора в которой не замечено, —
+// дефект провязки церемонии, а не отказ хранилища и не отказ протокола:
+// каждая операция, в которой движок отзывает, причину называет (Revoke) либо
+// замечает повтор раньше отзыва (Exchange).
+func revocationReasonFor(ctx context.Context, op string) (RevocationReason, *ProtocolError) {
+	reason, named := notesFrom(ctx).revocationReason()
+	if !named {
+		return "", failf(CodeCeremonyMisuse, nil,
+			"The authorization server was about to revoke a grant without knowing why.", "",
+			op+": the operation names no revocation reason and noticed no replay; the port was not called")
+	}
+	return reason, nil
 }
 
 // ── Доказательство владения ключом ──────────────────────────────────────────
@@ -521,7 +557,7 @@ func (b *storageBridge) GetPKCERequestSession(ctx context.Context, signature str
 		ours := fromPort(op, err)
 		if presented, known := notesFrom(ctx).presentedCodeOf(signature); ours.Code == CodeGrantNotFound && known && presented.proofBound {
 			replay := codeReplayed(op)
-			notesFrom(ctx).markReplayedFamily(presented.grantID, presented.clientID, replay)
+			notesFrom(ctx).markReplayedFamily(presented.grantID, presented.clientID, replay, RevocationCodeReplay)
 			return nil, pairEngine(ctx, replay, engine.ErrInvalidatedAuthorizeCode)
 		}
 		return nil, notFoundAware(ctx, op, err)
