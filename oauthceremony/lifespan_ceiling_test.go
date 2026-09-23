@@ -48,8 +48,8 @@ func TestNewRefusesAnArtifactLifespanAboveItsCeiling(t *testing.T) {
 		{
 			name:        "токен обновления",
 			field:       "Config.RefreshTokenLifespan",
-			ceilingName: "tokenpolicy.MaxRefreshTokenTTL",
-			ceiling:     tokenpolicy.MaxRefreshTokenTTL,
+			ceilingName: "tokenpolicy.MaxRefreshTokenFamilyTTL",
+			ceiling:     tokenpolicy.MaxRefreshTokenFamilyTTL,
 			set:         func(c *oauthceremony.Config, d time.Duration) { c.RefreshTokenLifespan = d },
 		},
 	}

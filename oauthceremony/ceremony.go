@@ -90,12 +90,17 @@ type Config struct {
 	RotatedSigningSecrets [][]byte
 
 	// AccessTokenLifespan, RefreshTokenLifespan, AuthorizationCodeLifespan
-	// — сроки жизни артефактов. Все три обязаны быть положительными и не
-	// длиннее своих потолков фундамента — tokenpolicy.MaxTokenTTL,
-	// tokenpolicy.MaxRefreshTokenTTL и tokenpolicy.MaxAuthorizationCodeTTL.
-	// Срок выше потолка New отвергает, называя поле и потолок, а не урезает
-	// молча; решение, из которого взято значение каждого потолка, записано у
-	// самой константы.
+	// — сроки жизни артефактов, каждый от выпуска артефакта. Все три обязаны
+	// быть положительными и не длиннее своих потолков фундамента —
+	// tokenpolicy.MaxTokenTTL, tokenpolicy.MaxRefreshTokenFamilyTTL и
+	// tokenpolicy.MaxAuthorizationCodeTTL. Срок выше потолка New отвергает,
+	// называя поле и потолок, а не урезает молча; решение, из которого взято
+	// значение каждого потолка, записано у самой константы.
+	//
+	// RefreshTokenLifespan — срок ОДНОГО токена обновления: оборот выпускает
+	// преемника с тем же сроком от своего выпуска. Предел всего семейства New
+	// не держит — его держат граница гранта (AuthorizationGrant.ExpiresAt) и
+	// база службы (tokenpolicy.MaxRefreshTokenFamilyTTL называет обоих).
 	AccessTokenLifespan       time.Duration
 	RefreshTokenLifespan      time.Duration
 	AuthorizationCodeLifespan time.Duration
@@ -340,10 +345,10 @@ func validateConfig(cfg *Config) error {
 			"; an access token is a bearer credential, usable by whoever holds it for its whole lifespan")
 	case cfg.RefreshTokenLifespan <= 0:
 		return misuse("Config.RefreshTokenLifespan is not a positive duration")
-	case cfg.RefreshTokenLifespan > tokenpolicy.MaxRefreshTokenTTL:
+	case cfg.RefreshTokenLifespan > tokenpolicy.MaxRefreshTokenFamilyTTL:
 		return misuse("Config.RefreshTokenLifespan " + cfg.RefreshTokenLifespan.String() +
-			" exceeds tokenpolicy.MaxRefreshTokenTTL " + tokenpolicy.MaxRefreshTokenTTL.String() +
-			"; the lifespan is the idle window a stolen refresh token stays usable in")
+			" exceeds tokenpolicy.MaxRefreshTokenFamilyTTL " + tokenpolicy.MaxRefreshTokenFamilyTTL.String() +
+			"; no refresh token outlives the bound of its family")
 	case cfg.AuthorizationCodeLifespan <= 0:
 		return misuse("Config.AuthorizationCodeLifespan is not a positive duration")
 	case cfg.AuthorizationCodeLifespan > tokenpolicy.MaxAuthorizationCodeTTL:
