@@ -129,6 +129,10 @@ type recordingIssuer struct {
 	identifyFailure error
 	// identifyEmpty — опознание отвечает пустым идентификатором без отказа.
 	identifyEmpty bool
+	// hold задерживает выпуск ДО того, как взяты часы выпуска, и без замка
+	// подставки: так проба ставит выпуск после события в других портах.
+	// Отказ hold — отказ выпуска. Пусто — выпуск не ждёт.
+	hold func(ctx context.Context) error
 }
 
 // issuance — один выпуск: что церемония назвала и что подставка вернула.
@@ -146,7 +150,16 @@ func newRecordingIssuer() *recordingIssuer {
 }
 
 // IssueAccessToken выпускает токен сроком не дальше границы церемонии.
-func (f *recordingIssuer) IssueAccessToken(_ context.Context, grant oauthceremony.GrantRecord) (oauthceremony.IssuedAccessToken, error) {
+func (f *recordingIssuer) IssueAccessToken(ctx context.Context, grant oauthceremony.GrantRecord) (oauthceremony.IssuedAccessToken, error) {
+	f.mu.Lock()
+	hold := f.hold
+	f.mu.Unlock()
+	if hold != nil {
+		if err := hold(ctx); err != nil {
+			return oauthceremony.IssuedAccessToken{}, err
+		}
+	}
+
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
