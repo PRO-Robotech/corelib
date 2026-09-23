@@ -3,8 +3,8 @@
 
 // engineconfig_internal_test.go — методы настроек движка, собранных New, на
 // пути запроса не ЗАМЕНЯЮТ значения их полей. Это половина утверждения
-// «настройки только читаются»; вторую — запись в содержимое поля — держит
-// engineconfig_static_internal_test.go.
+// «настройки только читаются»; вторую — запись в содержимое поля — в
+// известных формах держит engineconfig_static_internal_test.go.
 //
 // Геттер настроек движка (internal/oauth2/config_default.go) заполняет
 // неназванное поле умолчанием ЛЕНИВО: первым вызовом и без синхронизации.
@@ -29,8 +29,10 @@
 //     запись элемента карты или среза либо поля значения под указателем
 //     адреса не меняет. Её держит статическая проба по исходнику
 //     TestEngineSettingsMethodsWriteNoFieldContent
-//     (engineconfig_static_internal_test.go); что она разбирает и чего не
-//     судит — в её шапке.
+//     (engineconfig_static_internal_test.go) — только в тех формах записи,
+//     которые знает её разбор; держимые формы и слепая зона разбора — в её
+//     шапке, и у слепой зоны держатель тот же, что у первой: -race проба,
+//     только на пути обмена.
 //
 // Файл внутренний намеренно: настройки движка не видны снаружи ни одним
 // элементом пакета.
@@ -98,7 +100,8 @@ func censusGetterWrites(cfg *engine.Config) getterCensus {
 // (и длина с ёмкостью у среза), у интерфейса — тождество лежащего в нём, у
 // прочих — само значение. Ленивая инициализация меняет nil на значение и
 // потому видна; запись в содержимое ссылочного поля адреса не меняет и
-// потому НЕ видна — её судит TestEngineSettingsMethodsWriteNoFieldContent.
+// потому НЕ видна — её в известных формах судит
+// TestEngineSettingsMethodsWriteNoFieldContent.
 func fieldIdentities(cfg *engine.Config) []string {
 	v := reflect.ValueOf(cfg).Elem()
 	out := make([]string, v.NumField())
@@ -229,7 +232,8 @@ func requireCensusCovered(t *testing.T, c getterCensus) {
 // TestEngineSettingsBuiltByNewAreOnlyReadOnTheRequestPath — ни один метод
 // настроек движка собранной церемонии не заменяет значения их поля, кроме
 // геттеров, которых путь запроса не достигает, — и те названы с предикатом.
-// Запись в содержимое поля судит TestEngineSettingsMethodsWriteNoFieldContent.
+// Запись в содержимое поля в известных формах судит
+// TestEngineSettingsMethodsWriteNoFieldContent.
 func TestEngineSettingsBuiltByNewAreOnlyReadOnTheRequestPath(t *testing.T) {
 	census := censusGetterWrites(engineConfigOfNewCeremony(t))
 	requireCensusCovered(t, census)
@@ -260,21 +264,24 @@ func replacedFieldFindingText(w getterWrite) string {
 		"из одного запроса гоняется с чтением из другого. Если геттер заполняет поле лениво (пишет только "+
 		"в пустое), назови поле %s в New; если пишет и в названное, названия мало: запись снимается "+
 		"правкой поддерева, а вне пути запроса — исключением offRequestPath с предикатом. Запись в "+
-		"СОДЕРЖИМОЕ ссылочного поля эта перепись не видит вовсе: её судит "+
+		"СОДЕРЖИМОЕ ссылочного поля эта перепись не видит вовсе: её в известных формах судит "+
 		"TestEngineSettingsMethodsWriteNoFieldContent", w, w.field)
 }
 
-// TestReplacedFieldFindingTextKeepsNamingInNewToLazyFill — текст находки на
-// настоящем входе: ленивые геттеры пустых настроек. Он называет запись,
-// ставит «назови поле в New» под условие ленивого заполнения и отсылает запись
-// в содержимое к её держателю, а не обещает, что названия поля достаточно.
+// TestReplacedFieldFindingTextKeepsNamingInNewToLazyFill — текст находки
+// называет запись, ставит «назови поле в New» под условие ленивого заполнения
+// и отсылает запись в содержимое к её держателю, а не обещает, что названия
+// поля достаточно. Вход — синтетическая запись глубины 1 копии поддерева в
+// единице переписи (controlWrite, выведена разбором копии) и ленивые геттеры
+// пустых настроек, сколько их есть: их может не остаться — это цель, а не
+// «тексту судить нечего».
 func TestReplacedFieldFindingTextKeepsNamingInNewToLazyFill(t *testing.T) {
+	walkEngineCopy(t)
 	census := censusGetterWrites(&engine.Config{})
 	requireCensusCovered(t, census)
-	if len(census.writes) == 0 {
-		t.Fatalf("НЕ ВЫПОЛНИЛОСЬ: на пустых настройках ни одной записи — тексту судить нечего")
-	}
-	for _, w := range census.writes {
+	inputs := append([]getterWrite{controlWrite}, census.writes...)
+	t.Logf("входов тексту: %d (синтетический 1 · ленивых геттеров %d)", len(inputs), len(census.writes))
+	for _, w := range inputs {
 		text := replacedFieldFindingText(w)
 		for _, part := range []string{
 			w.String(),

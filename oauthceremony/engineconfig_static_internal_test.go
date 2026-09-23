@@ -1,27 +1,34 @@
 // Copyright (c) PRO-Robotech
 // SPDX-License-Identifier: Apache-2.0
 
-// engineconfig_static_internal_test.go — методы настроек движка не пишут в
-// СОДЕРЖИМОЕ полей: статическая проба по исходнику.
+// engineconfig_static_internal_test.go — ограждение ИЗВЕСТНЫХ форм записи в
+// СОДЕРЖИМОЕ полей настроек движка: статическая проба по исходнику.
 //
 // Перепись записей (engineconfig_internal_test.go) сверяет каждое поле
 // настроек до и после вызова метода по ТОЖДЕСТВУ, а тождество ссылочного поля
 // — адрес: у указателя и карты только он, у среза ещё длина и ёмкость, у
 // интерфейса — тождество лежащего в нём. Запись в содержимое такого поля —
 // элемент карты или среза, поле значения под указателем — адреса не меняет, и
-// перепись её не видит, даже если само поле названо в New. Эту половину держит
-// разбор исходника: в каждом методе типа настроек движка ищется запись, корень
-// которой — приёмник, а глубина больше поля. `c.F = …` — глубина 1 (предмет
-// переписи); `c.F[k] = …`, `c.F.X = …`, `*c.F = …` — глубина 2 и больше
-// (предмет этой пробы).
+// перепись её не видит, даже если само поле названо в New. Часть этой половины
+// держит разбор исходника: в каждом методе типа настроек движка ищется запись,
+// корень которой — приёмник, а глубина больше поля. `c.F = …` — глубина 1
+// (предмет переписи); `c.F[k] = …`, `c.F.X = …`, `*c.F = …` — глубина 2 и
+// больше (предмет этой пробы).
 //
-// Обход читает те файлы, которые компилятор собирает в пакет движка: все
-// не-тестовые .go каталога пакета. Методы типа объявимы только в нём. Что
-// прочитан тот самый пакет, проверяется, а не предполагается: поля и
-// экспортированные методы типа по разбору обязаны совпасть с отражением
-// собранного типа.
+// Проба — ограждение, а не доказательство отсутствия записи. Разбор без типов
+// полным не бывает: форму, которую он знает, он судит, а на форме, которой не
+// знает, МОЛЧИТ. Поэтому ниже названы поимённо обе стороны — держимые формы и
+// слепая зона — и зелёный этой пробы значит «ни одной записи в держимых
+// формах», а не «записи нет».
 //
-// Формы записи, которые разбор узнаёт (каждая доказана инъекцией ниже —
+// Обход читает не-тестовые .go каталога пакета движка — надмножество того, что
+// собирает компилятор: ограничения сборки он не учитывает (сегодня в пакете их
+// нет), и лишний файл даёт красное предпосылки, а не молчание. Методы типа
+// объявимы только в его пакете. Что прочитан тот самый пакет, проверяется, а не
+// предполагается: поля и экспортированные методы типа по разбору обязаны
+// совпасть с отражением собранного типа.
+//
+// Держимые формы, дающие НАХОДКУ (каждая доказана инъекцией —
 // TestContentWriteInjectionIsFoundWithItsCoordinate):
 //   - присваивание, составное присваивание, ++/--, присваивание в range;
 //   - встроенные append, copy, delete, clear — по первому аргументу;
@@ -30,34 +37,56 @@
 //   - вызов метода с приёмником-указателем, объявленного в пакете движка, на
 //     поле этого типа (`c.AuthorizeEndpointHandlers.Append(h)`);
 //   - всё перечисленное через локальный псевдоним содержимого: переменную,
-//     получившую его присваиванием, объявлением, range, переключателем типа
-//     или преобразованием, и результат вызова метода настроек
+//     получившую его присваиванием или объявлением — в том числе любым из
+//     нескольких результатов одного вызова (`_, m := c.pair()`), — range,
+//     переключателем типа, преобразованием или составным литералом, в том
+//     числе под `&` (`s := T{m: c.F}`), и результат вызова метода настроек
 //     (`c.GetX(ctx)[0] = …`);
-//   - внутри вложенных функциональных литералов и у приёмника-значения.
+//   - внутри вложенных функциональных литералов, у приёмника-значения и у
+//     метода, объявленного на псевдониме типа настроек (`type A = Config`).
 //
-// Чего разбор без типов судить не умеет, он не пропускает, а называет
-// НЕРАЗОБРАННЫМ — и проба краснеет так же, как на находке
-// (TestUnjudgedFormInjectionIsRedNotSilent): вызов на содержимом поля, если это
-// не метод с приёмником-указателем пакета движка, — в том числе через
-// значение-метод, взятое у содержимого; передача содержимого или самого
-// приёмника аргументом функции, которая не встроенная и не из перечня (копия
-// поля-значения — не передача содержимого); взятие адреса содержимого.
-// Законные близнецы тех же форм — запись глубины 1 и чтения — молчат
-// (TestLawfulTwinOfAContentWriteIsSilent).
+// Держимые формы, которые разбор судить не умеет и называет НЕРАЗОБРАННЫМИ —
+// проба краснеет так же, как на находке (TestUnjudgedFormInjectionIsRedNotSilent):
+// вызов на содержимом поля, если это не метод с приёмником-указателем пакета
+// движка, — в том числе через значение-метод, взятое у содержимого;
+// значение-метод самих настроек вне позиции вызова (`f := c.GetX`,
+// `run(c.GetX)`); передача содержимого или самого приёмника аргументом
+// функции, которая не встроенная и не из перечня, — прямо или внутри
+// составного литерала (копия поля-значения — не передача содержимого); взятие
+// адреса содержимого. Законные близнецы тех же форм — запись глубины 1 и
+// чтения — молчат (TestLawfulTwinOfAContentWriteIsSilent).
 //
 // Псевдоним прослеживается без учёта порядка: переменная, хоть раз получившая
 // содержимое, считается им до конца метода. Цена упрощения — лишнее красное, а
 // не молчание.
 //
-// Чего проба НЕ судит (слепая зона, названная): что делает со ссылочным
-// содержимым тот, кому метод его ОТДАЛ, — вызывающий геттер код движка или
-// значение, в составной литерал которого оно легло. Это чужой код, а не метод
-// настроек, и ни одна проба пакета его не судит.
+// СЛЕПАЯ ЗОНА — формы, на которых проба молчит, хотя запись в содержимое
+// настроек есть. Перечень — blindZoneForms, и молчание каждой его формы
+// доказано инъекцией (TestNamedBlindZoneFormsStaySilent): научился разбор
+// форме — проба там краснеет и требует перенести её в держимые. Перечень НЕ
+// замкнут: форма, не названная ни в одной из сторон, молчит так же.
+//   - замыкание, отдающее содержимое (`get := func() … { return c.F }`,
+//     затем `get()[k] = …`) — пишет сам метод настроек;
+//   - часть локального значения, получившая содержимое присваиванием
+//     (`s.m = c.F`, затем `s.m[k] = …`) — пишет сам метод настроек;
+//   - канал, через который прошло содержимое (`ch <- c.F`, затем
+//     `(<-ch)[k] = …`) — пишет сам метод настроек;
+//   - получатель отданного содержимого: код движка, вызвавший геттер и
+//     пишущий в то, что тот вернул, — пишет не метод настроек, и ни одна
+//     проба пакета этот код не судит.
+//
+// Держатель слепой зоны один и частичный: -race проба одновременных обменов
+// TestConcurrentExchangesOnAFreshCeremonyShareNoEngineState (settings_race_test.go)
+// — только на пути обмена и только если запись случится в её прогоне. На
+// остальных путях запроса у слепой зоны держателя НЕТ.
 //
 // Глубина 1 здесь только считается и сверяется с тем, что перепись находит на
 // пустых настройках (TestSourceAndReflectiveCensusesNameTheSameLazyWrites):
 // разбор и отражение — два независимых прибора одного утверждения, и
-// расхождение значит, что один из них не видит формы.
+// расхождение значит, что один из них не видит формы. Положительный контроль
+// разбора — синтетическая запись глубины 1, которую каждая копия поддерева
+// получает методом controlMethod, а не ленивые геттеры живого дерева: их
+// снятие — цель, и на цели проба не краснеет.
 //
 // Файл внутренний: сверка с переписью зовёт её внутренние функции.
 package oauthceremony
@@ -73,7 +102,6 @@ import (
 	"path/filepath"
 	"reflect"
 	"slices"
-	"sort"
 	"strconv"
 	"strings"
 	"testing"
@@ -196,7 +224,7 @@ func (c sourceCensus) summary() string {
 	for d := range depths {
 		keys = append(keys, d)
 	}
-	sort.Ints(keys)
+	slices.Sort(keys)
 	parts := make([]string, 0, len(keys))
 	for _, d := range keys {
 		parts = append(parts, fmt.Sprintf("глубина %d: %d", d, depths[d]))
@@ -235,12 +263,15 @@ func unjudgedText(u unjudgedForm) string {
 
 // packageIndex — то, что разбор знает о пакете движка без типов.
 type packageIndex struct {
-	typeName     string
-	localTypes   map[string]bool
-	methodsOf    map[string]map[string]bool // тип → метод → приёмник-указатель
-	fieldTypeOf  map[string]string          // поле настроек → локальный именованный тип
-	valueField   map[string]bool            // поле настроек со значением без содержимого
-	configMethod map[string]bool
+	typeName string
+	// settingsNames — имя типа настроек и каждого его псевдонима
+	// (`type A = Config`): методы псевдонима — методы настроек.
+	settingsNames map[string]bool
+	localTypes    map[string]bool
+	methodsOf     map[string]map[string]bool // тип → метод → приёмник-указатель
+	fieldTypeOf   map[string]string          // поле настроек → локальный именованный тип
+	valueField    map[string]bool            // поле настроек со значением без содержимого
+	configMethod  map[string]bool
 }
 
 func (p *packageIndex) isMethod(name string) bool { return p.configMethod[name] }
@@ -316,7 +347,7 @@ func walkEngineSource(dir, pkgName, typeName string) (sourceCensus, error) {
 			}
 			recv := fn.Recv.List[0]
 			base, pointer := receiverType(recv.Type)
-			if base != typeName {
+			if !pkg.settingsNames[base] {
 				continue
 			}
 			c.methods = append(c.methods, fn.Name.Name)
@@ -345,6 +376,7 @@ func indexPackage(files []*ast.File, typeName string, c *sourceCensus) *packageI
 		configMethod: map[string]bool{},
 	}
 	basicSpecs := map[string]bool{}
+	aliasOf := map[string]string{} // псевдоним → тип, которым он назван
 	var configStruct *ast.StructType
 	var configFile *ast.File
 	for _, f := range files {
@@ -357,6 +389,9 @@ func indexPackage(files []*ast.File, typeName string, c *sourceCensus) *packageI
 						continue
 					}
 					p.localTypes[ts.Name.Name] = true
+					if id, ok := ts.Type.(*ast.Ident); ok && ts.Assign.IsValid() {
+						aliasOf[ts.Name.Name] = id.Name
+					}
 					if id, ok := ts.Type.(*ast.Ident); ok && basicTypes[id.Name] {
 						basicSpecs[ts.Name.Name] = true
 					}
@@ -374,10 +409,13 @@ func indexPackage(files []*ast.File, typeName string, c *sourceCensus) *packageI
 					p.methodsOf[base] = map[string]bool{}
 				}
 				p.methodsOf[base][d.Name.Name] = pointer
-				if base == typeName {
-					p.configMethod[d.Name.Name] = true
-				}
 			}
+		}
+	}
+	p.settingsNames = settingsNamesOf(typeName, aliasOf)
+	for name := range p.settingsNames {
+		for m := range p.methodsOf[name] {
+			p.configMethod[m] = true
 		}
 	}
 	if configStruct == nil {
@@ -411,6 +449,22 @@ func indexPackage(files []*ast.File, typeName string, c *sourceCensus) *packageI
 		}
 	}
 	return p
+}
+
+// settingsNamesOf — тип настроек и все его псевдонимы, в том числе через
+// цепочку псевдонимов.
+func settingsNamesOf(typeName string, aliasOf map[string]string) map[string]bool {
+	names := map[string]bool{typeName: true}
+	for changed := true; changed; {
+		changed = false
+		for alias, target := range aliasOf {
+			if names[target] && !names[alias] {
+				names[alias] = true
+				changed = true
+			}
+		}
+	}
+	return names
 }
 
 // receiverType — имя базового типа приёмника и то, указатель ли он.
@@ -450,16 +504,6 @@ func importNames(f *ast.File) map[string]string {
 		out[name] = path
 	}
 	return out
-}
-
-func unparen(e ast.Expr) ast.Expr {
-	for {
-		p, ok := e.(*ast.ParenExpr)
-		if !ok {
-			return e
-		}
-		e = p.X
-	}
 }
 
 // root — корень выражения в приёмнике: глубина пути и первое поле.
@@ -507,10 +551,40 @@ func (w *methodWalk) root(expr ast.Expr) (origin, bool) {
 			return w.root(e.Args[0])
 		}
 		// Результат метода настроек — содержимое самих настроек.
-		if sel, ok := unparen(e.Fun).(*ast.SelectorExpr); ok {
+		if sel, ok := ast.Unparen(e.Fun).(*ast.SelectorExpr); ok {
 			if o, ok := w.root(sel.X); ok && o.depth == 0 && w.pkg.isMethod(sel.Sel.Name) {
 				return origin{depth: 1, field: sel.Sel.Name + "()"}, true
 			}
+		}
+	case *ast.CompositeLit:
+		return w.literalRoot(e)
+	case *ast.UnaryExpr:
+		// Адрес свежего литерала несёт то же, что сам литерал.
+		if lit, ok := ast.Unparen(e.X).(*ast.CompositeLit); ok && e.Op == token.AND {
+			return w.literalRoot(lit)
+		}
+	}
+	return origin{}, false
+}
+
+// literalRoot — составной литерал несёт содержимое первого своего элемента
+// (ключа или значения), который его несёт; копия поля-значения — не несёт.
+// Литерал, несущий сами настройки, отстоит от них на шаг: поле «*».
+func (w *methodWalk) literalRoot(lit *ast.CompositeLit) (origin, bool) {
+	for _, elt := range lit.Elts {
+		parts := []ast.Expr{elt}
+		if kv, ok := elt.(*ast.KeyValueExpr); ok {
+			parts = []ast.Expr{kv.Key, kv.Value}
+		}
+		for _, part := range parts {
+			if !w.passesContent(part) {
+				continue
+			}
+			o, _ := w.root(part)
+			if o.depth == 0 {
+				o = origin{depth: 1, field: "*"}
+			}
+			return o, true
 		}
 	}
 	return origin{}, false
@@ -520,7 +594,7 @@ func (w *methodWalk) root(expr ast.Expr) (origin, bool) {
 // или локальным именем либо составным выражением типа. Тип чужого пакета
 // (`pkg.T(x)`) от функции без типов не отличим и преобразованием не считается.
 func (w *methodWalk) isConversion(fun ast.Expr) bool {
-	switch f := unparen(fun).(type) {
+	switch f := ast.Unparen(fun).(type) {
 	case *ast.Ident:
 		_, alias := w.aliases[f.Name]
 		return !alias && (basicTypes[f.Name] || w.pkg.localTypes[f.Name])
@@ -532,7 +606,7 @@ func (w *methodWalk) isConversion(fun ast.Expr) bool {
 
 // bind делает lhs псевдонимом содержимого rhs со сдвигом extra.
 func (w *methodWalk) bind(lhs ast.Expr, rhs ast.Expr, extra int, receiver string) bool {
-	id, ok := unparen(lhs).(*ast.Ident)
+	id, ok := ast.Unparen(lhs).(*ast.Ident)
 	if !ok || id.Name == "_" || id.Name == receiver {
 		return false
 	}
@@ -561,7 +635,11 @@ func (w *methodWalk) collectAliases(body *ast.BlockStmt, receiver string) {
 						changed = w.bind(s.Lhs[i], s.Rhs[i], 0, receiver) || changed
 					}
 				} else if len(s.Rhs) == 1 {
-					changed = w.bind(s.Lhs[0], s.Rhs[0], 0, receiver) || changed
+					// Несколько результатов одного выражения: какой из них несёт
+					// содержимое, без типов не знать — псевдонимом считается каждый.
+					for _, lhs := range s.Lhs {
+						changed = w.bind(lhs, s.Rhs[0], 0, receiver) || changed
+					}
 				}
 			case *ast.ValueSpec:
 				if len(s.Names) == len(s.Values) {
@@ -569,7 +647,9 @@ func (w *methodWalk) collectAliases(body *ast.BlockStmt, receiver string) {
 						changed = w.bind(s.Names[i], s.Values[i], 0, receiver) || changed
 					}
 				} else if len(s.Values) == 1 {
-					changed = w.bind(s.Names[0], s.Values[0], 0, receiver) || changed
+					for _, name := range s.Names {
+						changed = w.bind(name, s.Values[0], 0, receiver) || changed
+					}
 				}
 			case *ast.RangeStmt:
 				for _, v := range []ast.Expr{s.Key, s.Value} {
@@ -607,7 +687,7 @@ func (w *methodWalk) judgeTarget(target ast.Expr, form string) {
 	if target == nil {
 		return
 	}
-	if _, ok := unparen(target).(*ast.Ident); ok {
+	if _, ok := ast.Unparen(target).(*ast.Ident); ok {
 		return
 	}
 	if o, ok := w.root(target); ok {
@@ -636,7 +716,7 @@ func (w *methodWalk) contentArgsUnjudged(call *ast.CallExpr, callee string) {
 }
 
 func (w *methodWalk) judgeCall(call *ast.CallExpr) {
-	fun := unparen(call.Fun)
+	fun := ast.Unparen(call.Fun)
 	if w.isConversion(fun) {
 		return // преобразование не пишет; псевдоним результата прослеживает root
 	}
@@ -711,10 +791,19 @@ func (w *methodWalk) judgeCall(call *ast.CallExpr) {
 // judge обходит тело метода, включая вложенные функциональные литералы.
 func (w *methodWalk) judge(body *ast.BlockStmt) {
 	notUses := map[*ast.Ident]bool{}
+	// callee — выражения в позиции вызываемого; вызов обходится раньше своих
+	// детей, и отметка успевает до того, как обход дойдёт до селектора.
+	callee := map[ast.Expr]bool{}
 	ast.Inspect(body, func(n ast.Node) bool {
 		switch s := n.(type) {
 		case *ast.SelectorExpr:
 			notUses[s.Sel] = true
+			if !callee[s] && w.pkg.isMethod(s.Sel.Name) {
+				if o, ok := w.root(s.X); ok && o.depth == 0 {
+					w.unjudged(s, "значение-метод настроек "+s.Sel.Name+" уходит из выражения, а вызов через "+
+						"него разбор не прослеживает", s)
+				}
+			}
 		case *ast.KeyValueExpr:
 			if id, ok := s.Key.(*ast.Ident); ok {
 				notUses[id] = true
@@ -739,9 +828,12 @@ func (w *methodWalk) judge(body *ast.BlockStmt) {
 				w.judgeTarget(s.Value, formRange)
 			}
 		case *ast.CallExpr:
+			callee[ast.Unparen(s.Fun)] = true
 			w.judgeCall(s)
 		case *ast.UnaryExpr:
-			if s.Op == token.AND {
+			// Адрес свежего литерала — не адрес содержимого: что литерал
+			// несёт, прослеживает root там, где литерал связан или передан.
+			if _, lit := ast.Unparen(s.X).(*ast.CompositeLit); s.Op == token.AND && !lit {
 				if _, ok := w.root(s.X); ok {
 					w.unjudged(s, "адрес содержимого настроек уходит из выражения", s)
 				}
@@ -820,8 +912,8 @@ func requireSameTypeAsCompiled(t *testing.T, c sourceCensus) {
 			gotExported = append(gotExported, m)
 		}
 	}
-	sort.Strings(gotExported)
-	sort.Strings(wantMethods)
+	slices.Sort(gotExported)
+	slices.Sort(wantMethods)
 	if !slices.Equal(gotExported, wantMethods) {
 		t.Fatalf("ПРЕДПОСЫЛКА: экспортированные методы *%s по разбору (%d) %v, у собранного типа (%d) %v",
 			typ.Name(), len(gotExported), gotExported, len(wantMethods), wantMethods)
@@ -869,9 +961,12 @@ func TestEngineSettingsMethodsWriteNoFieldContent(t *testing.T) {
 
 // TestSourceAndReflectiveCensusesNameTheSameLazyWrites — записи глубины 1,
 // найденные разбором, — ровно те, что перепись отражением находит на пустых
-// настройках. Положительный контроль разбора на живом дереве: обход, не
-// видящий записей вовсе, здесь краснеет, а не зеленеет.
+// настройках. Пустые обе — цель (ленивых геттеров не осталось), а не
+// «судить нечего»: что разбор записи глубины 1 видит, доказывает синтетическая
+// запись контроля в копии поддерева, а не живые ленивые геттеры.
 func TestSourceAndReflectiveCensusesNameTheSameLazyWrites(t *testing.T) {
+	walkEngineCopy(t)
+
 	c := walkRealEngineSource(t)
 	fromSource := c.sharedFieldWrites()
 
@@ -880,10 +975,8 @@ func TestSourceAndReflectiveCensusesNameTheSameLazyWrites(t *testing.T) {
 	fromReflection := slices.Clone(reflective.writes)
 	sortGetterWrites(fromReflection)
 
-	t.Logf("записи глубины 1: разбором %v · отражением %v", fromSource, fromReflection)
-	if len(fromSource) == 0 {
-		t.Fatalf("разбор не нашёл ни одной записи глубины 1, а отражение нашло %v — разбор не видит записей", fromReflection)
-	}
+	t.Logf("записи глубины 1: разбором %d %v · отражением %d %v",
+		len(fromSource), fromSource, len(fromReflection), fromReflection)
 	if !slices.Equal(fromSource, fromReflection) {
 		t.Fatalf("приборы разошлись: разбором %v, отражением %v — один из них не видит формы записи; "+
 			"выясни, какой, прежде чем править перечень", fromSource, fromReflection)
@@ -928,8 +1021,48 @@ const marker = "// ← предмет"
 // содержимое карты должна быть записью в НАСТОЯЩЕЕ поле-карту.
 const injectedMapField = "\n\t// InjectedMap — поле-карта копии для инъекций.\n\tInjectedMap map[string]string\n"
 
-// engineCopy копирует не-тестовые .go пакета движка в свой каталог и
-// добавляет в тип настроек поле-карту.
+// controlMethod — метод настроек, который каждая копия поддерева получает с
+// СИНТЕТИЧЕСКОЙ записью глубины 1 в поле-карту копии. Это положительный
+// контроль разбора: он не зависит от того, остались ли в живом дереве ленивые
+// геттеры, — их снятие цель, и контроль на ней не краснеет.
+const (
+	controlMethod = "InjectedControlWrite"
+	controlFile   = "injected_control.go"
+	controlSrc    = "\n// InjectedControlWrite — синтетическая запись глубины 1 копии: положительный контроль разбора.\n" +
+		"func (c *Config) " + controlMethod + "() { c.InjectedMap = nil }\n"
+)
+
+// controlWrite — запись контроля в единице переписи.
+var controlWrite = getterWrite{method: controlMethod, field: "InjectedMap"}
+
+// requireControlWriteSeen — разбор копии видит синтетическую запись глубины 1:
+// без этого молчание на копии было бы неотличимо от слепоты.
+func requireControlWriteSeen(t *testing.T, c sourceCensus) {
+	t.Helper()
+	if !slices.Contains(c.sharedFieldWrites(), controlWrite) {
+		t.Fatalf("положительный контроль: разбор не видит в копии синтетической записи глубины 1 %s — "+
+			"молчание на копии было бы слепотой: %s", controlWrite, c.summary())
+	}
+}
+
+// walkEngineCopy — перепись копии поддерева без инъекции, с проверенным
+// контролем.
+func walkEngineCopy(t *testing.T) sourceCensus {
+	t.Helper()
+	dir, pkgName, typeName := engineCopy(t)
+	c, err := walkEngineSource(dir, pkgName, typeName)
+	if err != nil {
+		t.Fatalf("НЕ ВЫПОЛНИЛОСЬ: обход копии: %v", err)
+	}
+	if reason := c.emptyWalk(); reason != "" {
+		t.Fatal(reason)
+	}
+	requireControlWriteSeen(t, c)
+	return c
+}
+
+// engineCopy копирует не-тестовые .go пакета движка в свой каталог, добавляет
+// в тип настроек поле-карту и метод контроля с записью глубины 1 в неё.
 func engineCopy(t *testing.T) (dir, pkgName, typeName string) {
 	t.Helper()
 	src, pkgName, typeName := engineSource(t)
@@ -951,6 +1084,10 @@ func engineCopy(t *testing.T) (dir, pkgName, typeName string) {
 	}
 	replaceOnce(t, dir, "config_default.go", "\tIsPushedAuthorizeEnforced bool\n}",
 		"\tIsPushedAuthorizeEnforced bool\n"+injectedMapField+"}")
+	if _, err := os.Stat(filepath.Join(dir, controlFile)); err == nil {
+		t.Fatalf("ФИКСТУРА: %s уже есть в пакете движка — контроль лёг бы поверх чужого файла", controlFile)
+	}
+	writeFile(t, dir, controlFile, "package "+pkgName+"\n"+controlSrc)
 	return dir, pkgName, typeName
 }
 
@@ -1022,12 +1159,9 @@ func (in injection) apply(t *testing.T) (census sourceCensus, at string) {
 	if reason := c.emptyWalk(); reason != "" {
 		t.Fatal(reason)
 	}
-	// Положительный контроль разбора на копии: записи глубины 1 живого дерева
-	// видны и в ней. Без него молчание близнеца было бы неотличимо от слепоты.
-	if got := c.sharedFieldWrites(); len(got) == 0 {
-		t.Errorf("положительный контроль: разбор не видит в копии ни одной записи глубины 1 живого дерева "+
-			"— молчание ниже было бы слепотой: %s", c.summary())
-	}
+	// Положительный контроль разбора на копии — синтетическая запись глубины 1
+	// метода controlMethod, а не ленивые геттеры живого дерева.
+	requireControlWriteSeen(t, c)
 	t.Log(c.summary())
 	return c, at
 }
@@ -1063,8 +1197,10 @@ func (c *Config) TuneHTTPClient(_ context.Context) {
 }
 `)}, formAssign, 2},
 		{injection{name: "указатель в интерфейсе, названном в New, — в существующем геттере",
-			file: "config_default.go", anchor: "\t\tc.ClientSecretsHasher = &BCrypt{Config: c}\n\t}\n",
-			src: "\t\tc.ClientSecretsHasher = &BCrypt{Config: c}\n\t}\n" +
+			// Якорь — объявление геттера, а не его ленивая запись: запись снимаема,
+			// и инъекция не должна истекать вместе с ней.
+			file: "config_default.go", anchor: "func (c *Config) GetSecretsHasher(ctx context.Context) Hasher {\n",
+			src: "func (c *Config) GetSecretsHasher(ctx context.Context) Hasher {\n" +
 				"\tc.ClientSecretsHasher.(*BCrypt).Config = &Config{HashCost: 4} " + marker + "\n"}, formAssign, 2},
 		{injection{name: "элемент среза, названного в New, — в существующем геттере",
 			file: "config_default.go", anchor: "\treturn c.SanitationWhiteList\n",
@@ -1182,6 +1318,53 @@ func (c Config) ByValue() {
 	c.InjectedMap["k"] = "v" `+marker+`
 }
 `)}, formAssign, 2},
+		{injection{name: "второй результат метода настроек", file: "injected.go", src: newMethod("", `
+func (c *Config) pair() (int, map[string]string) { return 0, c.InjectedMap }
+
+func (c *Config) SecondResult() {
+	_, m := c.pair()
+	m["k"] = "v" `+marker+`
+}
+`)}, formAssign, 2},
+		{injection{name: "второй результат метода настроек объявлением var", file: "injected.go", src: newMethod("", `
+func (c *Config) pair() (int, map[string]string) { return 0, c.InjectedMap }
+
+func (c *Config) SecondResultVar() {
+	var _, m = c.pair()
+	m["k"] = "v" `+marker+`
+}
+`)}, formAssign, 2},
+		{injection{name: "локальный составной литерал", file: "injected.go", src: newMethod("", `
+func (c *Config) ViaLiteral() {
+	s := struct{ m map[string]string }{c.InjectedMap}
+	s.m["k"] = "v" `+marker+`
+}
+`)}, formAssign, 3},
+		{injection{name: "локальный составной литерал с ключом", file: "injected.go", src: newMethod("", `
+func (c *Config) ViaKeyedLiteral() {
+	s := struct{ m map[string]string }{m: c.InjectedMap}
+	s.m["k"] = "v" `+marker+`
+}
+`)}, formAssign, 3},
+		{injection{name: "составной литерал под &", file: "injected.go", src: newMethod("", `
+func (c *Config) ViaLiteralPointer() {
+	p := &struct{ m map[string]string }{m: c.InjectedMap}
+	p.m["k"] = "v" `+marker+`
+}
+`)}, formAssign, 3},
+		{injection{name: "составной литерал, несущий сами настройки", file: "injected.go", src: newMethod("", `
+func (c *Config) ViaLiteralOfSettings() {
+	s := struct{ cfg *Config }{cfg: c}
+	s.cfg.HashCost = 4 `+marker+`
+}
+`)}, formAssign, 3},
+		{injection{name: "метод на псевдониме типа настроек", file: "injected.go", src: newMethod("", `
+type settingsAlias = Config
+
+func (c *settingsAlias) poke() {
+	c.InjectedMap["k"] = "v" `+marker+`
+}
+`)}, formAssign, 2},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -1248,6 +1431,28 @@ func (c *Config) Deferred() {
 	_ = f() `+marker+`
 }
 `)}, "вызов значения, достигнутого через содержимое поля HTTPClient"},
+		{injection{name: "значение-метод настроек, вызванное через переменную", file: "injected.go", src: newMethod(`"context"`, `
+func (c *Config) ViaMethodValue(ctx context.Context) {
+	f := c.GetSanitationWhiteList `+marker+`
+	f(ctx)[0] = "x"
+}
+`)}, "значение-метод настроек GetSanitationWhiteList"},
+		{injection{name: "значение-метод настроек аргументом", file: "injected.go", src: newMethod("", `
+func (c *Config) pairMap() map[string]string { return c.InjectedMap }
+
+func (c *Config) HandMethodValue() {
+	runGetter(c.pairMap) `+marker+`
+}
+
+func runGetter(f func() map[string]string) { f()["k"] = "v" }
+`)}, "значение-метод настроек pairMap"},
+		{injection{name: "составной литерал аргументом функции", file: "injected.go", src: newMethod("", `
+func (c *Config) HandWrapped() {
+	mutateWrapped([]map[string]string{c.InjectedMap}) `+marker+`
+}
+
+func mutateWrapped(ms []map[string]string) { ms[0]["k"] = "v" }
+`)}, "функция mutateWrapped получает содержимое настроек"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -1321,6 +1526,52 @@ func (c *Config) Reads(dst []byte) (int, string) {
 	return len(c.SanitationWhiteList), v `+marker+`
 }
 `)}, false, false},
+		{injection{name: "второй результат метода настроек только читается", file: "injected.go", src: newMethod("", `
+func (c *Config) pair() (int, map[string]string) { return 0, c.InjectedMap }
+
+func (c *Config) SecondResultRead() string {
+	_, m := c.pair()
+	return m["k"] `+marker+`
+}
+`)}, false, false},
+		{injection{name: "составной литерал копии поля-значения", file: "injected.go", src: newMethod("", `
+func (c *Config) ValueLiteral() {
+	s := struct{ n int }{c.HashCost}
+	s.n = 1 `+marker+`
+}
+`)}, false, false},
+		{injection{name: "составной литерал с содержимым только читается", file: "injected.go", src: newMethod("", `
+func (c *Config) LiteralRead() string {
+	s := struct{ m map[string]string }{m: c.InjectedMap}
+	return s.m["k"] `+marker+`
+}
+`)}, false, false},
+		{injection{name: "свежий литерал под & кладётся в поле", file: "injected.go", src: newMethod("", `
+func (c *Config) FreshHasher() {
+	c.ClientSecretsHasher = &BCrypt{Config: c} `+marker+`
+}
+`)}, true, false},
+		{injection{name: "литерал копий полей-значений аргументом", file: "injected.go", src: newMethod("", `
+func (c *Config) HandValues() {
+	useStrings([]string{c.TokenURL}) `+marker+`
+}
+
+func useStrings([]string) {}
+`)}, false, false},
+		{injection{name: "метод настроек вызван, а не взят значением", file: "injected.go", src: newMethod(`"context"`, `
+func (c *Config) CallsMethod(ctx context.Context) int {
+	return len(c.GetSanitationWhiteList(ctx)) `+marker+`
+}
+`)}, false, false},
+		{injection{name: "метод на псевдониме чужого типа", file: "injected.go", src: newMethod("", `
+type other struct{ InjectedMap map[string]string }
+
+type otherAlias = other
+
+func (c *otherAlias) poke() {
+	c.InjectedMap["k"] = "v" `+marker+`
+}
+`)}, false, false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -1340,6 +1591,112 @@ func (c *Config) Reads(dst []byte) (int, string) {
 			if shared == tc.copyOnly {
 				t.Fatalf("запись %v: в сверке с переписью — %v, а копия ли она приёмника-значения — %v",
 					w, shared, tc.copyOnly)
+			}
+		})
+	}
+}
+
+// ── Слепая зона, названная поимённо ─────────────────────────────────────────
+
+// blindZoneForm — форма записи в содержимое настроек, на которой разбор
+// МОЛЧИТ. name — имя формы: под ним её называют шапка этого файла и
+// doc-комментарий Ceremony (ceremony.go). method — метод настроек, в котором
+// форма лежит: что он осмотрен, проверяется, иначе молчание было бы от
+// непрочитанного метода, а не от формы.
+type blindZoneForm struct {
+	injection
+	method string
+}
+
+// blindZoneForms — слепая зона разбора. Перечень не замкнут: он называет
+// известные формы, а не все. Пустой перечень — цель, а не отказ.
+var blindZoneForms = []blindZoneForm{
+	{injection{name: "замыкание, отдающее содержимое", file: "injected.go", src: newMethod("", `
+func (c *Config) ViaClosure() {
+	get := func() map[string]string { return c.InjectedMap }
+	get()["k"] = "v" `+marker+`
+}
+`)}, "ViaClosure"},
+	{injection{name: "часть локального значения, получившая содержимое присваиванием", file: "injected.go", src: newMethod("", `
+func (c *Config) ViaLocalPart() {
+	var s struct{ m map[string]string }
+	s.m = c.InjectedMap
+	s.m["k"] = "v" `+marker+`
+}
+`)}, "ViaLocalPart"},
+	{injection{name: "канал, через который прошло содержимое", file: "injected.go", src: newMethod("", `
+func (c *Config) ViaChannel() {
+	ch := make(chan map[string]string, 1)
+	ch <- c.InjectedMap
+	(<-ch)["k"] = "v" `+marker+`
+}
+`)}, "ViaChannel"},
+	{injection{name: "получатель отданного содержимого", file: "injected.go", src: newMethod("", `
+func (c *Config) GiveInjected() map[string]string { return c.InjectedMap }
+
+func pokeGiven(c *Config) {
+	c.GiveInjected()["k"] = "v" `+marker+`
+}
+`)}, "GiveInjected"},
+}
+
+// blindZoneDocs — тексты, обязанные называть слепую зону поимённо: шапка этого
+// файла и doc-комментарий Ceremony, с пробелами и переносами, сведёнными к
+// одному пробелу.
+func blindZoneDocs(t *testing.T) map[string]string {
+	t.Helper()
+	fset := token.NewFileSet()
+	docs := map[string]string{}
+	oneLine := func(s string) string { return strings.Join(strings.Fields(s), " ") }
+
+	self, err := parser.ParseFile(fset, "engineconfig_static_internal_test.go", nil, parser.ParseComments|parser.PackageClauseOnly)
+	if err != nil || self.Doc == nil {
+		t.Fatalf("ФИКСТУРА: шапка engineconfig_static_internal_test.go не прочитана: %v", err)
+	}
+	docs["шапка engineconfig_static_internal_test.go"] = oneLine(self.Doc.Text())
+
+	ceremony, err := parser.ParseFile(fset, "ceremony.go", nil, parser.ParseComments)
+	if err != nil {
+		t.Fatalf("ФИКСТУРА: ceremony.go не разобран: %v", err)
+	}
+	for _, decl := range ceremony.Decls {
+		gd, ok := decl.(*ast.GenDecl)
+		if !ok || len(gd.Specs) != 1 {
+			continue
+		}
+		if ts, ok := gd.Specs[0].(*ast.TypeSpec); ok && ts.Name.Name == "Ceremony" && gd.Doc != nil {
+			docs["doc-комментарий Ceremony (ceremony.go)"] = oneLine(gd.Doc.Text())
+		}
+	}
+	if len(docs) != 2 {
+		t.Fatalf("ФИКСТУРА: прочитано текстов %d из 2: %v", len(docs), docs)
+	}
+	return docs
+}
+
+// TestNamedBlindZoneFormsStaySilent — каждая форма слепой зоны названа в обоих
+// текстах и на копии поддерева действительно молчит. Проба держит правдой
+// утверждение шапок о слепой зоне: разбор, научившийся форме, краснеет здесь и
+// требует перенести её в держимые формы; текст, переставший форму называть,
+// краснеет тоже.
+func TestNamedBlindZoneFormsStaySilent(t *testing.T) {
+	docs := blindZoneDocs(t)
+	t.Logf("слепая зона: форм %d · текстов, обязанных их называть, %d", len(blindZoneForms), len(docs))
+	for _, form := range blindZoneForms {
+		t.Run(form.name, func(t *testing.T) {
+			for place, doc := range docs {
+				if !strings.Contains(doc, form.name) {
+					t.Errorf("%s не называет форму слепой зоны «%s»", place, form.name)
+				}
+			}
+			c, at := form.apply(t)
+			if !slices.Contains(c.methods, form.method) {
+				t.Fatalf("ФИКСТУРА: метод %s формы не осмотрен — молчание было бы от непрочитанного: %v", form.method, c.methods)
+			}
+			if len(c.deeper()) != 0 || len(c.unjudged) != 0 {
+				t.Fatalf("форма «%s» больше не в слепой зоне: разбор судит её на %s (находок %v · неразобранных %v) — "+
+					"перенеси её из blindZoneForms и из обоих текстов в держимые формы, с инъекцией и близнецом",
+					form.name, at, c.deeper(), c.unjudged)
 			}
 		})
 	}

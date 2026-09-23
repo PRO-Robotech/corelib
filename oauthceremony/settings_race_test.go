@@ -14,7 +14,9 @@
 // она проверяет лишь, что каждый обмен прошёл. Класс «метод настроек пишет в
 // них» судится без детектора и без одновременности двумя внутренними пробами:
 // замену значения поля ловит TestEngineSettingsBuiltByNewAreOnlyReadOnTheRequestPath,
-// запись в содержимое поля — TestEngineSettingsMethodsWriteNoFieldContent.
+// запись в содержимое поля в известных формах —
+// TestEngineSettingsMethodsWriteNoFieldContent. Слепую зону её разбора
+// (blindZoneForms) держит только эта проба — и только на пути обмена.
 package oauthceremony_test
 
 import (
