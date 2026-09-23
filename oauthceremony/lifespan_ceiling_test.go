@@ -5,6 +5,11 @@
 // доступа, кода авторизации и токена обновления — есть потолок фундамента
 // (tokenpolicy), и New судит ВЕЛИЧИНУ, а не только факт, что срок назван.
 //
+// Отказ по сроку токена доступа (потолок tokenpolicy.MaxTokenTTL) держит
+// TestNewRefusesAnAccessLifespanAboveTheTokenCeiling в access_issuer_test.go;
+// здесь — два других срока. Одна проверка New — одна проба: вторая проба той же
+// проверки краснела бы вместе с первой и ничего сверх неё не держала бы.
+//
 // Предмет — отказ сборки: значение выше потолка не собирает церемонию, и текст
 // отказа называет и поле, и потолок. Близнец каждого отказа — то же значение,
 // РАВНОЕ потолку: оно собирает церемонию. Отказ и близнец различаются ровно
@@ -31,13 +36,6 @@ func TestNewRefusesAnArtifactLifespanAboveItsCeiling(t *testing.T) {
 		ceiling     time.Duration
 		set         func(*oauthceremony.Config, time.Duration)
 	}{
-		{
-			name:        "токен доступа",
-			field:       "Config.AccessTokenLifespan",
-			ceilingName: "tokenpolicy.MaxTokenTTL",
-			ceiling:     tokenpolicy.MaxTokenTTL,
-			set:         func(c *oauthceremony.Config, d time.Duration) { c.AccessTokenLifespan = d },
-		},
 		{
 			name:        "код авторизации",
 			field:       "Config.AuthorizationCodeLifespan",
