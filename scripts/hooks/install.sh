@@ -4,12 +4,13 @@
 #
 # install.sh — провязать хуки этого дерева в клон и сказать, провязаны ли они.
 #
-#   bash scripts/hooks/install.sh install   # положить переходники, затем вердикт check
-#   bash scripts/hooks/install.sh check     # вердикт: 0 — провязано и исполнимо, 1 — нет
+#   make install-hooks                       # = bash scripts/hooks/install.sh install
+#   make check-hooks                         # = bash scripts/hooks/install.sh check
 #   bash scripts/hooks/install.sh stub <имя> # текст переходника (для пробы scripts/hooks/inject.sh)
 #
-# Своей цели `make` нет: у фундамента нет Makefile, ci.yml зовёт инструменты
-# напрямую — поэтому провязка тоже команда. Экземпляр свой, не копия (ban20):
+# install кладёт переходники и выносит вердикт check; check — 0, когда
+# провязано и исполнимо, 1 — когда нет. Цели корневого Makefile — адрес, под
+# которым провязку ищут; логики в них нет. Экземпляр свой, не копия (ban20):
 # идея переходника общая с kacho и kaname, байты не перенесены.
 #
 # ПЕРЕХОДНИК, А НЕ `core.hooksPath`. С `core.hooksPath` git ищет хуки только по
@@ -102,7 +103,7 @@ configured="$(git -C "$root" config --get core.hooksPath 2>/dev/null || true)"
     die "ОТКАЗ: выставлен core.hooksPath=«$configured»." \
         "git ищет хуки только там: переходник в $dst не исполнится ни разу, а без" \
         "файла по тому пути git не исполнит НИЧЕГО и промолчит." \
-        "  git config --unset core.hooksPath   # затем: bash scripts/hooks/install.sh install"
+        "  git config --unset core.hooksPath   # затем: make install-hooks"
 
 mkdir -p "$dst" || die "install-hooks: не создать $dst"
 
@@ -166,7 +167,7 @@ if [ "${#missing[@]}" -gt 0 ]; then
     echo "ОТКАЗ: не провязаны: ${missing[*]} — отправка не проверяется локально, конвейер станет первым читателем." >&2
     rc=1
 fi
-[ "$rc" -eq 0 ] || echo "  bash scripts/hooks/install.sh install" >&2
+[ "$rc" -eq 0 ] || echo "  make install-hooks   # = bash scripts/hooks/install.sh install" >&2
 if [ "${#unrunnable[@]}" -gt 0 ]; then
     echo "ОТКАЗ: адресат не исполним: ${unrunnable[*]} — переходник откажет каждой отправке." >&2
     echo "  git checkout -- scripts/hooks/<имя>   # либо chmod +x scripts/hooks/<имя>" >&2

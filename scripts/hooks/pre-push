@@ -3,15 +3,34 @@
 # SPDX-License-Identifier: Apache-2.0
 #
 # Хук отправки: то, что первым делом проверяет ci.yml, — локально, ДО конвейера.
-# Экземпляр свой, не копия (ban20): состав свой — один Go-модуль без Makefile.
+# Экземпляр свой, не копия (ban20): состав свой — один Go-модуль, и в корневом
+# Makefile только цели провязки, поэтому инструменты зовутся напрямую, как в ci.yml.
 #
 # ЧТО ГОНИТСЯ: build · vet · gofmt · golangci-lint (пин v2.12.2, тот же, что в
-# ci.yml: расхождение версии дало бы другой вердикт об одном дереве, и молча).
-# ЧТО НЕ ГОНИТСЯ — печатается на КАЖДОМ пути выхода (`finish`): go test (юниты
-# не отделены от интеграционных тегом сборки — `git ls-files '*_test.go' | xargs
-# grep -lE '^//go:build' | wc -l` → 0, разделяет `-short`), gosec (своя установка
-# инструмента ради хука, обязанного быть быстрым) и govulncheck (судит базу
-# уязвимостей, а не дерево).
+# ci.yml: расхождение версии дало бы другой вердикт об одном дереве, и молча) ·
+# go test -short -count=1 с вердиктом ТОГО ЖЕ прогонщика, что в задании unit
+# (.github/scripts/go-test-verdict.py): «ok» голого go test не отличает прошедшие
+# пробы от пропущенных и от отсутствующих. `-short` здесь — выключатель
+# контейнеров, а не урезание по вкусу: тега сборки у интеграционных проб нет
+# (`git ls-files '*_test.go' | xargs grep -lE '^//go:build' | wc -l` → 0),
+# `pgtest` объявляет пропуск по `testing.Short()`. Замер на дереве волны 32:
+# 99 пакетов, 3073 пробы, пропущено 191, 30 с. `-count=1` обязателен: пробы
+# дерева (treehygiene, treecorpus, internal/engineconfinement) отказываются
+# работать на прогоне, который go test кеширует (treecorpus/cachedverdict.go).
+#
+# ЧТО НЕ ГОНИТСЯ — печатается на КАЖДОМ пути выхода (`finish`): -race (его
+# гонит задание unit; хук обязан быть быстрым, а детектор гонок пересобирает
+# всё дерево своим режимом), интеграция с Postgres (контейнеры), gosec (своя
+# установка инструмента ради того же) и govulncheck (судит базу уязвимостей, а
+# не дерево).
+#
+# ПРОВЯЗКА КЛОНА — ПРЕДПОСЫЛКА, А НЕ ПРОВЕРКА. Хук спрашивает `install.sh check`
+# до проверок и отказывает, если клон провязан не так: переходник прежней
+# редакции (v1) исполняет этот файл, раз он есть, — но на дереве без него
+# выходит нулём, и СЛЕДУЮЩАЯ отправка такого дерева уехала бы непроверенной
+# молча. Отказ здесь — единственный момент, когда v1 виден: в дереве его нет,
+# он живёт в клоне. В перепись проверок провязка не входит: она о клоне, а не о
+# дереве, и «исполнено 1 из 1» на ней было бы зелёным о нуле осмотренного.
 #
 # СУДИТСЯ ОТПРАВЛЯЕМАЯ РЕВИЗИЯ. Проверки читают диск рабочей копии, а уезжает
 # коммит. Вершина отправки не равна HEAD либо в копии есть правки или
@@ -36,13 +55,13 @@
 # полосе чужой вердикт, а в дереве он стал бы неотслеживаемым файлом и сам
 # сделал бы копию «грязной».
 #
-# Установка: `bash scripts/hooks/install.sh install`; провязку проверяет
-# `… check`. Проба этого файла и провязки — scripts/hooks/inject.sh.
+# Установка: `make install-hooks`; провязку проверяет `make check-hooks`.
+# Проба этого файла и провязки — scripts/hooks/inject.sh (`make probe-hooks`).
 set -uo pipefail
 exec 1>&2
 
 GOLANGCI_LINT_VERSION="v2.12.2"
-NOT_RUN="go test (-race -short и интеграция с Postgres) · gosec · govulncheck"
+NOT_RUN="-race · интеграция с Postgres · gosec · govulncheck"
 
 declared=0
 executed=0
@@ -64,7 +83,9 @@ fi
 
 ROOT="$(git rev-parse --show-toplevel 2>/dev/null)" ||
     finish 2 "pre-push: ОТКАЗ — корень рабочей копии не установлен: судить нечего и негде"
-lint_cache="$(git rev-parse --absolute-git-dir 2>/dev/null)/corelib-prepush/golangci-lint"
+# Состояние хука — в каталоге git ЭТОЙ рабочей копии (см. «КЭШ ЛИНТЕРА»).
+state_dir="$(git rev-parse --absolute-git-dir 2>/dev/null)/corelib-prepush"
+lint_cache="$state_dir/golangci-lint"
 # Окружение git проверкам не наследуется: с выставленным GIT_DIR git в
 # дочерних процессах определял бы репозиторий по переменной, а не по каталогу.
 unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_OBJECT_DIRECTORY \
@@ -83,6 +104,19 @@ if [ ! -t 0 ]; then
             finish 1 "pre-push: ОТКАЗ — отправляемый объект $lsha не сводится к коммиту: судить нечего"
         tips+=("$c")
     done
+fi
+
+# ── ПРОВЯЗКА КЛОНА: предпосылка вердикта о СЛЕДУЮЩЕЙ отправке ──────────────
+installer="$ROOT/scripts/hooks/install.sh"
+[ -f "$installer" ] ||
+    finish 1 "pre-push: ОТКАЗ — провязка клона: нет $installer — судить провязку нечем"
+wiring="$(bash "$installer" check 2>&1)"
+wiring_rc=$?
+if [ "$wiring_rc" -ne 0 ]; then
+    finish 1 "pre-push: ОТКАЗ — провязка клона (install.sh check, код $wiring_rc):" \
+             "$(printf '%s\n' "$wiring" | sed 's/^/  | /')" \
+             "  Клон, провязанный не так, пропустит дерево без хука молча. Перепровязать:" \
+             "  make install-hooks"
 fi
 
 subject="рабочая копия $ROOT (входа отправки нет — хук позван руками)"
@@ -110,6 +144,7 @@ if [ "${#tips[@]}" -gt 0 ]; then
 fi
 
 echo "== pre-push (corelib): судится $subject"
+echo "   провязка клона: $(printf '%s\n' "$wiring" | grep -m1 '^хуки:')"
 
 # check <имя> <функция>: функция возвращает код проверки; условие не создано —
 # объявляет его в `why`, не исполняя проверку. Категорию даёт `why`, а не код:
@@ -160,10 +195,40 @@ c_lint() {
     GOLANGCI_LINT_CACHE="$lint_cache" golangci-lint run --timeout=5m --config=.github/golangci.yml ./...
 }
 
+# c_test — пробы -short с числовым вердиктом прогонщика задания unit. Код go
+# test берётся данными: вердикт выносит прогонщик, но зелёный разбор при
+# ненулевом коде — расхождение, а не зелёное. Поток JSON остаётся в каталоге
+# git копии: по нему видно, ЧТО упало, после того как хук отказал.
+c_test() {
+    need go || return
+    need python3 || return
+    local verdict_py=".github/scripts/go-test-verdict.py" json rc_go=0 rc_v diag
+    if [ ! -f "$verdict_py" ]; then
+        echo "прогонщика вердикта нет в дереве: $verdict_py — числа исполненного спросить не у кого"
+        return 1
+    fi
+    mkdir -p "$state_dir" || return 1
+    json="$state_dir/go-test.json"
+    go test ./... -short -count=1 -timeout 10m -json > "$json" 2>&1 || rc_go=$?
+    diag="$(grep -v '^{' "$json")"
+    if [ -n "$diag" ]; then
+        echo "вывод go test вне JSON (диагностика сборки):"
+        printf '%s\n' "$diag" | head -40
+    fi
+    python3 "$verdict_py" < "$json"; rc_v=$?
+    if [ "$rc_v" -eq 0 ] && [ "$rc_go" -ne 0 ]; then
+        echo "go test вышел кодом $rc_go при зелёном разборе — вердикт не сходится с кодом"
+        rc_v=1
+    fi
+    [ "$rc_v" -eq 0 ] || echo "поток проб: $json"
+    [ "$rc_v" -eq 0 ] || return 1
+}
+
 check "сборка" c_build
 check "vet" c_vet
 check "gofmt" c_gofmt
 check "golangci-lint (пин $GOLANGCI_LINT_VERSION)" c_lint
+check "go test -short" c_test
 
 echo ""
 echo "== перепись: проверок объявлено $declared · исполнено $executed (красных ${#red[@]}) · без условия ${#unmet[@]}"
