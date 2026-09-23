@@ -1,0 +1,123 @@
+# Пост-дифф ревью Go-кода — роль go-style-reviewer.
+#
+# Имя файла — content_digest. Прежние записи не правятся; сменился дайджест —
+# новый запуск и новый файл (change-graph §2).
+schema_version: 1
+change_id: corelib-20
+holder: post-diff/go-style-reviewer
+owner: go-style-reviewer
+round: 3
+previous_record: 6c83fae70e76033f4625be880a1eecd0aefbbee1e4d92591725b410ada7619e1.yaml   # круг 2, ✅ на d2b1aac
+subject: >-
+  oauthceremony — слепая зона статической пробы настроек движка названа без
+  держателя: шапки Ceremony (ceremony.go), переписи отражением, статической
+  пробы и race-пробы больше не называют -race пробу держателем слепой зоны.
+  Только комментарии.
+
+fingerprint:
+  repo: PRO-Robotech/corelib
+  branch: '20'
+  worktree: /home/dk/workspace/github/PRO-Robotech/cloud-demo/kacho-workspace/tmp/corelib-20
+  base: 750eef447c499d0fcbcd1fa0f124b682e4fd1fc1
+  head: 148356f1caa3935177a18e138881ef6d9c2130b3
+  delta_base: d2b1aaccac521169f8557d842dc21e9e0bc90fbe
+  commits_in_delta: 1   # 148356f «#20 слепая зона статической пробы настроек движка названа без держателя»
+  full_diff_shortstat: '4 files changed, 1829 insertions(+), 17 deletions(-)'
+  delta_shortstat: '4 files changed, 33 insertions(+), 13 deletions(-)'
+content_digest: sha256:4e47ecb271fc8e911f0b0be2ef0c62342101804b1df072d4695a04289ef8655a
+digest_definition: "sha256 вывода `git -C tmp/corelib-20 diff --full-index 750eef447c4..148356f1caa -- . ':!docs/changes'` (определение из задания; у записей кругов 1–2 — без --full-index)"
+
+subject_preflight:
+  head_measured_by_me: '`git rev-parse HEAD` → 148356f1caa3935177a18e138881ef6d9c2130b3 — совпадает с заданием.'
+  digest_measured_by_me: 'ДВАЖДЫ — до разбора и перед вердиктом, оба раза 4e47ecb2…655a.'
+  base_attached: '`git merge-base --is-ancestor` 750eef4→148356f и d2b1aac→148356f — код 0 оба.'
+  full_diff_present: 'ДА: вне docs/ `git status --porcelain` — 0 строк; дифф закоммичен.'
+
+comment_only_check:
+  claim: 'сообщение коммита: «строк не-комментария в диффе 0»'
+  line_level: 'изменённых строк .go, не начинающихся с `//`, — 0.'
+  token_level: >-
+    go/scanner без комментариев, d2b1aac против 148356f, по каждому из 4 файлов —
+    потоки токенов тождественны: ceremony.go 5264, engineconfig_internal_test.go 1597,
+    engineconfig_static_internal_test.go 10249, settings_race_test.go 264.
+    Поведение не меняется; ban17 не затронут (идентификаторы те же).
+  gofmt: '`gofmt -l` по 4 файлам — пусто.'
+
+comment_truthfulness:
+  referenced_names: >-
+    TestNamedBlindZoneFormsStaySilent (static:1688), TestConcurrentExchangesOnAFreshCeremonyShareNoEngineState
+    (race:38), TestEngineSettingsBuiltByNewAreOnlyReadOnTheRequestPath (internal:240),
+    TestEngineSettingsMethodsWriteNoFieldContent (static:958), TestSourceAndReflectiveCensusesNameTheSameLazyWrites
+    (static:973), blindZoneForms (static:1619), identityOf (internal:117) — все существуют.
+  silent_claim: >-
+    «ноль находок и неразобранных при записи слепой зоны — это утверждает
+    TestNamedBlindZoneFormsStaySilent» — прочитано в static:1702: проба падает при
+    `len(c.deeper()) != 0 || len(c.unjudged) != 0`, «находка» в словаре файла — deeper()
+    (глубина ≥ 2). Утверждение совпадает с кодом.
+  radius: >-
+    `git grep` по дереву 148356f (без docs/changes) имён blindZone*, «слеп… зон…»,
+    имени race-пробы, «-race», «детектор»: утверждение о держателе слепой зоны живёт
+    ровно в 4 файлах дельты, все 4 исправлены; другого места, называющего -race
+    пробу держателем, нет.
+  doc_reading_probes: >-
+    Шапки читает проба (blindZoneDocs). `go test -count=1 -run
+    '<4 пробы: NamedBlindZone…|MethodsWriteNoFieldContent|BuiltByNew…|ConcurrentExchanges…>'
+    ./oauthceremony/` без -race — вход находок, исход проб ролью не объявляется.
+
+findings:
+  critical: []
+  important:
+    - id: I4
+      new: true
+      at:
+        - 'oauthceremony/ceremony.go:134'
+        - 'oauthceremony/engineconfig_internal_test.go:25'
+        - 'oauthceremony/engineconfig_static_internal_test.go:83'
+        - 'oauthceremony/settings_race_test.go:20'
+      what: >-
+        Определение гонки сужено: «запись и чтение одного места из одновременных
+        обменов, не упорядоченные синхронизацией» (internal:25 — «видит ... только
+        ... если запись и чтение поля»). Детектор сообщает и запись против записи:
+        два не упорядоченных доступа к одному месту, хотя бы один — запись. Для
+        предмета internal:23 (геттер, пишущий то же значение, из каждого обмена)
+        это именно запись против записи. Комментарий занижает покрытие —
+        безопасное направление; не блокирует.
+      requirement: '«запись и чтение одного места» → «два доступа к одному месту, хотя бы один из них запись» во всех 4 местах.'
+    - id: I2
+      carried_from: 6c83fae7…19e1.yaml
+      status: 'частично: снято «всё это держит только -race проба»; сверка приборов по-прежнему не названа'
+      at: ['oauthceremony/ceremony.go:123-124', 'oauthceremony/engineconfig_internal_test.go:23-28']
+      what: >-
+        «Чего не судит ни одна из них: запись в поле того же значения» и «сверкой не
+        виден ... -race проба видит» умалчивают, что запись того же значения глубины 1
+        в формах разбора держит TestSourceAndReflectiveCensusesNameTheSameLazyWrites
+        (инъекция `c.HashCost = max(c.HashCost, 0)` круга 2 её роняла). Занижение
+        покрытия; не блокирует.
+      requirement: 'Назвать сверку приборов держателем записи того же значения в формах разбора (при неизменном поле на пустых настройках).'
+    - {id: I1, carried_from: 6c83fae7…19e1.yaml, status: 'открыт, дельтой не затронут', at: 'oauthceremony/engineconfig_static_internal_test.go:728'}
+    - {id: I3, carried_from: 6c83fae7…19e1.yaml, status: 'открыт, дельтой не затронут', at: 'oauthceremony/engineconfig_static_internal_test.go:573'}
+  foundation_candidates: []   # дифф — сама corelib
+  style:
+    - {id: S4, status: 'остаётся, дельтой не затронут'}
+    - {id: S5, status: 'остаётся, дельтой не затронут'}
+  approved:
+    - 'Дельта — только комментарии: потоки токенов тождественны по всем 4 файлам.'
+    - 'Держатель слепой зоны больше не приписан -race пробе; утверждение сужено, а не расширено.'
+    - 'Утверждение о молчании статической пробы ссылается на пробу, которая его действительно исполняет.'
+    - 'Радиус закрыт: все места, называвшие держателя, исправлены одним коммитом.'
+
+bans:
+  ban11_fresh_deferral_markers: {count: 0, measured_over: 'ПОЛНЫЙ дифф 750eef4..148356f и дельта d2b1aac..148356f', command: "git diff … | grep -E '^\\+' | grep -cE 'TODO|FIXME|XXX|HACK|t\\.Skip|SkipNow'"}
+  ban12_tests_in_the_same_pr: {answer: ДА, evidence: 'полный дифф — три тестовых файла + комментарий ceremony.go; дельта поведения не меняет'}
+  security_comments_contradicting_code:
+    - 'I4 и I2 — занижают покрытие (безопасное направление); противоречия, завышающего защиту, нет.'
+
+verdict:
+  value: '✅ принято'
+  blocking: НЕТ
+  rationale: >-
+    Дельта меняет только комментарии (доказано по токенам), шапки согласованы между
+    собой и с кодом пробы TestNamedBlindZoneFormsStaySilent, радиус закрыт. I4 и
+    остаток I2 — неточности в сторону занижения покрытия, посадку не держат.
+  next: 'сбор пост-дифф записей — convergence-reviewer либо landing-reviewer; I4, I2 — автору диффа в той же ветке по усмотрению.'
+  return_to: '—'
