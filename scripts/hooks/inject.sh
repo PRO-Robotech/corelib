@@ -22,9 +22,19 @@
 # пробы (GIT_CONFIG_GLOBAL во временном каталоге): клоны одноразовые, это не
 # история, а конфиг машины (в том числе core.hooksPath) на них не влияет.
 #
+# ОХВАТ СУДИТСЯ, А НЕ ТОЛЬКО КОД. В фикстуре хука три пакета, два вложенных, и
+# дефект сборки, vet, gofmt, пробы и линтера кладётся во вложенный пакет, в файл
+# не первый в обходе: проверка, суженная до корня или до части обхода, его не
+# увидит — и утверждение разойдётся. Подставной линтер исполняет ту часть
+# контракта настоящего, от которой зависит вердикт, — какой конфиг прочитан,
+# где кэш, какие пакеты осмотрены — и пишет её в журнал; проба сверяет журнал с
+# деревом фикстуры и с ci.yml. «Тот же, что в ci.yml» — пин линтера и конфиг —
+# берётся из исполняемых строк `run:` ci.yml, а не выписывается здесь второй раз.
+#
 # ИСХОДЫ: 0 — все утверждения сошлись; 1 — хоть одно разошлось;
 #         2 — не выполнилось (нет git/go/gofmt/make/python3, нет временного
-#             каталога, пин не прочитан, нет прогонщика вердикта).
+#             каталога, пин не прочитан, шаг линтера в ci.yml не прочитан
+#             однозначно, нет прогонщика вердикта).
 set -uo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
@@ -33,12 +43,28 @@ INSTALL="$here/install.sh"
 HOOK="$here/pre-push"
 MAKEFILE="$tree/Makefile"
 VERDICT="$tree/.github/scripts/go-test-verdict.py"
+CI="$tree/.github/workflows/ci.yml"
 
 void() { echo "inject: НЕ ВЫПОЛНИЛОСЬ — $*" >&2; exit 2; }
-for f in "$INSTALL" "$HOOK" "$VERDICT"; do [ -f "$f" ] || void "нет $f"; done
+for f in "$INSTALL" "$HOOK" "$VERDICT" "$CI"; do [ -f "$f" ] || void "нет $f"; done
 for t in git go gofmt make python3; do command -v "$t" >/dev/null 2>&1 || void "нет $t в PATH"; done
 pin="$(sed -n 's/^GOLANGCI_LINT_VERSION="v\([0-9.]*\)"$/\1/p' "$HOOK")"
 [ -n "$pin" ] || void "пин линтера в $HOOK не прочитан — сверять версию не с чем"
+
+# Что линтер конвейера ставит и чем зовётся — из исполняемых однострочных `run:`
+# ci.yml: строка комментария YAML начинается с `#` и сюда не попадает. Прочитано
+# не ровно одно значение — сверять не с чем, и это не зелёное.
+ci_runs="$(sed -nE 's/^[[:space:]]*(-[[:space:]]+)?run:[[:space:]]+//p' "$CI")"
+ci_pin="$(printf '%s\n' "$ci_runs" |
+    grep -oE 'golangci-lint/v2/cmd/golangci-lint@v[0-9]+\.[0-9]+\.[0-9]+' | sed 's/.*@v//' | sort -u)"
+[ "$(printf '%s' "$ci_pin" | grep -c .)" -eq 1 ] ||
+    void "пин установки golangci-lint в $CI прочитан не однозначно: «${ci_pin//$'\n'/ }»"
+ci_lint="$(printf '%s\n' "$ci_runs" | grep -E '^golangci-lint run( |$)')"
+[ "$(printf '%s' "$ci_lint" | grep -c .)" -eq 1 ] ||
+    void "шаг «golangci-lint run» в $CI найден не ровно один раз — конфиг конвейера не прочитан"
+ci_cfg="$(printf '%s\n' "$ci_lint" | sed -nE 's/.*(--config[= ]|-c )([^ ]+).*/\2/p')"
+ci_cfg="${ci_cfg#./}"
+[ -n "$ci_cfg" ] || void "шаг линтера в $CI не называет конфиг флагом --config — сверять не с чем"
 
 work="$(mktemp -d)" || void "нет временного каталога"
 trap 'rm -rf "$work"' EXIT
@@ -262,36 +288,157 @@ printf 'module example.invalid/probe\n\ngo 1.21\n' > "$B/go.mod"
 printf 'package probe\n\nfunc Probe() {}\n' > "$B/probe.go"
 # Две пробы: исполняемая и длинная. Длинная ПАДАЕТ, если её исполнили: зелёный
 # близнец тем самым доказывает, что хук гонит `-short`, а не только «гонит».
-cat > "$B/probe_test.go" <<'GO'
-package probe
-
-import "testing"
-
-func TestProbe(t *testing.T) { Probe() }
-
+probe_test_long='
 func TestLongIsSkippedUnderShort(t *testing.T) {
 	if testing.Short() {
 		t.Skip("длинная проба: хук гонит -short")
 	}
 	t.Fatal("хук гонит пробы БЕЗ -short: длинная проба исполнилась")
-}
-GO
-printf 'version: "2"\n' > "$B/.github/golangci.yml"
+}'
+probe_test_one='
+func TestProbe(t *testing.T) { Probe() }'
+printf 'package probe\n\nimport "testing"\n%s\n%s\n' "$probe_test_one" "$probe_test_long" > "$B/probe_test.go"
+# Вложенные пакеты — предмет охвата: `./...` и `.` различимы только там, где
+# пакетов больше одного. inner несёт исполняемую пробу, inner/deep — ни одной:
+# пакет без проб законен, пока пробы исполнены где-то ещё.
+mkdir -p "$B/inner/deep"
+printf 'package inner\n\n// Inner — вложенный пакет фикстуры.\nfunc Inner() {}\n' > "$B/inner/inner.go"
+printf 'package inner\n\nimport "testing"\n\nfunc TestInner(t *testing.T) { Inner() }\n' > "$B/inner/inner_test.go"
+deep_go='package deep
+
+// Deep — пакет без проб, второй уровень вложенности.
+const Deep = 1
+'
+printf '%s' "$deep_go" > "$B/inner/deep/deep.go"
+# Конфиг линтера — там, где его называет ci.yml: проба судит, что хук читает ТОТ.
+mkdir -p "$B/$(dirname "$ci_cfg")"
+printf 'version: "2"\n' > "$B/$ci_cfg"
 git -C "$B" init -q && git -C "$B" add -A && git -C "$B" commit -qm fixture || void "фикстура хука не собрана"
 git init -q --bare "$work/b.git" && git -C "$B" remote add origin "$work/b.git" || void "удалённый фикстуры хука не заведён"
+bgit="$(git -C "$B" rev-parse --absolute-git-dir)"
+# Что обязан осмотреть охват `./...`: файлы Go индекса и их каталоги (пакеты).
+want_files="$(git -C "$B" ls-files '*.go' | wc -l)"
+want_pkgs="$(git -C "$B" ls-files '*.go' | sed -E '/\//!s|.*|.|; s|/[^/]*$||' | sort -u)"
+[ "$want_files" -gt 0 ] && [ "$(printf '%s\n' "$want_pkgs" | grep -c .)" -gt 1 ] ||
+    void "фикстура хука без вложенных пакетов — охват судить не на чем"
 
-# Линтер — подставной: исход задаётся пробой, версия по умолчанию — пин хука.
+# Линтер — подставной. Исход задаёт проба, но то, от чего зависит вердикт
+# настоящего, он исполняет так же, как настоящий, и пишет в журнал:
+#   config= — какой конфиг прочитан: --config/-c (нет файла — код 3); без флага —
+#             поиск .golangci.{yml,yaml,toml,json} от каталога запуска вверх,
+#             затем в $HOME; не найден — «умолчание», то есть не конфиг конвейера;
+#   cache=  — где кэш: GOLANGCI_LINT_CACHE, без неё — ${XDG_CACHE_HOME:-$HOME/.cache};
+#   pkg=    — каждый осмотренный пакет по шаблонам, как у go (без шаблона —
+#             ./...; каталоги на «.» и «_», testdata, vendor не обходятся);
+#             каталога шаблона нет — код 3; не осмотрено ни одного — код 5.
+# Находка — строка `// probe:lint-finding` в файле осмотренного пакета: код 1.
+# Только встроенные bash: подставной работает и в урезанном PATH пробы.
 shim="$work/shim"
 mkdir -p "$shim"
 cat > "$shim/golangci-lint" <<'LINT'
 #!/usr/bin/env bash
+set -u
+log="${PROBE_LINT_LOG:-/dev/null}"
 case "${1:-}" in
-version) echo "golangci-lint has version ${PROBE_LINT_VERSION} built with go" ;;
-run)     echo "подставной линтер: код ${PROBE_LINT_RC:-0}"; exit "${PROBE_LINT_RC:-0}" ;;
+version) echo "golangci-lint has version ${PROBE_LINT_VERSION:-} built with go"; exit 0 ;;
+run) shift ;;
+*) echo "подставной линтер: команда «${1:-}» не поддержана" >&2; exit 3 ;;
 esac
+abspath() {
+    local p="$1"
+    case "$p" in /*) ;; *) p="$PWD/$p" ;; esac
+    (cd "${p%/*}" 2>/dev/null && printf '%s/%s\n' "$(pwd -P)" "${p##*/}")
+}
+config="" mode=auto pats=()
+while [ "$#" -gt 0 ]; do
+    case "$1" in
+    --config=*) config="${1#--config=}"; mode=explicit ;;
+    --config|-c) config="${2:-}"; mode=explicit; shift ;;
+    --no-config) mode=none ;;
+    --timeout|--concurrency|-j|--build-tags|--path-prefix) shift ;;
+    -*) ;;
+    *) pats+=("$1") ;;
+    esac
+    shift
+done
+used=""
+case "$mode" in
+explicit)
+    if [ ! -f "$config" ]; then
+        printf 'config=ОТКАЗ %s\n' "$config" >> "$log"
+        echo "can't read config file $config: no such file" >&2
+        exit 3
+    fi
+    used="$(abspath "$config")" ;;
+auto)
+    d="$PWD"
+    while [ -z "$used" ]; do
+        for n in .golangci.yml .golangci.yaml .golangci.toml .golangci.json; do
+            [ -f "$d/$n" ] && { used="$(abspath "$d/$n")"; break; }
+        done
+        [ -n "$d" ] && [ "$d" != / ] || break
+        d="${d%/*}"
+    done
+    if [ -z "$used" ] && [ -n "${HOME:-}" ]; then
+        for n in .golangci.yml .golangci.yaml .golangci.toml .golangci.json; do
+            [ -f "$HOME/$n" ] && { used="$(abspath "$HOME/$n")"; break; }
+        done
+    fi ;;
+esac
+printf 'config=%s\n' "${used:-умолчание}" >> "$log"
+cache="${GOLANGCI_LINT_CACHE:-}"
+[ -n "$cache" ] || cache="${XDG_CACHE_HOME:-${HOME:-}/.cache}/golangci-lint"
+printf 'cache=%s\n' "$cache" >> "$log"
+shopt -s globstar nullglob
+[ "${#pats[@]}" -gt 0 ] || pats=(./...)
+declare -A seen=()
+pkgs=()
+add() {
+    local d="${1%/}" f
+    d="${d#./}"; [ -n "$d" ] || d=.
+    [ -z "${seen[$d]:-}" ] || return 0
+    for f in "$d"/*.go; do seen[$d]=1; pkgs+=("$d"); printf 'pkg=%s\n' "$d" >> "$log"; return 0; done
+}
+for p in "${pats[@]}"; do
+    case "$p" in
+    ...|*/...) base="${p%...}"; base="${base%/}"; [ -n "$base" ] || base=.; rec=1 ;;
+    *) base="$p"; rec=0 ;;
+    esac
+    if [ ! -d "$base" ]; then
+        printf 'pattern=ОТКАЗ %s\n' "$p" >> "$log"
+        echo "pattern $p: directory not found" >&2
+        exit 3
+    fi
+    add "$base"
+    [ "$rec" = 1 ] || continue
+    for d in "$base"/**/; do
+        case "/${d#./}" in */_*|*/testdata/*|*/vendor/*) continue ;; esac
+        add "$d"
+    done
+done
+if [ "${#pkgs[@]}" -eq 0 ]; then
+    echo "no go files to analyze" >&2
+    exit 5
+fi
+rc=0
+for d in "${pkgs[@]}"; do
+    for f in "$d"/*.go; do
+        n=0
+        while IFS= read -r l || [ -n "$l" ]; do
+            n=$((n + 1))
+            [ "$l" != "// probe:lint-finding" ] || { echo "$f:$n:1: находка подставного линтера (probe)"; rc=1; }
+        done < "$f"
+    done
+done
+rc="${PROBE_LINT_RC:-$rc}"
+echo "подставной линтер: пакетов ${#pkgs[@]}, код $rc"
+exit "$rc"
 LINT
 chmod +x "$shim/golangci-lint"
-export PROBE_LINT_VERSION="$pin"
+export PROBE_LINT_VERSION="$pin" PROBE_LINT_LOG="$work/lint.log"
+: > "$PROBE_LINT_LOG"
+# lint_field <ключ> — значения ключа из журнала подставного линтера.
+lint_field() { sed -n "s/^$1=//p" "$PROBE_LINT_LOG"; }
 
 # pathdir <каталог> <инструмент…> — PATH ровно из названных инструментов.
 pathdir() {
@@ -308,6 +455,11 @@ pathdir() {
 basic=(bash git grep head wc sort mkdir cat sed)
 bare="$work/bare"
 pathdir "$bare" "${basic[@]}"
+# nogrep — bare без одного инструмента самого хука: близнец bare ровно в один факт.
+nogrep="$work/nogrep"
+no_grep=()
+for t in "${basic[@]}"; do [ "$t" = grep ] || no_grep+=("$t"); done
+pathdir "$nogrep" "${no_grep[@]}"
 # nopy — всё, кроме интерпретатора прогонщика вердикта.
 nopy="$work/nopy"
 pathdir "$nopy" "${basic[@]}" go gofmt
@@ -326,11 +478,56 @@ runin "$(line 21 "$h0")" hk
 expect "клон не провязан — отказ до проверок" 1 "ОТКАЗ — провязка клона" "не провязаны: pre-push"
 (cd "$B" && bash scripts/hooks/install.sh install) >/dev/null 2>&1 || bad "install в фикстуре хука"
 
+: > "$PROBE_LINT_LOG"
 runin "$(line 21 "$h0")" hk
 expect "близнец: провязанный клон, чистая копия на отправляемой ревизии — 0" 0 \
-    "судится ревизия $h0" "исполнено 5 из 5, красных 0" "проб исполнено    : 1" "ПРОПУЩЕНО         : 1"
-runin "$(line 21 "$h0")" with PROBE_LINT_RC=1 hk
-expect "линтер красный — отказ с именем проверки" 1 "красные — golangci-lint"
+    "судится ревизия $h0" "исполнено 5 из 5, красных 0"
+# Охват близнеца — числами дерева фикстуры, а не «зелёным»: проверка, суженная
+# до корня или до части обхода, на этом же дереве тоже зелёная.
+expect "охват gofmt: прочитаны все файлы Go индекса ($want_files)" 0 "прочитано файлов Go: $want_files"
+expect "охват go test: пакетов 3, исполнены пробы корня и вложенного (2), длинная пропущена" 0 \
+    "пакетов осмотрено : 3" "проб исполнено    : 2" "ПРОПУЩЕНО         : 1"
+fact "пин линтера хука ($pin) равен пину установки в ci.yml ($ci_pin)" test "$pin" = "$ci_pin"
+got="$(lint_field config)"
+if [ "$got" = "$B/$ci_cfg" ]; then ok "линтер прочитал конфиг, который называет ci.yml: $ci_cfg"
+else bad "линтер прочитал конфиг «${got:-—}», а ci.yml называет $ci_cfg — вердикт был бы о других правилах"; fi
+got="$(lint_field cache)"
+case "$got" in
+"$bgit"/*) ok "кэш линтера — в каталоге git этой копии: ${got#"$bgit"/}" ;;
+*) bad "кэш линтера «${got:-—}» вне каталога git копии ($bgit) — общий на машину отдал бы чужой вердикт" ;;
+esac
+got="$(lint_field pkg | sort -u)"
+if [ "$got" = "$want_pkgs" ]; then ok "охват линтера: осмотрены все пакеты дерева ($(printf '%s\n' "$got" | grep -c .))"
+else bad "охват линтера: осмотрено «${got//$'\n'/ }», в дереве пакеты «${want_pkgs//$'\n'/ }»"; fi
+
+# Дефект каждой проверки — во вложенном пакете, а у gofmt ещё и в файле не
+# первом в обходе индекса (первый — inner/deep/deep.go): проверка, суженная до
+# корня, до поддерева или до части обхода, его не увидит.
+# defect <имя> <файл> <содержимое> <образец…> — коммит с дефектом, отправка, откат.
+defect() {
+    local name="$1" file="$2" body="$3"
+    shift 3
+    printf '%s' "$body" > "$B/$file"
+    git -C "$B" add -- "$file" && git -C "$B" commit -qm "defect: $name" || { bad "фикстура дефекта «$name» не собрана"; return; }
+    runin "$(line 21 "$(git -C "$B" rev-parse HEAD)")" hk
+    expect "$name" 1 "$@"
+    git -C "$B" reset -q --hard "$h0"
+}
+defect "сборка: ошибка типа во вложенном пакете — отказ" inner/inner.go \
+    $'package inner\n\nfunc Inner() {\n\tvar x int = "s"\n\t_ = x\n}\n' \
+    "КРАСНОЕ: сборка" "inner/inner.go"
+defect "vet: битый тег структуры во вложенном пакете — отказ, и красен один vet" inner/deep/deep.go \
+    "$deep_go"$'\n// T — тег без закрывающей кавычки: сборка проходит, vet — нет.\ntype T struct {\n\tA int `json:"a`\n}\n' \
+    "КРАСНОЕ: vet" "красные — vet. "
+defect "gofmt: неформатированный вложенный файл, не первый в обходе — отказ с его именем" inner/inner.go \
+    $'package inner\nfunc Inner(){}\n' \
+    "КРАСНОЕ: gofmt" "требуется gofmt" "inner/inner.go"
+defect "go test: красная проба во вложенном пакете — отказ с её именем" inner/deep/red_test.go \
+    $'package deep\n\nimport "testing"\n\nfunc TestRed(t *testing.T) { t.Fatal("красная проба фикстуры") }\n' \
+    "КРАСНОЕ: go test -short" "TestRed"
+defect "линтер: находка во вложенном пакете — отказ с именем проверки" inner/deep/deep.go \
+    "$deep_go"$'\n// probe:lint-finding\n' \
+    "КРАСНОЕ: golangci-lint" "inner/deep/deep.go"
 runin "$(line 21 "$h0")" with PROBE_LINT_RC=3 hk
 expect "код 3 линтера — красное, а не «без условия»" 1 "красные — golangci-lint"
 runin "$(line 21 "$h0")" with PROBE_LINT_VERSION=0.0.1 hk
@@ -338,6 +535,11 @@ expect "версия линтера не равна пину — без усло
     "без условия 1" "исполнено 4 из 5"
 runin "$(line 21 "$h0")" env PATH="$bare" "$bare/bash" -c "cd '$B' && bash scripts/hooks/pre-push"
 expect "не исполнено ни одной проверки — отказ, а не зелёное" 2 "исполнено НОЛЬ проверок из 5"
+# Инструмент самого хука (не проверки) снят — отказ называет его, а не выводит
+# из пустого вывода ложную причину («правки в копии» при чистой копии).
+runin "$(line 21 "$h0")" env PATH="$nogrep" "$nogrep/bash" -c "cd '$B' && bash scripts/hooks/pre-push"
+expect "нет grep — отказ до проверок, назван инструмент хука" 2 "нет grep в PATH" "исполнено проверок: 0"
+fact "нет grep — ложной причины «правки в копии» нет" not grep -qF "неотслеживаемых файлов" <<<"$out"
 runin "$(line 21 "$h0")" env PATH="$nopy" "$nopy/bash" -c "cd '$B' && bash scripts/hooks/pre-push"
 expect "нет python3 — go test без условия, назван, в «исполнено» не входит" 0 \
     "без условия 1" "python3 не найден" "исполнено 4 из 5"
@@ -348,37 +550,19 @@ expect "пустой вход: судится рабочая копия, и эт
 runin "(delete) $zero refs/heads/old $h0" hk
 expect "одни снятия ссылок — проверять нечего, и это сказано" 0 "все — снятия" "исполнено проверок: 0"
 
-# go test -short: дефект хука — пробы без -short. Инъекция меняет РОВНО одно
-# слово в копии хука; не изменила ничего — сама инъекция не состоялась.
-sed 's|go test ./... -short |go test ./... |' "$HOOK" > "$work/pre-push.noshort"
+# go test -short: дефект хука — пробы без -short. Инъекция меняет РОВНО один
+# флаг в исполняемой строке `go test` копии хука (строки комментария начинаются
+# с `#` и не трогаются); не изменила ничего — сама инъекция не состоялась.
+sed -E '/^[[:space:]]*go test /s/ -short( |$)/ /' "$HOOK" > "$work/pre-push.noshort"
 fact "инъекция «без -short» изменила копию хука" not_same "$HOOK" "$work/pre-push.noshort"
 runin "$(line 21 "$h0")" hk_as "$work/pre-push.noshort"
 expect "дефект: хук гонит пробы без -short — длинная проба исполнилась, отказ с её именем" 1 \
     "красные — go test -short" "TestLongIsSkippedUnderShort"
 
-printf 'package probe\n\nimport "testing"\n\nfunc TestRed(t *testing.T) { t.Fatal("красная проба фикстуры") }\n' > "$B/red_test.go"
-git -C "$B" add red_test.go && git -C "$B" commit -qm red-test
-runin "$(line 21 "$(git -C "$B" rev-parse HEAD)")" hk
-expect "проба красная — отказ с именем пробы" 1 "красные — go test -short" "TestRed"
-git -C "$B" reset -q --hard "$h0"
-
 git -C "$B" rm -q .github/scripts/go-test-verdict.py && git -C "$B" commit -qm no-verdict
 runin "$(line 21 "$(git -C "$B" rev-parse HEAD)")" hk
 expect "прогонщика вердикта нет в дереве — красное, а не «без условия»" 1 \
     "красные — go test -short" "прогонщика вердикта нет"
-git -C "$B" reset -q --hard "$h0"
-
-printf 'package probe\n\nfunc Probe() {\n\tvar x int = "s"\n\t_ = x\n}\n' > "$B/probe.go"
-git -C "$B" commit -qam broken
-h1="$(git -C "$B" rev-parse HEAD)"
-runin "$(line 21 "$h1")" hk
-expect "сборка красная — отказ" 1 "красные — сборка vet"
-git -C "$B" reset -q --hard "$h0"
-
-printf 'package probe\nfunc Probe(){}\n' > "$B/probe.go"
-git -C "$B" commit -qam unformatted
-runin "$(line 21 "$(git -C "$B" rev-parse HEAD)")" hk
-expect "gofmt красный — отказ с перечнем" 1 "красные — gofmt" "требуется gofmt"
 git -C "$B" reset -q --hard "$h0"
 
 printf 'package probe\n\nconst second = 1\n' > "$B/doc.go"
@@ -427,6 +611,30 @@ fact "сквозь git push: через переходник v1 ссылка Н�
 runc env PATH="$shim:$PATH" git -C "$B" push -q origin HEAD:refs/heads/fresh
 expect "близнец: переходник перепровязан — отправка идёт" 0 "исполнено 5 из 5"
 fact "близнец: после перепровязки ссылка доехала" has_ref "$B" fresh
+
+# Пустой обход проб — не зелёное: «отказов 0» при нуле исполненных проб значит
+# «спросить было не у кого». Два дефекта и близнец, каждый сквозь git push;
+# «все пропущены» и близнец различаются ровно одной исполняемой пробой.
+# push_tree <ссылка> — отправка текущей вершины сквозь переходник.
+push_tree() { runc env PATH="$shim:$PATH" git -C "$B" push -q origin "HEAD:refs/heads/$1"; }
+git -C "$B" rm -q probe_test.go inner/inner_test.go && git -C "$B" commit -qm no-probes
+push_tree no-probes
+expect "пустой обход: в дереве ни одной пробы — отказ, а не зелёное" nz \
+    "проб исполнено    : 0" "КРАСНОЕ: go test -short"
+fact "пустой обход: ссылка НЕ доехала" no_ref "$B" no-probes
+printf 'package probe\n\nimport "testing"\n%s\n' "$probe_test_long" > "$B/probe_test.go"
+git -C "$B" add probe_test.go && git -C "$B" commit -qm all-skipped
+push_tree all-skipped
+expect "пустой обход: все пробы пропущены под -short — отказ, а не зелёное" nz \
+    "проб исполнено    : 0" "ПРОПУЩЕНО         : 1" "КРАСНОЕ: go test -short"
+fact "пустой обход: при всех пропущенных ссылка НЕ доехала" no_ref "$B" all-skipped
+printf 'package probe\n\nimport "testing"\n%s\n%s\n' "$probe_test_one" "$probe_test_long" > "$B/probe_test.go"
+git -C "$B" commit -qam one-probe
+push_tree one-probe
+expect "близнец пустого обхода: одна исполненная проба — отправка идёт" 0 \
+    "проб исполнено    : 1" "исполнено 5 из 5, красных 0"
+fact "близнец пустого обхода: ссылка доехала" has_ref "$B" one-probe
+git -C "$B" reset -q --hard "$h0"
 
 echo ""
 total=$((pass + fail))
