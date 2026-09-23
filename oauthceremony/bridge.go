@@ -100,6 +100,39 @@ func contractBreach(op, why string) *ProtocolError {
 	return failf(CodePortContract, nil, textPortContract, textPortContractHint, op+": "+why)
 }
 
+// closedPortFailure переводит отказ порта доказательства клиента — сверки
+// секрета и справочника клиентов — в наш отказ ЗАКРЫТЫМ перечнем: срок,
+// отмена, нарушение контракта, отказ сервера.
+//
+// # Почему не fromPort
+//
+// fromPort сохраняет случай нашего отказа, которым ответил порт: у портов
+// хранения это сигналы контракта («записи нет», «код погашен»). У портов
+// доказательства таких сигналов нет — у сверки ни одного, у справочника один,
+// «клиента нет», и его вызывающий разбирает раньше. Отказ этих портов
+// становится ответом операции (ведомость), а отзыв и интроспекция часть
+// случаев читают исходом протокола: «нечего снимать», «токен негоден».
+// Сохрани мы случай порта, несостоявшаяся сверка стала бы вердиктом — отзыв
+// ответил бы успехом, не сняв токена.
+//
+// Поэтому наш случай из такого порта — нарушение контракта, а сам отказ порта
+// в цепочку не кладётся: errors.Is по случаю порта не должен находить ничего.
+// Его текст не уезжает и на провод — только имя случая в Debug.
+func closedPortFailure(op string, err error) *ProtocolError {
+	var ours *ProtocolError
+	if errors.As(err, &ours) {
+		return contractBreach(op, "the port failed with case "+ours.Code.String()+
+			" of this package; its contract declares no such failure")
+	}
+	switch {
+	case errors.Is(err, context.DeadlineExceeded):
+		return failf(CodePortDeadline, err, textPortDeadline, "", op+": "+err.Error())
+	case errors.Is(err, context.Canceled):
+		return failf(CodePortCanceled, err, textPortCanceled, "", op+": "+err.Error())
+	}
+	return failf(CodeServerError, err, textPortFailed, "", op+": "+err.Error())
+}
+
 // checkDeclared — общая часть всех разборов: отказ порта и незаполненный
 // исход.
 func checkDeclared(op string, out StoreOutcome, err error) *ProtocolError {
@@ -177,32 +210,60 @@ func pairEngine(ctx context.Context, ours *ProtocolError, engineSentinel error) 
 //
 // # Отказ справочника — отказ операции
 //
-// Справочник, который не ответил, — не «клиента нет» и не «клиент не доказан»:
-// движок сжимает всякий отказ этого вызова в отказ доказательства (на
-// интроспекции — не оборачивая), и сбой хранилища выглядел бы потоком
-// неверных секретов. Поэтому отказ пишется в ведомость операции любым случаем,
-// и операция отвечает им, как отказом порта сверки (verifyClientSecret).
+// Справочник, который не ответил, — не «клиента нет» и не «клиент не доказан».
+// Движок оборачивает отказ этого вызова в свой отказ доказательства на обоих
+// путях — у точки токена и отзыва и у интроспекции, — но fromEngine поднимает
+// из цепочки наш случай только из перечня coarsenable, а отказа сервера в нём
+// нет. Без записи сбой хранилища стал бы отказом доказательства и выглядел бы
+// потоком неверных секретов. Поэтому отказ пишется в ведомость операции любым
+// случаем, и операция отвечает им, как отказом порта сверки
+// (verifyClientSecret).
+//
+// Случай отказа — из закрытого перечня (closedPortFailure): единственный
+// случай пакета, который контракт справочника объявляет, — «клиента нет», и он
+// разобран выше; любой другой наш случай — нарушение контракта, а не исход
+// протокола.
 func (b *storageBridge) GetClient(ctx context.Context, id string) (engine.Client, error) {
+	const op = "ClientDirectory.LookupClient"
 	ctx, cancel := b.deadline(ctx)
 	defer cancel()
 
 	notes := notesFrom(ctx)
 	reg, err := b.ports.Clients.LookupClient(ctx, id)
 	if err != nil {
-		ours := fromPort("ClientDirectory.LookupClient", err)
 		switch {
-		case ours.Code == CodeGrantNotFound && notes.provesClient():
+		case CodeOf(err) == CodeGrantNotFound && notes.provesClient():
 			notes.noteClientClaim(id, false)
 			return unregisteredClientOf(id), nil
-		case ours.Code == CodeGrantNotFound:
-			return nil, pairEngine(ctx, ours, engine.ErrNotFound)
+		case CodeOf(err) == CodeGrantNotFound:
+			return nil, pairEngine(ctx, fromPort(op, err), engine.ErrNotFound)
 		default:
-			notes.record(ours)
-			return nil, ours
+			failure := closedPortFailure(op, err)
+			notes.record(failure)
+			return nil, failure
 		}
 	}
 	notes.noteClientClaim(id, true)
 	return clientViewOf(reg), nil
+}
+
+// grantClient — запись клиента, которому выдан грант: её спрашивает сборка
+// запроса движка по записи кода или токена (requesterFromGrant).
+//
+// «Клиента нет» отдаётся как есть: клиента, которому выдан грант, могли
+// снять, и что это значит для операции, решает движок. Любой другой отказ
+// справочника — отказ операции тем же закрытым перечнем, что в GetClient, и
+// он пишется в ведомость: движок сжимает отказ сборки сам — у интроспекции в
+// «токен негоден», у отзыва во «временно недоступно», — и без записи сбой
+// справочника стал бы ответом «негоден» о годном токене.
+func (b *storageBridge) grantClient(ctx context.Context, id string) (ClientRegistration, error) {
+	reg, err := b.ports.Clients.LookupClient(ctx, id)
+	if err == nil || CodeOf(err) == CodeGrantNotFound {
+		return reg, err
+	}
+	failure := closedPortFailure("ClientDirectory.LookupClient", err)
+	notesFrom(ctx).record(failure)
+	return ClientRegistration{}, failure
 }
 
 // ── Сверка секрета клиента ──────────────────────────────────────────────────
@@ -250,6 +311,9 @@ var _ engine.Hasher = clientSecretHasher{}
 //     пишется в ведомость любым случаем: на интроспекции движок отказа хешера
 //     не оборачивает, а на точке токена оборачивает в «клиент не доказан», и
 //     без записи несостоявшаяся сверка стала бы вердиктом «не совпал».
+//     Случай отказа порта — из закрытого перечня (closedPortFailure): в
+//     контракте сверки нет ни одного отказа со случаем пакета, и такой отказ —
+//     нарушение контракта, а не исход протокола.
 func (b *storageBridge) verifyClientSecret(ctx context.Context, presented []byte) error {
 	const op = "ClientSecretVerifier.VerifyClientSecret"
 	notes := notesFrom(ctx)
@@ -271,7 +335,7 @@ func (b *storageBridge) verifyClientSecret(ctx context.Context, presented []byte
 	verdict, err := b.ports.ClientSecrets.VerifyClientSecret(ctx, claim.clientID, NewPresentedSecret(string(presented)))
 	switch {
 	case err != nil:
-		return fail(fromPort(op, err))
+		return fail(closedPortFailure(op, err))
 	case !verdict.Declared():
 		return fail(contractBreach(op, "the verdict is neither SecretMatched nor SecretMismatched"))
 	case verdict == SecretMatched && !claim.registered:
@@ -381,18 +445,20 @@ func (b *storageBridge) GetAuthorizeCodeSession(ctx context.Context, code string
 		return nil, note(ctx, contractBreach(op, "a live authorization code came back without an S256 proof-key binding: "+defect))
 	}
 	notesFrom(ctx).notePresentedCode(presentedCode{signature: code, record: rec})
-	return requesterFromCode(ctx, b.ports.Clients.LookupClient, rec, session)
+	return requesterFromCode(ctx, b.grantClient, rec, session)
 }
 
 // replayedCode — ответ на выборку кода, погашенного не этой операцией: повтор.
 func (b *storageBridge) replayedCode(ctx context.Context, op string, rec AuthorizationCodeRecord, session engine.Session) (engine.Requester, error) {
 	ours := codeReplayed(op)
 	notesFrom(ctx).markReplayedFamily(rec.Grant.GrantID, rec.Grant.ClientID, ours, RevocationCodeReplay)
-	requester, buildErr := requesterFromGrant(ctx, b.ports.Clients.LookupClient, rec.Grant, session)
+	// Как у токена обновления: повтор записывается ДО сборки запроса. Если
+	// сборка откажет — клиента сняли либо справочник не ответил, — движок
+	// получит отказ сборки, а церемония ответит повтором, а не его следствием, и
+	// отзовёт семейство по записанному гранту.
+	notesFrom(ctx).record(ours)
+	requester, buildErr := requesterFromGrant(ctx, b.grantClient, rec.Grant, session)
 	if buildErr != nil {
-		// Как у токена обновления: движок получит отказ сборки, а церемония
-		// ответит повтором и отзовёт семейство по записанному гранту.
-		notesFrom(ctx).record(ours)
 		return nil, buildErr
 	}
 	return requester, pairEngine(ctx, ours, engine.ErrInvalidatedAuthorizeCode)
@@ -500,7 +566,7 @@ func (b *storageBridge) GetAccessTokenSession(ctx context.Context, signature str
 	if err != nil {
 		return nil, notFoundAware(ctx, "AccessTokenVault.FetchAccessToken", err)
 	}
-	return requesterFromGrant(ctx, b.ports.Clients.LookupClient, rec, session)
+	return requesterFromGrant(ctx, b.grantClient, rec, session)
 }
 
 func (b *storageBridge) DeleteAccessTokenSession(ctx context.Context, signature string) error {
@@ -542,7 +608,7 @@ func (b *storageBridge) GetRefreshTokenSession(ctx context.Context, signature st
 	const op = "RefreshTokenVault.FetchRefreshToken"
 	rec, err := b.ports.RefreshTokens.FetchRefreshToken(ctx, signature)
 	if err == nil {
-		return requesterFromGrant(ctx, b.ports.Clients.LookupClient, rec, session)
+		return requesterFromGrant(ctx, b.grantClient, rec, session)
 	}
 	ours := fromPort(op, err)
 	switch ours.Code {
@@ -553,12 +619,13 @@ func (b *storageBridge) GetRefreshTokenSession(ctx context.Context, signature st
 		}
 		ours = refreshReplayed(op)
 		notesFrom(ctx).markReplayedFamily(rec.GrantID, rec.ClientID, ours, RevocationRefreshReplay)
-		requester, buildErr := requesterFromGrant(ctx, b.ports.Clients.LookupClient, rec, session)
+		// Случай повтора записывается ДО сборки запроса: если собрать его не
+		// удастся — клиента сняли либо справочник не ответил, — движок получит
+		// отказ сборки, а церемония ответит повтором, а не его следствием, и
+		// отзовёт семейство по записанному гранту.
+		notesFrom(ctx).record(ours)
+		requester, buildErr := requesterFromGrant(ctx, b.grantClient, rec, session)
 		if buildErr != nil {
-			// Случай повтора записывается и тогда, когда запрос собрать не
-			// удалось: движок получит отказ сборки, а церемония ответит
-			// повтором и отзовёт семейство по записанному гранту.
-			notesFrom(ctx).record(ours)
 			return nil, buildErr
 		}
 		return requester, pairEngine(ctx, ours, engine.ErrInactiveToken)
@@ -712,7 +779,7 @@ func (b *storageBridge) GetPKCERequestSession(ctx context.Context, signature str
 	ctx, cancel := b.deadline(ctx)
 	defer cancel()
 
-	return requesterFromCode(ctx, b.ports.Clients.LookupClient, presented.record, session)
+	return requesterFromCode(ctx, b.grantClient, presented.record, session)
 }
 
 // DeletePKCERequestSession — привязку снимают вместе с кодом: при

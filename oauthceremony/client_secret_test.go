@@ -53,12 +53,16 @@ func rightProof() clientProof {
 // токена и отзыва отвечают `invalid_client`, интроспекция — своим случаем
 // движка. headerOnly — операция принимает доказательство только заголовком
 // Authorization (RFC 7662 §2.1).
+//
+// gone отвечает, снят ли предмет после исполненной операции, — у той, что его
+// снимает (отзыв); пусто — операция предмета не снимает.
 type authenticatedOperation struct {
 	name       string
 	refusal    oauthceremony.FailureCode
 	headerOnly bool
 	prepare    func(t *testing.T, ceremony *oauthceremony.Ceremony) string
 	perform    func(ceremony *oauthceremony.Ceremony, subject string, proof clientProof) (bool, error)
+	gone       func(t *testing.T, ceremony *oauthceremony.Ceremony, subject string) bool
 }
 
 func authenticatedOperations() []authenticatedOperation {
@@ -110,6 +114,21 @@ func authenticatedOperations() []authenticatedOperation {
 					AuthMethod:   proof.method,
 				})
 				return err == nil, err
+			},
+			gone: func(t *testing.T, ceremony *oauthceremony.Ceremony, token string) bool {
+				t.Helper()
+				proof := rightProof()
+				result, err := ceremony.Introspect(context.Background(), oauthceremony.IntrospectionRequest{
+					Token:        token,
+					KindHint:     oauthceremony.TokenKindRefresh,
+					ClientID:     proof.clientID,
+					ClientSecret: proof.secret,
+					AuthMethod:   proof.method,
+				})
+				if err != nil {
+					t.Fatalf("НЕ ВЫПОЛНИЛОСЬ: интроспекция отозванного токена отказала: %v", err)
+				}
+				return !result.Active
 			},
 		},
 	}
