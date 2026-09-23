@@ -286,6 +286,40 @@ func grantFromRequester(r engine.Requester) GrantRecord {
 	return rec
 }
 
+// codeRecordFromRequester снимает с запроса движка запись кода авторизации:
+// грант и привязку к доказательству владения ключом.
+//
+// Привязка переезжает из протокольных полей в поле записи и из полей
+// снимается: у значения одно место. Негодная привязка — отказ, и код без неё в
+// хранилище не уезжает.
+func codeRecordFromRequester(r engine.Requester) (AuthorizationCodeRecord, *ProtocolError) {
+	grant := grantFromRequester(r)
+	binding, bad := proofKeyBindingOf(grant.Form)
+	if bad != nil {
+		return AuthorizationCodeRecord{}, bad
+	}
+	delete(grant.Form, formCodeChallenge)
+	delete(grant.Form, formCodeChallengeMethod)
+	return AuthorizationCodeRecord{Grant: grant, ProofKey: binding}, nil
+}
+
+// requesterFromCode собирает запрос движка из записи кода: привязка
+// возвращается в протокольные поля, где её читает обработчик PKCE движка.
+//
+// Поля привязки в Form самой записи не читаются — их там не кладёт церемония,
+// и значение привязки решает только ProofKey. Годность привязки проверяет
+// вызывающий: здесь запись уже принята.
+func requesterFromCode(ctx context.Context, clients func(context.Context, string) (ClientRegistration, error), rec AuthorizationCodeRecord, session engine.Session) (engine.Requester, error) {
+	grant := rec.Grant
+	grant.Form = copyValues(rec.Grant.Form)
+	if grant.Form == nil {
+		grant.Form = map[string][]string{}
+	}
+	grant.Form[formCodeChallenge] = []string{rec.ProofKey.Challenge}
+	grant.Form[formCodeChallengeMethod] = []string{string(rec.ProofKey.Method)}
+	return requesterFromGrant(ctx, clients, grant, session)
+}
+
 // requesterFromGrant собирает запрос движка из нашей записи.
 //
 // Клиент берётся из справочника ЗАНОВО, а не из записи: между выдачей кода и
@@ -469,8 +503,9 @@ func sessionRecordOf(s engine.Session) SessionRecord {
 // # Сроки СЛИВАЮТСЯ, а не заменяются
 //
 // Движок наполняет ОДИН И ТОТ ЖЕ сеанс несколько раз за операцию: при обмене
-// кода — выборкой кода, затем выборкой PKCE, затем снова выборкой кода перед
-// выпуском, и между первой и последней назначает сроки выпускаемой пары.
+// кода — выборкой кода, затем запросом привязки PKCE (её мост собирает из той
+// же записи кода), затем снова выборкой кода перед выпуском, и между первой и
+// последней назначает сроки выпускаемой пары.
 // Замена карты сроков записью кода стирала бы их: пара уезжала в хранилище без
 // своих сроков, и токен обновления без срока движок считает бессрочным.
 // Слияние — ключ записи перекрывает ключ сеанса, прочие остаются — то, чего

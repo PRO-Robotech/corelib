@@ -83,7 +83,8 @@ func withHook(hook func(context.Context) (string, error)) func(*oauthceremony.Co
 }
 
 // storedGrantIDs — идентификаторы гранта во всех записях подставки по видам
-// записи. Виды без записей в перечне отсутствуют.
+// записи. Виды без записей в перечне отсутствуют. Привязка PKCE — поля записи
+// кода, а не своя запись, и своего вида у неё нет.
 func storedGrantIDs(store *memoryPorts) map[string][]string {
 	store.mu.Lock()
 	defer store.mu.Unlock()
@@ -91,9 +92,6 @@ func storedGrantIDs(store *memoryPorts) map[string][]string {
 	out := map[string][]string{}
 	for _, row := range store.codes {
 		out["код"] = append(out["код"], row.grant.GrantID)
-	}
-	for _, grant := range store.proof {
-		out["PKCE"] = append(out["PKCE"], grant.GrantID)
 	}
 	for _, grant := range store.access {
 		out["токен доступа"] = append(out["токен доступа"], grant.GrantID)
@@ -154,8 +152,9 @@ func TestNewRefusesACeremonyWithoutAGrantIDHook(t *testing.T) {
 // ── Выдача кода ─────────────────────────────────────────────────────────────
 
 // TestEveryStoredRecordCarriesTheGrantIDTheHookMinted — идентификатор,
-// выданный крючком, несут ВСЕ записи семейства: код, запрос PKCE, токен
-// доступа и токен обновления — и после обмена, и после оборота.
+// выданный крючком, несут ВСЕ записи семейства: код (с привязкой PKCE в полях
+// той же записи), токен доступа и токен обновления — и после обмена, и после
+// оборота.
 func TestEveryStoredRecordCarriesTheGrantIDTheHookMinted(t *testing.T) {
 	store := newMemoryPorts()
 	registerTestClient(t, store)
@@ -163,7 +162,7 @@ func TestEveryStoredRecordCarriesTheGrantIDTheHookMinted(t *testing.T) {
 	ceremony := newTestCeremony(t, store.ports(), withHook(hook.mint))
 
 	code, _ := issueCode(t, ceremony)
-	requireEveryRecordCarries(t, store, fixedGrantID, "код", "PKCE")
+	requireEveryRecordCarries(t, store, fixedGrantID, "код")
 
 	tokens, err := ceremony.Exchange(context.Background(), codeExchange(code))
 	if err != nil {
@@ -314,7 +313,7 @@ func TestGrantIDHookRefusalRefusesTheGrantAndStoresNothing(t *testing.T) {
 				if len(result.Parameters["code"]) != 0 {
 					t.Errorf("при отказе крючка клиенту выдан код: %v", result.Parameters)
 				}
-				if len(stored["код"]) != 0 || len(stored["PKCE"]) != 0 {
+				if len(stored) != 0 {
 					t.Errorf("при отказе крючка в хранилище легли записи: %v", stored)
 				}
 				return
@@ -384,12 +383,20 @@ func TestStoredGrantWithoutAnIDIsAPortContractBreach(t *testing.T) {
 			registerTestClient(t, store)
 			ceremony := newTestCeremony(t, store.ports())
 			code, _ := issueCode(t, ceremony)
-			var live oauthceremony.GrantRecord
-			for _, row := range store.codes {
-				live = row.grant
+			// Запись кода — целиком, с её привязкой PKCE: без привязки обмен
+			// отказал бы по ней, и проба судила бы не идентификатор.
+			var live oauthceremony.AuthorizationCodeRecord
+			for signature := range store.codes {
+				rec, err := store.readCodeRow(signature)
+				if err != nil {
+					t.Fatalf("ПРЕДПОСЫЛКА: выданная запись кода не читается: %v", err)
+				}
+				live = rec
 			}
-			store.fetchCodeOverride = func(string) (oauthceremony.GrantRecord, error) {
-				return stripped(live, strip), nil
+			store.fetchCodeOverride = func(string) (oauthceremony.AuthorizationCodeRecord, error) {
+				rec := live
+				rec.Grant = stripped(live.Grant, strip)
+				return rec, nil
 			}
 			_, err := ceremony.Exchange(context.Background(), codeExchange(code))
 			return store, err
