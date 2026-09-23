@@ -224,9 +224,18 @@ func TestPresentedSecretIsNeverPrinted(t *testing.T) {
 			struct{ secret oauthceremony.PresentedSecret }{presented}, struct{ secret oauthceremony.PresentedSecret }{presented}),
 	}
 	for _, verb := range verbs {
-		rendered["глагол "+verb] = fmt.Sprintf(verb, presented)
+		// Каждому глаголу — своё значение: глагол без значения печатает
+		// %!v(MISSING) и не судит ничего.
+		args := make([]any, strings.Count(verb, "%"))
+		for i := range args {
+			args[i] = presented
+		}
+		rendered["глагол "+verb] = fmt.Sprintf(verb, args...)
 	}
 	for name, text := range rendered {
+		if strings.Contains(text, "%!") {
+			t.Errorf("НЕ ВЫПОЛНИЛОСЬ: печать %s не состоялась — судить нечего: %s", name, text)
+		}
 		if strings.Contains(text, testSecret) || strings.Contains(strings.ToLower(text), hexForm) {
 			t.Errorf("%s напечатал секрет: %s", name, text)
 		}
