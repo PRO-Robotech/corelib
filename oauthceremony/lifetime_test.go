@@ -61,8 +61,8 @@ func exchangeGrant(t *testing.T, ceremony *oauthceremony.Ceremony, grant oauthce
 }
 
 // TestEveryArtifactCarriesItsLifetimeFromTheSettings — граница не названа:
-// сроки из настроек (час и сутки), и они ЗАПИСАНЫ у каждого артефакта — у
-// первой пары и у пары оборота.
+// сроки из настроек (testAccessLifespan и сутки), и они ЗАПИСАНЫ у каждого
+// артефакта — у первой пары и у пары оборота.
 func TestEveryArtifactCarriesItsLifetimeFromTheSettings(t *testing.T) {
 	store := newMemoryPorts()
 	registerTestClient(t, store)
@@ -70,11 +70,11 @@ func TestEveryArtifactCarriesItsLifetimeFromTheSettings(t *testing.T) {
 
 	issuedAt := time.Now().UTC()
 	first := exchangeGrant(t, ceremony, grantOfScopes("openid", "offline"))
-	if first.ExpiresIn <= time.Hour-slack || first.ExpiresIn > time.Hour {
-		t.Errorf("первая пара: ответ называет срок %s, ожидался час", first.ExpiresIn)
+	if first.ExpiresIn <= testAccessLifespan-slack || first.ExpiresIn > testAccessLifespan {
+		t.Errorf("первая пара: ответ называет срок %s, ожидался %s", first.ExpiresIn, testAccessLifespan)
 	}
 	requireWithin(t, "первый токен доступа", introspect(t, ceremony, first.AccessToken, oauthceremony.TokenKindAccess).ExpiresAt,
-		issuedAt.Add(time.Hour))
+		issuedAt.Add(testAccessLifespan))
 	requireWithin(t, "первый токен обновления", introspect(t, ceremony, first.RefreshToken, oauthceremony.TokenKindRefresh).ExpiresAt,
 		issuedAt.Add(24*time.Hour))
 
@@ -84,7 +84,7 @@ func TestEveryArtifactCarriesItsLifetimeFromTheSettings(t *testing.T) {
 		t.Fatalf("оборот отказал: %v", err)
 	}
 	requireWithin(t, "токен доступа оборота", introspect(t, ceremony, second.AccessToken, oauthceremony.TokenKindAccess).ExpiresAt,
-		rotatedAt.Add(time.Hour))
+		rotatedAt.Add(testAccessLifespan))
 	requireWithin(t, "токен обновления оборота", introspect(t, ceremony, second.RefreshToken, oauthceremony.TokenKindRefresh).ExpiresAt,
 		rotatedAt.Add(24*time.Hour))
 }
@@ -128,7 +128,7 @@ func TestGrantBoundHoldsTheWholeFamily(t *testing.T) {
 }
 
 // TestGrantBoundHoldsTheAuthorizationCode — граница кода: код живёт не дольше
-// названного, даже если настройки дают ему десять минут.
+// названного, даже если настройки дают ему больше (testCodeLifespan).
 //
 // Запись сроков обязана называть ТОЛЬКО объявленные виды (TokenKind). Вид,
 // переведённый в язык движка приведением строки, а не словарём, расходится с
@@ -140,7 +140,12 @@ func TestGrantBoundHoldsTheAuthorizationCode(t *testing.T) {
 	registerTestClient(t, store)
 	ceremony := newTestCeremony(t, store.ports())
 
-	bound := time.Now().UTC().Add(time.Minute)
+	const boundIn = 10 * time.Second
+	if boundIn >= testCodeLifespan {
+		t.Fatalf("НЕ ВЫПОЛНИЛОСЬ: граница через %s не короче срока кода из настроек %s — проба не отличила бы границу от срока настроек",
+			boundIn, testCodeLifespan)
+	}
+	bound := time.Now().UTC().Add(boundIn)
 	grant := grantOfScopes("openid", "offline")
 	grant.ExpiresAt = map[oauthceremony.TokenKind]time.Time{oauthceremony.TokenKindAuthorizationCode: bound}
 	if _, err := completeWith(t, ceremony, authorizeRequest(), grant); err != nil {

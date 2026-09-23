@@ -38,6 +38,14 @@ const (
 	testSubject               = "usr-7f3c9a1e"
 	testState                 = "s6BhdRkqt3s6BhdRkqt3s6BhdRkqt3xx"
 	testVerifier              = "dBjftJeZ4CVPmB92K27uhbUJU1p1r_wW1gFWFOEjXkQ"
+
+	// testAccessLifespan и testCodeLifespan — сроки токена доступа и кода
+	// авторизации в настройках проб. Оба НИЖЕ своих потолков фундамента
+	// (tokenpolicy.MaxTokenTTL, tokenpolicy.MaxAuthorizationCodeTTL): проба
+	// на срок из настроек иначе не отличила бы его от потолка, а проба
+	// границы, названной службой, — границу от срока настроек.
+	testAccessLifespan = 20 * time.Minute
+	testCodeLifespan   = 30 * time.Second
 )
 
 // newTestCeremony собирает церемонию с полным набором настроек. Ни одно поле
@@ -49,9 +57,9 @@ func newTestCeremony(t *testing.T, ports oauthceremony.Ports, tweaks ...func(*oa
 		AuthorizationEndpoint:     testAuthorizationEndpoint,
 		TokenEndpoint:             testTokenEndpoint,
 		SigningSecret:             []byte("0123456789abcdef0123456789abcdef"),
-		AccessTokenLifespan:       time.Hour,
+		AccessTokenLifespan:       testAccessLifespan,
 		RefreshTokenLifespan:      24 * time.Hour,
-		AuthorizationCodeLifespan: 10 * time.Minute,
+		AuthorizationCodeLifespan: testCodeLifespan,
 		ScopeMatching:             oauthceremony.ScopeMatchingExact,
 		RefreshTokenIssuance:      oauthceremony.RefreshTokenIssuanceOnScope,
 		RefreshTokenScopes:        []string{"offline"},
@@ -181,11 +189,11 @@ func TestAuthorizationCodeCeremonyRoundTrip(t *testing.T) {
 	}
 	// Ответ называет ОСТАВШЕЕСЯ время до срока, записанного у токена, в
 	// целых секундах: движок округляет срок до секунды, а к мигу ответа
-	// проходят миллисекунды — отсюда час либо час без секунды. Точное
-	// равенство часу держалось, пока срок у токена НЕ записывался вовсе и
+	// проходят миллисекунды — отсюда срок из настроек либо он же без секунды.
+	// Точное равенство держалось, пока срок у токена НЕ записывался вовсе и
 	// ответ брал голую длительность из настроек (lifetime_test.go).
-	if tokens.ExpiresIn < time.Hour-time.Second || tokens.ExpiresIn > time.Hour {
-		t.Errorf("срок токена доступа %v, ожидался час (не меньше %v)", tokens.ExpiresIn, time.Hour-time.Second)
+	if tokens.ExpiresIn < testAccessLifespan-time.Second || tokens.ExpiresIn > testAccessLifespan {
+		t.Errorf("срок токена доступа %v, ожидался %v (не меньше %v)", tokens.ExpiresIn, testAccessLifespan, testAccessLifespan-time.Second)
 	}
 
 	introspection, err := ceremony.Introspect(context.Background(), oauthceremony.IntrospectionRequest{
@@ -483,7 +491,7 @@ func TestDenialTravelsBackAsRedirect(t *testing.T) {
 }
 
 // TestIntentFromAnotherCeremonyIsRejected — намерение годно ровно одной
-// церемонии. Иначе настройки одной («срок кода 10 минут») молча применялись бы
+// церемонии. Иначе настройки одной («срок кода 30 секунд») молча применялись бы
 // в другой.
 func TestIntentFromAnotherCeremonyIsRejected(t *testing.T) {
 	store := newMemoryPorts()
@@ -576,9 +584,9 @@ func TestNewRejectsEveryUnnamedSetting(t *testing.T) {
 		AuthorizationEndpoint:     testAuthorizationEndpoint,
 		TokenEndpoint:             testTokenEndpoint,
 		SigningSecret:             []byte("0123456789abcdef0123456789abcdef"),
-		AccessTokenLifespan:       time.Hour,
+		AccessTokenLifespan:       testAccessLifespan,
 		RefreshTokenLifespan:      24 * time.Hour,
-		AuthorizationCodeLifespan: 10 * time.Minute,
+		AuthorizationCodeLifespan: testCodeLifespan,
 		ScopeMatching:             oauthceremony.ScopeMatchingExact,
 		RefreshTokenIssuance:      oauthceremony.RefreshTokenIssuanceAlways,
 		SecretHashCost:            10,
@@ -649,9 +657,9 @@ func TestNewRejectsAnEndpointThatIsNotAnAbsoluteAddress(t *testing.T) {
 		AuthorizationEndpoint:     testAuthorizationEndpoint,
 		TokenEndpoint:             testTokenEndpoint,
 		SigningSecret:             []byte("0123456789abcdef0123456789abcdef"),
-		AccessTokenLifespan:       time.Hour,
+		AccessTokenLifespan:       testAccessLifespan,
 		RefreshTokenLifespan:      24 * time.Hour,
-		AuthorizationCodeLifespan: 10 * time.Minute,
+		AuthorizationCodeLifespan: testCodeLifespan,
 		ScopeMatching:             oauthceremony.ScopeMatchingExact,
 		RefreshTokenIssuance:      oauthceremony.RefreshTokenIssuanceAlways,
 		SecretHashCost:            10,
@@ -750,9 +758,9 @@ func TestNewRejectsEveryMissingPort(t *testing.T) {
 		AuthorizationEndpoint:     testAuthorizationEndpoint,
 		TokenEndpoint:             testTokenEndpoint,
 		SigningSecret:             []byte("0123456789abcdef0123456789abcdef"),
-		AccessTokenLifespan:       time.Hour,
+		AccessTokenLifespan:       testAccessLifespan,
 		RefreshTokenLifespan:      24 * time.Hour,
-		AuthorizationCodeLifespan: 10 * time.Minute,
+		AuthorizationCodeLifespan: testCodeLifespan,
 		ScopeMatching:             oauthceremony.ScopeMatchingExact,
 		RefreshTokenIssuance:      oauthceremony.RefreshTokenIssuanceAlways,
 		SecretHashCost:            10,
