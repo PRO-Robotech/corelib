@@ -17,6 +17,7 @@ import (
 	enginehandler "github.com/PRO-Robotech/corelib/internal/oauth2/handler/oauth2"
 	engineproofkey "github.com/PRO-Robotech/corelib/internal/oauth2/handler/pkce"
 	enginehmac "github.com/PRO-Robotech/corelib/internal/oauth2/token/hmac"
+	"github.com/PRO-Robotech/corelib/tokenpolicy"
 )
 
 // ── Настройки ───────────────────────────────────────────────────────────────
@@ -60,6 +61,12 @@ type Config struct {
 
 	// AccessTokenLifespan, RefreshTokenLifespan, AuthorizationCodeLifespan
 	// — сроки жизни артефактов. Все три обязаны быть положительными.
+	//
+	// RefreshTokenLifespan и AuthorizationCodeLifespan к тому же не длиннее
+	// своих потолков фундамента — tokenpolicy.MaxRefreshTokenTTL и
+	// tokenpolicy.MaxAuthorizationCodeTTL. Срок выше потолка New отвергает,
+	// называя поле и потолок, а не урезает молча; решение, из которого взято
+	// значение каждого потолка, записано у самой константы.
 	AccessTokenLifespan       time.Duration
 	RefreshTokenLifespan      time.Duration
 	AuthorizationCodeLifespan time.Duration
@@ -313,8 +320,16 @@ func validateConfig(cfg *Config) error {
 		return misuse("Config.AccessTokenLifespan is not a positive duration")
 	case cfg.RefreshTokenLifespan <= 0:
 		return misuse("Config.RefreshTokenLifespan is not a positive duration")
+	case cfg.RefreshTokenLifespan > tokenpolicy.MaxRefreshTokenTTL:
+		return misuse("Config.RefreshTokenLifespan " + cfg.RefreshTokenLifespan.String() +
+			" exceeds tokenpolicy.MaxRefreshTokenTTL " + tokenpolicy.MaxRefreshTokenTTL.String() +
+			"; the lifespan is the idle window a stolen refresh token stays usable in")
 	case cfg.AuthorizationCodeLifespan <= 0:
 		return misuse("Config.AuthorizationCodeLifespan is not a positive duration")
+	case cfg.AuthorizationCodeLifespan > tokenpolicy.MaxAuthorizationCodeTTL:
+		return misuse("Config.AuthorizationCodeLifespan " + cfg.AuthorizationCodeLifespan.String() +
+			" exceeds tokenpolicy.MaxAuthorizationCodeTTL " + tokenpolicy.MaxAuthorizationCodeTTL.String() +
+			"; the lifespan is the window an intercepted code stays exchangeable in")
 	case cfg.ScopeMatching == ScopeMatchingUnspecified:
 		return misuse("Config.ScopeMatching is not named")
 	case cfg.ScopeMatching != ScopeMatchingExact && cfg.ScopeMatching != ScopeMatchingWildcard:
