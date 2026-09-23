@@ -72,7 +72,8 @@ func (s *silentIssuer) IdentifyAccessToken(context.Context, string) (string, err
 // (TestAccessTokenInTheResponseIsTheIssuersAndItsLifetime).
 func TestAccessTokenIsNotIssuedWithoutTheCeremonysBound(t *testing.T) {
 	issuer := &silentIssuer{}
-	strategy := &artifactStrategy{issuer: issuer, timeout: time.Second, lifespans: &engine.Config{}}
+	bridge, _ := newStorageBridge(Ports{}, time.Second)
+	strategy := &artifactStrategy{issuer: issuer, deadline: bridge.deadline, lifespans: &engine.Config{}}
 	requester := engine.NewAccessRequest(newSession())
 
 	_, _, err := strategy.GenerateAccessToken(context.Background(), requester)

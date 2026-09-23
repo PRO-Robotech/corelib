@@ -55,8 +55,10 @@ type Config struct {
 	//
 	// AccessTokenLifespan к тому же не длиннее tokenpolicy.MaxTokenTTL:
 	// токен доступа подписывает служба (Ports.AccessTokenIssuer), а её
-	// подписант выше потолка платформы не выпускает — церемония со сроком
-	// длиннее отказывала бы на каждом обмене, а не при сборке.
+	// подписант выше потолка платформы не выпускает. Выпуск короче границы
+	// законен (контракт порта), поэтому церемония со сроком длиннее
+	// обменивала бы исправно, но срок настроек не исполнялся бы ни на одном
+	// выпуске — настройка лгала бы молча; отказ при сборке её не допускает.
 	//
 	// Подписного материала в настройках нет: код авторизации и токен
 	// обновления непрозрачны (случайные байты, в хранилище — sha256
@@ -94,7 +96,9 @@ type Config struct {
 	// граница, ниже которой параметр перестаёт быть защитой от CSRF).
 	MinParameterEntropy int
 
-	// PortTimeout — срок ОДНОГО вызова порта хранения.
+	// PortTimeout — срок ОДНОГО вызова порта службы: порта хранения и порта
+	// выпуска токена доступа (Ports.AccessTokenIssuer) — и выпуска, и
+	// опознания.
 	PortTimeout time.Duration
 
 	// OperationTimeout — срок ВСЕЙ операции церемонии. Обязан быть не
@@ -230,7 +234,7 @@ func New(cfg Config, ports Ports) (*Ceremony, error) {
 	// материала у церемонии нет, токен доступа выпускает порт службы.
 	strategy := &artifactStrategy{
 		issuer:    ports.AccessTokenIssuer,
-		timeout:   cfg.PortTimeout,
+		deadline:  bridge.deadline,
 		lifespans: engineCfg,
 	}
 
@@ -1048,11 +1052,10 @@ func tokenResultOf(responder engine.AccessResponder) TokenResult {
 	}
 	for key, value := range responder.ToMap() {
 		switch key {
-		case "access_token", "token_type":
-			// Уже названы полями; второй раз не кладём.
-		case "expires_in":
-			// Срок в ответе — срок выпуска (withIssuedLifetime), а не пересчёт
-			// движка от его часов; второй раз не кладём.
+		case "access_token", "token_type", "expires_in":
+			// У всех трёх есть поля ответа, и в прочие поля они не кладутся.
+			// Срок движка не берётся вовсе: срок в ответе — срок выпуска
+			// (withIssuedLifetime), а не пересчёт движка от его часов.
 		case "scope":
 			if scope, ok := value.(string); ok && scope != "" {
 				result.Scopes = strings.Split(scope, " ")

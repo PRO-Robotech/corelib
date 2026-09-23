@@ -67,6 +67,18 @@ func (b *storageBridge) deadline(ctx context.Context) (context.Context, context.
 
 // ── Разбор исхода порта ─────────────────────────────────────────────────────
 
+// Тексты отказа портов. Портов два вида — хранения и выпуска токена доступа,
+// — и тексты называют ПОРТ, а не хранилище: отказ порта выпуска, названный
+// отказом хранилища, послал бы оператора чинить не то. Какой именно порт
+// отказал, называют подробности (Debug) — именем вызова.
+const (
+	textPortFailed       = "A port of the authorization server failed."
+	textPortDeadline     = "A port call did not finish in time."
+	textPortCanceled     = "A port call was canceled."
+	textPortContract     = "A port of the authorization server broke its contract."
+	textPortContractHint = "Fix the port implementation; this is not a protocol failure."
+)
+
 // fromPort переводит отказ порта в наш отказ, приписывая имя вызова.
 func fromPort(op string, err error) *ProtocolError {
 	var ours *ProtocolError
@@ -75,19 +87,17 @@ func fromPort(op string, err error) *ProtocolError {
 	}
 	switch {
 	case errors.Is(err, context.DeadlineExceeded):
-		return failf(CodePortDeadline, err, "A storage call did not finish in time.", "", op+": "+err.Error())
+		return failf(CodePortDeadline, err, textPortDeadline, "", op+": "+err.Error())
 	case errors.Is(err, context.Canceled):
-		return failf(CodePortCanceled, err, "A storage call was canceled.", "", op+": "+err.Error())
+		return failf(CodePortCanceled, err, textPortCanceled, "", op+": "+err.Error())
 	}
-	return failf(CodeServerError, err, "The storage backing the authorization server failed.", "", op+": "+err.Error())
+	return failf(CodeServerError, err, textPortFailed, "", op+": "+err.Error())
 }
 
 // contractBreach — порт нарушил контракт. Отдельный конструктор, чтобы
-// нарушение контракта нельзя было перепутать с отказом хранилища.
+// нарушение контракта нельзя было перепутать с отказом порта.
 func contractBreach(op, why string) *ProtocolError {
-	return failf(CodePortContract, nil,
-		"A storage port of the authorization server broke its contract.",
-		"Fix the port implementation; this is not a protocol failure.", op+": "+why)
+	return failf(CodePortContract, nil, textPortContract, textPortContractHint, op+": "+why)
 }
 
 // checkDeclared — общая часть всех разборов: отказ порта и незаполненный
@@ -328,8 +338,9 @@ func (b *storageBridge) GetAccessTokenSession(ctx context.Context, signature str
 	defer cancel()
 
 	if signature == "" {
-		if failure := notesFrom(ctx).unidentifiedFailure(); failure != nil {
-			notesFrom(ctx).record(failure)
+		notes := notesFrom(ctx)
+		if failure := notes.unidentifiedFailure(); failure != nil {
+			notes.record(failure)
 			return nil, failure
 		}
 		return nil, pairEngine(ctx, fromPort("AccessTokenIssuer.IdentifyAccessToken", ErrGrantNotFound), engine.ErrNotFound)

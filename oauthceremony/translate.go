@@ -142,9 +142,9 @@ func fromEngine(err error) error {
 
 	switch {
 	case errors.Is(err, context.DeadlineExceeded):
-		return failf(CodePortDeadline, err, "A storage call did not finish in time.", "", err.Error())
+		return failf(CodePortDeadline, err, textPortDeadline, "", err.Error())
 	case errors.Is(err, context.Canceled):
-		return failf(CodePortCanceled, err, "A storage call was canceled.", "", err.Error())
+		return failf(CodePortCanceled, err, textPortCanceled, "", err.Error())
 	}
 
 	var rfcErr *engine.RFC6749Error

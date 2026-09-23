@@ -9,6 +9,7 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
+	"strings"
 	"time"
 
 	engine "github.com/PRO-Robotech/corelib/internal/oauth2"
@@ -41,9 +42,10 @@ import (
 // собственного изменяемого состояния у него нет.
 type artifactStrategy struct {
 	issuer AccessTokenIssuer
-	// timeout — срок ОДНОГО вызова порта выпуска, тот же, что у портов
-	// хранения (Config.PortTimeout).
-	timeout time.Duration
+	// deadline назначает срок ОДНОМУ вызову порта выпуска — тот же, что мост
+	// назначает вызову порта хранения (storageBridge.deadline): у срока вызова
+	// порта один источник, Config.PortTimeout.
+	deadline func(context.Context) (context.Context, context.CancelFunc)
 	// lifespans — сроки из настроек: по ним судится артефакт, у записи
 	// которого срок не назван, — так же, как это делает движок.
 	lifespans enginehandler.LifespanConfigProvider
@@ -59,13 +61,15 @@ var _ enginehandler.CoreStrategy = (*artifactStrategy)(nil)
 // ── Непрозрачные артефакты ─────────────────────────────────────────────────
 
 // newOpaqueArtifact выпускает значение непрозрачного артефакта и его подпись.
-func newOpaqueArtifact() (value, signature string, err error) {
+//
+// Отказа у выпуска нет: crypto/rand.Read с Go 1.24 ошибки не возвращает и
+// заполняет срез целиком, а при отказе источника случайности обрывает
+// программу — артефакт из неполной случайности выпущен быть не может.
+func newOpaqueArtifact() (value, signature string) {
 	var raw [opaqueArtifactBytes]byte
-	if _, err := rand.Read(raw[:]); err != nil {
-		return "", "", err
-	}
+	_, _ = rand.Read(raw[:])
 	value = base64.RawURLEncoding.EncodeToString(raw[:])
-	return value, opaqueSignature(value), nil
+	return value, opaqueSignature(value)
 }
 
 // opaqueSignature — подпись непрозрачного артефакта: sha256 значения в hex.
@@ -81,7 +85,8 @@ func (s *artifactStrategy) AuthorizeCodeSignature(_ context.Context, code string
 }
 
 func (s *artifactStrategy) GenerateAuthorizeCode(context.Context, engine.Requester) (string, string, error) {
-	return newOpaqueArtifact()
+	value, signature := newOpaqueArtifact()
+	return value, signature, nil
 }
 
 // ValidateAuthorizeCode судит срок кода. Подлинность уже доказана тем, что
@@ -95,7 +100,8 @@ func (s *artifactStrategy) RefreshTokenSignature(_ context.Context, token string
 }
 
 func (s *artifactStrategy) GenerateRefreshToken(context.Context, engine.Requester) (string, string, error) {
-	return newOpaqueArtifact()
+	value, signature := newOpaqueArtifact()
+	return value, signature, nil
 }
 
 // ValidateRefreshToken судит срок токена обновления. Нулевой срок движок
@@ -119,22 +125,33 @@ func (s *artifactStrategy) ValidateRefreshToken(_ context.Context, r engine.Requ
 // неё — нарушение контракта порта, и такой токен клиенту не уезжает. Срок
 // выпуска становится сроком в сеансе, то есть сроком у записи гранта, — у
 // токена, записи и ответа обмена один источник срока: этот выпуск.
+//
+// # Грант порта — очищенный, как запись в хранилище
+//
+// Запрос движка на этом шаге — СЫРАЯ форма запроса токена: в ней предъявленный
+// код и `code_verifier`, токен обновления и, при client_secret_post, секрет
+// клиента. Движок очищает её только для хранилища (Sanitize перед записью
+// гранта), а выпуск стоит раньше записи. Поэтому грант порту собирается из
+// запроса, очищенного тем же перечнем, что и запись гранта: порт получает тот
+// грант, что ляжет в хранилище под jti этого выпуска, и ни одного
+// предъявленного секрета.
 func (s *artifactStrategy) GenerateAccessToken(ctx context.Context, requester engine.Requester) (string, string, error) {
 	const op = "AccessTokenIssuer.IssueAccessToken"
-	grant := grantFromRequester(requester)
+	grant := grantFromRequester(requester.Sanitize(nil))
 	bound, named := grant.Session.ExpiresAt[TokenKindAccess]
 	if !named {
 		return "", "", failf(CodeCeremonyMisuse, nil,
 			"The authorization engine asked for an access token before assigning its expiry.", "", op)
 	}
 
-	callCtx, cancel := context.WithTimeout(ctx, s.timeout)
+	callCtx, cancel := s.deadline(ctx)
 	defer cancel()
+	calledAt := time.Now().UTC()
 	issued, err := s.issuer.IssueAccessToken(callCtx, grant)
 	if err != nil {
 		return "", "", note(ctx, fromPort(op, err))
 	}
-	if breach := checkIssued(op, issued, bound); breach != nil {
+	if breach := checkIssued(op, issued, calledAt, bound); breach != nil {
 		return "", "", note(ctx, breach)
 	}
 
@@ -143,9 +160,30 @@ func (s *artifactStrategy) GenerateAccessToken(ctx context.Context, requester en
 	return issued.Token, issued.ID, nil
 }
 
-// checkIssued сверяет выпуск с контрактом порта: названо всё, срок после
-// момента выпуска и не позже границы церемонии.
-func checkIssued(op string, issued IssuedAccessToken, bound time.Time) *ProtocolError {
+// checkIssued сверяет выпуск с контрактом порта: названо всё, момент выпуска
+// не раньше вызова, срок после момента выпуска и не позже границы церемонии.
+//
+// # Почему момент выпуска судится от вызова
+//
+// Срок в ответе обмена — exp минус момент выпуска (withIssuedLifetime). Момент
+// выпуска раньше вызова удлиняет его сверх того, что токену осталось жить:
+// выпуск с iat за двое суток до вызова уехал бы с expires_in в двое суток,
+// хотя exp не позже границы. Граница снизу — начало секунды, в которой
+// церемония позвала порт: подписант, у которого iat — целые секунды, называет
+// именно её, и ложь срока в ответе не превышает этой секунды.
+//
+// Предел по сроку настроек (exp минус iat не длиннее AccessTokenLifespan) этой
+// лжи не ловит: у токена, которому по границе семейства осталось пять минут,
+// iat на десять минут раньше вызова даёт срок в ответе в пятнадцать минут —
+// короче настроек, а токену жить пять. И такой предел отверг бы законный
+// выпуск: движок округляет границу до ближайшей секунды, то есть бывает и
+// вверх, подписант с iat в целых секундах режет момент выпуска вниз, и exp
+// минус iat бывает на секунду длиннее срока настроек.
+//
+// Момент выпуска ПОЗЖЕ вызова срок в ответе только укорачивает; позже границы
+// он быть не может — exp позже iat и не позже границы.
+func checkIssued(op string, issued IssuedAccessToken, calledAt, bound time.Time) *ProtocolError {
+	notBefore := calledAt.Truncate(time.Second)
 	switch {
 	case issued.Token == "":
 		return contractBreach(op, "the access token was issued without its value")
@@ -154,6 +192,10 @@ func checkIssued(op string, issued IssuedAccessToken, bound time.Time) *Protocol
 			"its grant could be neither stored nor found")
 	case issued.IssuedAt.IsZero():
 		return contractBreach(op, "the access token was issued without its issuance instant (iat)")
+	case issued.IssuedAt.Before(notBefore):
+		return contractBreach(op, "the access token was issued at "+issued.IssuedAt.UTC().Format(time.RFC3339Nano)+
+			", before the second "+notBefore.Format(time.RFC3339)+" in which the ceremony called the issuer; "+
+			"its lifetime in the token response would outlast the token")
 	case !issued.ExpiresAt.After(issued.IssuedAt):
 		return contractBreach(op, "the access token expires at "+issued.ExpiresAt.UTC().Format(time.RFC3339Nano)+
 			", not after its issuance at "+issued.IssuedAt.UTC().Format(time.RFC3339Nano))
@@ -174,9 +216,13 @@ func checkIssued(op string, issued IssuedAccessToken, bound time.Time) *Protocol
 // пустой подписи (storageBridge.GetAccessTokenSession). Проглоти стратегия
 // отказ, интроспекция назвала бы годный токен негодным, а отзыв ответил бы
 // успехом, не сняв живой токен.
+//
+// Исходы порта разбираются по контракту (AccessTokenIssuer.IdentifyAccessToken)
+// и только так: jti — токен наш; ErrGrantNotFound — не наш; отказ ПОРТА —
+// отказ операции (identificationFailure).
 func (s *artifactStrategy) AccessTokenSignature(ctx context.Context, token string) string {
 	const op = "AccessTokenIssuer.IdentifyAccessToken"
-	callCtx, cancel := context.WithTimeout(ctx, s.timeout)
+	callCtx, cancel := s.deadline(ctx)
 	defer cancel()
 
 	id, err := s.issuer.IdentifyAccessToken(callCtx, token)
@@ -188,12 +234,61 @@ func (s *artifactStrategy) AccessTokenSignature(ctx context.Context, token strin
 	case err == nil:
 		failure = contractBreach(op, "the token was identified with an empty identifier; there is nothing to find its grant by")
 	default:
+		// «Не наш» — законный ответ, отказа нет.
 		if ours := fromPort(op, err); ours.Code != CodeGrantNotFound {
-			failure = ours
+			failure = identificationFailure(op, ours, token)
 		}
 	}
 	notesFrom(ctx).noteUnidentified(failure)
 	return ""
+}
+
+// identificationFailure — отказ опознания, как его видит операция.
+//
+// # Отказ, а не вердикт
+//
+// Отказ опознания обязан остаться ОТКАЗОМ: интроспекция читает случаи
+// «неактивен» и «обёрнут» как ответ `active: false`, отзыв читает «не найден»
+// как «нечего снимать», и вердикт о токене, пришедший от порта вместо jti,
+// стал бы таким ответом — а отзыв по истёкшему токену доступа ответил бы
+// успехом, оставив живым токен обновления его семейства. Порту дозволены
+// только случаи отказа проверяющего — сбой, недоступность, срок и отмена
+// вызова, нарушение контракта; всякий иной названный им случай — вердикт о
+// токене (истёк, неактивен, чужая подпись) или любой иной случай протокола —
+// нарушение контракта: подлинный токен, истёкший в том числе, порт отвечает
+// jti, чужой — ErrGrantNotFound, а срок судит церемония.
+//
+// # Предъявленное значение — не в текст
+//
+// Порт получает предъявительский токен как есть — и токен доступа, и, на
+// интроспекции без подсказки, токен обновления. Ни один текст отказа
+// церемонии его не несёт: значение вырезается из описания, подсказки и
+// подробностей, даже если порт, вопреки контракту, положил его в свой текст.
+// Отказ порта остаётся причиной (Unwrap) таким, каким его вернул порт: это его
+// значение, и его текст — предмет контракта порта.
+func identificationFailure(op string, ours *ProtocolError, presented string) *ProtocolError {
+	switch ours.Code {
+	case CodeServerError, CodeTemporarilyUnavailable, CodePortDeadline, CodePortCanceled, CodePortContract:
+	default:
+		ours = failf(CodePortContract, ours.cause, textPortContract, textPortContractHint,
+			op+": the issuer answered case "+ours.Code.String()+", which is none of its outcomes: "+
+				"an authentic token, expired included, is answered with its jti, a foreign one with "+
+				"ErrGrantNotFound, a failed check with a failure; "+ours.Debug)
+	}
+	return withoutPresented(ours, presented)
+}
+
+// presentedMarker — чем заменяется предъявленное значение в тексте отказа.
+const presentedMarker = "[presented token]"
+
+// withoutPresented — тот же отказ, но без предъявленного значения ни в одном
+// тексте. Случай и причина не меняются.
+func withoutPresented(p *ProtocolError, presented string) *ProtocolError {
+	if presented == "" {
+		return p
+	}
+	scrub := func(text string) string { return strings.ReplaceAll(text, presented, presentedMarker) }
+	return failf(p.Code, p.cause, scrub(p.Description), scrub(p.Hint), scrub(p.Debug))
 }
 
 // ValidateAccessToken судит срок токена доступа по записи гранта. Подлинность

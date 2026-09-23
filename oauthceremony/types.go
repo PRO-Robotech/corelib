@@ -240,8 +240,14 @@ type GrantRecord struct {
 	RequestedAudiences []string
 	GrantedAudiences   []string
 
-	// Form — протокольные поля запроса, породившего грант. Нужны движку
-	// для PKCE и для сверки адреса возврата при обмене кода.
+	// Form — протокольные поля запроса, породившего грант, ОЧИЩЕННЫЕ
+	// перечнем полей: всякая запись несёт лишь `grant_type`,
+	// `response_type`, `scope` и `client_id`, а сверх них запись кода —
+	// `redirect_uri` и `code_challenge`, запись PKCE — `code_challenge` и
+	// `code_challenge_method`: по ним при обмене сверяются адрес возврата и
+	// доказательство PKCE. Предъявленных секретов — кода, `code_verifier`,
+	// токена обновления, секрета клиента — в Form нет ни у одной записи и ни
+	// у гранта, который получает порт выпуска токена доступа.
 	Form map[string][]string
 
 	// Session — состояние сеанса.
