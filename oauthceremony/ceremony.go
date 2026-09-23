@@ -16,7 +16,6 @@ import (
 	engine "github.com/PRO-Robotech/corelib/internal/oauth2"
 	enginehandler "github.com/PRO-Robotech/corelib/internal/oauth2/handler/oauth2"
 	engineproofkey "github.com/PRO-Robotech/corelib/internal/oauth2/handler/pkce"
-	enginehmac "github.com/PRO-Robotech/corelib/internal/oauth2/token/hmac"
 	"github.com/PRO-Robotech/corelib/tokenpolicy"
 )
 
@@ -81,14 +80,6 @@ type Config struct {
 	AuthorizationEndpoint string
 	TokenEndpoint         string
 
-	// SigningSecret — ключ подписи артефактов. Не короче 32 байт: подпись
-	// HMAC-SHA256 на более коротком ключе не даёт заявленной стойкости.
-	SigningSecret []byte
-
-	// RotatedSigningSecrets — прежние ключи подписи на время оборота.
-	// Ими артефакты ПРОВЕРЯЮТСЯ, но не подписываются.
-	RotatedSigningSecrets [][]byte
-
 	// AccessTokenLifespan, RefreshTokenLifespan, AuthorizationCodeLifespan
 	// — сроки жизни артефактов, каждый от выпуска артефакта. Все три обязаны
 	// быть положительными и не длиннее своих потолков фундамента —
@@ -97,10 +88,21 @@ type Config struct {
 	// называя поле и потолок, а не урезает молча; решение, из которого взято
 	// значение каждого потолка, записано у самой константы.
 	//
+	// У AccessTokenLifespan причина потолка ещё и в выпуске: токен доступа
+	// подписывает служба (Ports.AccessTokenIssuer), а её подписант выше
+	// потолка платформы не выпускает. Выпуск короче границы законен (контракт
+	// порта), поэтому церемония со сроком длиннее обменивала бы исправно, но
+	// срок настроек не исполнялся бы ни на одном выпуске — настройка лгала бы
+	// молча; отказ при сборке её не допускает.
+	//
 	// RefreshTokenLifespan — срок ОДНОГО токена обновления: оборот выпускает
 	// преемника с тем же сроком от своего выпуска. Предел всего семейства New
 	// не держит — его держат граница гранта (AuthorizationGrant.ExpiresAt) и
 	// база службы (tokenpolicy.MaxRefreshTokenFamilyTTL называет обоих).
+	//
+	// Подписного материала в настройках нет: код авторизации и токен
+	// обновления непрозрачны (случайные байты, в хранилище — sha256
+	// значения), а токен доступа подписывает порт службы.
 	AccessTokenLifespan       time.Duration
 	RefreshTokenLifespan      time.Duration
 	AuthorizationCodeLifespan time.Duration
@@ -127,13 +129,38 @@ type Config struct {
 	// граница, ниже которой параметр перестаёт быть защитой от CSRF).
 	MinParameterEntropy int
 
-	// PortTimeout — срок ОДНОГО вызова порта хранения.
+	// PortTimeout — срок ОДНОГО вызова порта службы: порта хранения и порта
+	// выпуска токена доступа (Ports.AccessTokenIssuer) — и выпуска, и
+	// опознания.
 	PortTimeout time.Duration
 
 	// OperationTimeout — срок ВСЕЙ операции церемонии. Обязан быть не
 	// меньше PortTimeout: иначе первый же вызов порта не уложился бы в
 	// операцию, и срок порта не значил бы ничего.
 	OperationTimeout time.Duration
+
+	// NewGrantID — крючок чеканки идентификатора гранта. Обязателен.
+	//
+	// Идентификатор гранта — ключ семейства: по нему служба отзывает все
+	// артефакты одной выдачи и под ним ведёт свою запись семейства, форму
+	// которой держит ограничение её схемы. Поэтому его выбирает СЛУЖБА:
+	// движок, получив запрос без идентификатора, чеканит свой при первом
+	// чтении, и ключ, которого служба не выбирала, лёг бы во все её записи.
+	// Приставки платформы — предмет пакета `ids`, а не этого.
+	//
+	// Церемония зовёт крючок ровно один раз на грант — в CompleteAuthorization,
+	// после своих проверок выдачи и до выпуска кода — и ставит идентификатор
+	// запросу движка раньше, чем тот его прочтёт. Разбор запроса, отказ в
+	// согласии, обмен кода, оборот токена обновления, интроспекция и отзыв
+	// крючка не зовут: идентификатор едет из записи хранилища.
+	//
+	// Вызову назначается срок Config.PortTimeout, как вызову порта. Отказ
+	// крючка — отказ выдачи (случай разбирается, как отказ порта), и записи
+	// кода в хранилище не появляется. Пустой идентификатор — нарушение
+	// контракта (ErrPortContract): на пустом движок начеканил бы свой.
+	// Уникальность — забота службы: церемония её не сверяет, её держит ключ
+	// записи семейства в хранилище службы.
+	NewGrantID func(ctx context.Context) (string, error)
 }
 
 // Ceremony — церемония OAuth 2.0 платформы.
@@ -160,8 +187,8 @@ type Config struct {
 // локального значения, получившая содержимое присваиванием; канал, через
 // который прошло содержимое; получатель отданного содержимого, то есть код
 // движка, пишущий в то, что вернул ему геттер; прочее состояние движка —
-// обработчики, стратегию подписи. У форм слепой зоны держателя нет ни на одном
-// пути запроса: статическая проба на них молчит — её ноль находок и
+// обработчики, стратегию выпуска артефактов. У форм слепой зоны держателя нет
+// ни на одном пути запроса: статическая проба на них молчит — её ноль находок и
 // неразобранных стоит и при такой записи в дереве (это утверждает
 // TestNamedBlindZoneFormsStaySilent), — а перепись по тождеству содержимого не
 // видит. -race проба TestConcurrentExchangesOnAFreshCeremonyShareNoEngineState
@@ -193,11 +220,13 @@ func New(cfg Config, ports Ports) (*Ceremony, error) {
 		return nil, err
 	}
 
-	// Издателя (AccessTokenIssuer, IDTokenIssuer) настройки не называют: его
-	// читают лишь стратегии JWT движка, а New строит одну стратегию — HMAC
-	// (ниже), чьи код авторизации, токен доступа и токен обновления —
-	// непрозрачные строки без утверждений; `iss` в них нести негде, а токена
-	// личности церемония не выдаёт (doc.go).
+	// Издателя (AccessTokenIssuer, IDTokenIssuer) настройки движка не
+	// называют: его читают лишь стратегии JWT движка, а New строит свою
+	// стратегию (artifactStrategy, ниже), которая его не читает. Код
+	// авторизации и токен обновления у неё — непрозрачные строки без
+	// утверждений, и `iss` в них нести негде; токен доступа выпускает порт
+	// службы, и `iss` в него кладёт служба; токена личности церемония не
+	// выдаёт (doc.go).
 	//
 	// PKCE (RFC 7636) обязателен ВСЕМ клиентам и только с методом S256
 	// (EnforcePKCE, EnforcePKCEForPublicClients, EnablePKCEPlainChallengeMethod
@@ -208,8 +237,6 @@ func New(cfg Config, ports Ports) (*Ceremony, error) {
 		AccessTokenLifespan:            cfg.AccessTokenLifespan,
 		RefreshTokenLifespan:           cfg.RefreshTokenLifespan,
 		AuthorizeCodeLifespan:          cfg.AuthorizationCodeLifespan,
-		GlobalSecret:                   cfg.SigningSecret,
-		RotatedGlobalSecrets:           cfg.RotatedSigningSecrets,
 		HashCost:                       cfg.SecretHashCost,
 		MinParameterEntropy:            cfg.MinParameterEntropy,
 		ScopeStrategy:                  scopeStrategyOf(cfg.ScopeMatching),
@@ -259,8 +286,13 @@ func New(cfg Config, ports Ports) (*Ceremony, error) {
 		return nil, misuse("the storage bridge does not satisfy the client storage contract")
 	}
 
-	strategy := enginehandler.NewHMACSHAStrategyUnPrefixed(
-		&enginehmac.HMACStrategy{Config: engineCfg}, engineCfg)
+	// Стратегия выпуска артефактов — своя (artifactStrategy): подписного
+	// материала у церемонии нет, токен доступа выпускает порт службы.
+	strategy := &artifactStrategy{
+		issuer:    ports.AccessTokenIssuer,
+		deadline:  bridge.deadline,
+		lifespans: engineCfg,
+	}
 
 	explicitGrant := &enginehandler.AuthorizeExplicitGrantHandler{
 		AccessTokenStrategy:    strategy,
@@ -329,20 +361,17 @@ var (
 
 func validateConfig(cfg *Config) error {
 	const (
-		minSigningSecret = 32
-		minHashCost      = 10
-		maxHashCost      = 15
-		minEntropy       = 8
+		minHashCost = 10
+		maxHashCost = 15
+		minEntropy  = 8
 	)
 	switch {
-	case len(cfg.SigningSecret) < minSigningSecret:
-		return misuse("Config.SigningSecret is shorter than 32 bytes")
 	case cfg.AccessTokenLifespan <= 0:
 		return misuse("Config.AccessTokenLifespan is not a positive duration")
 	case cfg.AccessTokenLifespan > tokenpolicy.MaxTokenTTL:
 		return misuse("Config.AccessTokenLifespan " + cfg.AccessTokenLifespan.String() +
 			" exceeds tokenpolicy.MaxTokenTTL " + tokenpolicy.MaxTokenTTL.String() +
-			"; an access token is a bearer credential, usable by whoever holds it for its whole lifespan")
+			"; the access token is signed by the service, whose signer issues nothing longer")
 	case cfg.RefreshTokenLifespan <= 0:
 		return misuse("Config.RefreshTokenLifespan is not a positive duration")
 	case cfg.RefreshTokenLifespan > tokenpolicy.MaxRefreshTokenFamilyTTL:
@@ -375,6 +404,8 @@ func validateConfig(cfg *Config) error {
 		return misuse("Config.OperationTimeout is not a positive duration")
 	case cfg.OperationTimeout < cfg.PortTimeout:
 		return misuse("Config.OperationTimeout is shorter than Config.PortTimeout")
+	case cfg.NewGrantID == nil:
+		return misuse("Config.NewGrantID is not named; the grant identifier is minted by the service, not by the engine")
 	}
 	if err := validateEndpoint("Config.AuthorizationEndpoint", cfg.AuthorizationEndpoint); err != nil {
 		return err
@@ -428,6 +459,8 @@ func validatePorts(ports Ports) error {
 		return misuse("Ports.RefreshTokens is not named")
 	case ports.Grants == nil:
 		return misuse("Ports.Grants is not named")
+	case ports.AccessTokenIssuer == nil:
+		return misuse("Ports.AccessTokenIssuer is not named")
 	}
 	return nil
 }
@@ -668,6 +701,16 @@ func (c *Ceremony) CompleteAuthorization(ctx context.Context, intent Authorizati
 		return AuthorizationResult{}, err
 	}
 
+	// Идентификатор гранта — службы (Config.NewGrantID). Он ставится запросу
+	// ДО выпуска: впервые движок читает его, сохраняя код с его привязкой PKCE,
+	// и на пустом начеканил бы свой. Чеканка — последним шагом перед выпуском,
+	// чтобы выдача, отвергнутая проверками выше, идентификатора не расходовала.
+	grantID, err := c.mintGrantID(ctx)
+	if err != nil {
+		return AuthorizationResult{}, err
+	}
+	intent.requester.SetID(grantID)
+
 	responder, engineErr := c.provider.NewAuthorizeResponse(ctx, intent.requester, session)
 	if engineErr != nil {
 		return AuthorizationResult{}, notes.preferRecorded(fromEngine(engineErr))
@@ -676,6 +719,30 @@ func (c *Ceremony) CompleteAuthorization(ctx context.Context, intent Authorizati
 	sink := newResponseSink()
 	c.provider.WriteAuthorizeResponse(ctx, sink, intent.requester, responder)
 	return sink.authorizationResult(intent.Delivery()), nil
+}
+
+// mintGrantID спрашивает у службы идентификатор нового гранта.
+//
+// Крючок — вызов службы, как и порт, и срок у него тот же: Config.PortTimeout.
+// Его отказ разбирается, как отказ порта (истёкший срок остаётся истёкшим
+// сроком, наш случай — нашим случаем, прочее — ошибкой сервера с текстом в
+// Debug). Пустой идентификатор — нарушение контракта: движок принял бы его за
+// «не назван» и начеканил бы свой.
+func (c *Ceremony) mintGrantID(ctx context.Context) (string, error) {
+	const op = "Config.NewGrantID"
+
+	ctx, cancel := context.WithTimeout(ctx, c.cfg.PortTimeout)
+	defer cancel()
+
+	grantID, err := c.cfg.NewGrantID(ctx)
+	if err != nil {
+		return "", fromPort(op, err)
+	}
+	if grantID == "" {
+		return "", contractBreach(op, "the hook returned an empty grant identifier; "+
+			"the engine would mint one of its own in its place")
+	}
+	return grantID, nil
 }
 
 // DenyAuthorization закрывает намерение отказом.
@@ -812,7 +879,28 @@ func (c *Ceremony) Exchange(ctx context.Context, req TokenRequest) (TokenResult,
 	if engineErr != nil {
 		return TokenResult{}, notes.preferRecorded(fromEngine(engineErr))
 	}
-	return tokenResultOf(responder), nil
+	issued, noted := notes.issuedAccessToken()
+	return withIssuedLifetime(tokenResultOf(responder), issued, noted)
+}
+
+// withIssuedLifetime ставит в ответ обмена срок ЕГО выпуска.
+//
+// Срок жизни токена доступа (RFC 6749 §5.1, `expires_in`) — exp минус момент
+// выпуска, ровно те, что порт службы положил в токен. Движок считает срок
+// сам, от своих часов и своего срока в сеансе, — это был бы второй источник
+// одного значения, и они разошлись бы на ходе часов между выпуском и ответом.
+//
+// Ответ, токен доступа которого не выпущен портом в ЭТОЙ операции, не
+// собирается вовсе: срок, взятый у чужого выпуска или ни у какого, был бы
+// ложью, и отдать токен без срока — тоже.
+func withIssuedLifetime(result TokenResult, issued IssuedAccessToken, noted bool) (TokenResult, error) {
+	if !noted || issued.Token == "" || issued.Token != result.AccessToken {
+		return TokenResult{}, failf(CodeServerError, nil,
+			"The token response carries an access token that the access token issuer did not issue in this exchange.",
+			"", "")
+	}
+	result.ExpiresIn = issued.ExpiresAt.Sub(issued.IssuedAt)
+	return result, nil
 }
 
 // revokeReplayedFamily отзывает семейство гранта, у которого замечен повтор.
@@ -1123,12 +1211,10 @@ func tokenResultOf(responder engine.AccessResponder) TokenResult {
 	}
 	for key, value := range responder.ToMap() {
 		switch key {
-		case "access_token", "token_type":
-			// Уже названы полями; второй раз не кладём.
-		case "expires_in":
-			if seconds, ok := value.(int64); ok {
-				result.ExpiresIn = time.Duration(seconds) * time.Second
-			}
+		case "access_token", "token_type", "expires_in":
+			// У всех трёх есть поля ответа, и в прочие поля они не кладутся.
+			// Срок движка не берётся вовсе: срок в ответе — срок выпуска
+			// (withIssuedLifetime), а не пересчёт движка от его часов.
 		case "scope":
 			if scope, ok := value.(string); ok && scope != "" {
 				result.Scopes = strings.Split(scope, " ")

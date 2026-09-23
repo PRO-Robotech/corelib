@@ -142,9 +142,9 @@ func fromEngine(err error) error {
 
 	switch {
 	case errors.Is(err, context.DeadlineExceeded):
-		return failf(CodePortDeadline, err, "A storage call did not finish in time.", "", err.Error())
+		return failf(CodePortDeadline, err, textPortDeadline, "", err.Error())
 	case errors.Is(err, context.Canceled):
-		return failf(CodePortCanceled, err, "A storage call was canceled.", "", err.Error())
+		return failf(CodePortCanceled, err, textPortCanceled, "", err.Error())
 	}
 
 	var rfcErr *engine.RFC6749Error
@@ -325,7 +325,24 @@ func requesterFromCode(ctx context.Context, clients func(context.Context, string
 // Клиент берётся из справочника ЗАНОВО, а не из записи: между выдачей кода и
 // его обменом клиента могли снять, сделать публичным или сузить ему права, и
 // решение обязано приниматься по нынешней записи, а не по слепку.
+//
+// # Запись без идентификатора гранта — нарушение контракта порта
+//
+// Идентификатор каждой записи ставит церемония (Config.NewGrantID), так что
+// живая запись без него — порча на стороне службы. Принять её значило бы
+// отдать движку запрос с пустым идентификатором, а движок на пустом чеканит
+// свой: выпущенное под таким ключом не принадлежало бы ни одному семейству,
+// оборот сверял бы токен с чужим грантом и читал бы законный оборот как
+// повтор, а отзыв отвечал бы успехом, не сняв ничего. Случай заносится в
+// ведомость операции: движок вправе заменить отказ хранилища своим, более
+// грубым, — на пути отзыва это «временно недоступно», и без ведомости точный
+// случай до вызывающего не доехал бы.
 func requesterFromGrant(ctx context.Context, clients func(context.Context, string) (ClientRegistration, error), rec GrantRecord, session engine.Session) (engine.Requester, error) {
+	if rec.GrantID == "" {
+		return nil, note(ctx, contractBreach("GrantRecord.GrantID", "a stored grant carries no identifier; "+
+			"the engine would mint one of its own, and what is issued or revoked under it would belong to no family"))
+	}
+
 	reg, err := clients(ctx, rec.ClientID)
 	if err != nil {
 		return nil, err

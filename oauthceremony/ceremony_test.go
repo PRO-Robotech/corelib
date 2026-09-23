@@ -41,22 +41,20 @@ const (
 
 	// testAccessLifespan и testCodeLifespan — сроки токена доступа и кода
 	// авторизации в настройках проб. Оба НИЖЕ своих потолков фундамента
-	// (tokenpolicy.MaxTokenTTL, tokenpolicy.MaxAuthorizationCodeTTL): проба
-	// на срок из настроек иначе не отличила бы его от потолка, а проба
-	// границы, названной службой, — границу от срока настроек.
+	// (tokenpolicy.MaxTokenTTL — он же потолок подставки выпуска — и
+	// tokenpolicy.MaxAuthorizationCodeTTL): срок в ответе иначе не отличался
+	// бы от потолка подписанта, а проба границы, названной службой, — граница
+	// от срока настроек.
 	testAccessLifespan = 20 * time.Minute
 	testCodeLifespan   = 30 * time.Second
 )
 
-// newTestCeremony собирает церемонию с полным набором настроек. Ни одно поле
-// не опущено: New отвергает неназванное, и это здесь проверяется заодно.
-func newTestCeremony(t *testing.T, ports oauthceremony.Ports, tweaks ...func(*oauthceremony.Config)) *oauthceremony.Ceremony {
-	t.Helper()
-
+// newTestCeremonyConfig — полный набор настроек проб. Ни одно поле не
+// опущено: New отвергает неназванное, и это здесь проверяется заодно.
+func newTestCeremonyConfig(tweaks ...func(*oauthceremony.Config)) oauthceremony.Config {
 	cfg := oauthceremony.Config{
 		AuthorizationEndpoint:     testAuthorizationEndpoint,
 		TokenEndpoint:             testTokenEndpoint,
-		SigningSecret:             []byte("0123456789abcdef0123456789abcdef"),
 		AccessTokenLifespan:       testAccessLifespan,
 		RefreshTokenLifespan:      24 * time.Hour,
 		AuthorizationCodeLifespan: testCodeLifespan,
@@ -67,12 +65,19 @@ func newTestCeremony(t *testing.T, ports oauthceremony.Ports, tweaks ...func(*oa
 		MinParameterEntropy:       8,
 		PortTimeout:               2 * time.Second,
 		OperationTimeout:          5 * time.Second,
+		NewGrantID:                mintTestGrantID,
 	}
 	for _, tweak := range tweaks {
 		tweak(&cfg)
 	}
+	return cfg
+}
 
-	ceremony, err := oauthceremony.New(cfg, ports)
+// newTestCeremony собирает церемонию с настройками newTestCeremonyConfig.
+func newTestCeremony(t *testing.T, ports oauthceremony.Ports, tweaks ...func(*oauthceremony.Config)) *oauthceremony.Ceremony {
+	t.Helper()
+
+	ceremony, err := oauthceremony.New(newTestCeremonyConfig(tweaks...), ports)
 	if err != nil {
 		t.Fatalf("New не собрал церемонию: %v", err)
 	}
@@ -187,11 +192,12 @@ func TestAuthorizationCodeCeremonyRoundTrip(t *testing.T) {
 	if tokens.TokenType != "bearer" {
 		t.Errorf("тип токена %q, ожидался \"bearer\"", tokens.TokenType)
 	}
-	// Ответ называет ОСТАВШЕЕСЯ время до срока, записанного у токена, в
-	// целых секундах: движок округляет срок до секунды, а к мигу ответа
-	// проходят миллисекунды — отсюда срок из настроек либо он же без секунды.
-	// Точное равенство держалось, пока срок у токена НЕ записывался вовсе и
-	// ответ брал голую длительность из настроек (lifetime_test.go).
+	// Ответ называет срок жизни выпущенного токена: его exp минус момент
+	// выпуска. Граница, которую церемония назвала выпуску, — срок из настроек
+	// от мига обмена, округлённый движком до секунды, а подставка выпуска
+	// режет срок до целых секунд, — отсюда срок настроек либо на секунду
+	// меньше. Точное равенство держит проба при остановленных часах
+	// (TestAccessTokenInTheResponseIsTheIssuersAndItsLifetime).
 	if tokens.ExpiresIn < testAccessLifespan-time.Second || tokens.ExpiresIn > testAccessLifespan {
 		t.Errorf("срок токена доступа %v, ожидался %v (не меньше %v)", tokens.ExpiresIn, testAccessLifespan, testAccessLifespan-time.Second)
 	}
@@ -583,7 +589,6 @@ func TestNewRejectsEveryUnnamedSetting(t *testing.T) {
 	valid := oauthceremony.Config{
 		AuthorizationEndpoint:     testAuthorizationEndpoint,
 		TokenEndpoint:             testTokenEndpoint,
-		SigningSecret:             []byte("0123456789abcdef0123456789abcdef"),
 		AccessTokenLifespan:       testAccessLifespan,
 		RefreshTokenLifespan:      24 * time.Hour,
 		AuthorizationCodeLifespan: testCodeLifespan,
@@ -593,13 +598,13 @@ func TestNewRejectsEveryUnnamedSetting(t *testing.T) {
 		MinParameterEntropy:       8,
 		PortTimeout:               time.Second,
 		OperationTimeout:          time.Second,
+		NewGrantID:                mintTestGrantID,
 	}
 	if _, err := oauthceremony.New(valid, store.ports()); err != nil {
 		t.Fatalf("годная сборка отвергнута: %v", err)
 	}
 
 	cases := map[string]func(*oauthceremony.Config){
-		"SigningSecret короток":         func(c *oauthceremony.Config) { c.SigningSecret = []byte("short") },
 		"AccessTokenLifespan не назван": func(c *oauthceremony.Config) { c.AccessTokenLifespan = 0 },
 		"RefreshTokenLifespan не назван": func(c *oauthceremony.Config) {
 			c.RefreshTokenLifespan = 0
@@ -628,6 +633,7 @@ func TestNewRejectsEveryUnnamedSetting(t *testing.T) {
 			c.PortTimeout = 2 * time.Second
 			c.OperationTimeout = time.Second
 		},
+		"NewGrantID не назван": func(c *oauthceremony.Config) { c.NewGrantID = nil },
 	}
 	for name, spoil := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -656,7 +662,6 @@ func TestNewRejectsAnEndpointThatIsNotAnAbsoluteAddress(t *testing.T) {
 	valid := oauthceremony.Config{
 		AuthorizationEndpoint:     testAuthorizationEndpoint,
 		TokenEndpoint:             testTokenEndpoint,
-		SigningSecret:             []byte("0123456789abcdef0123456789abcdef"),
 		AccessTokenLifespan:       testAccessLifespan,
 		RefreshTokenLifespan:      24 * time.Hour,
 		AuthorizationCodeLifespan: testCodeLifespan,
@@ -666,6 +671,7 @@ func TestNewRejectsAnEndpointThatIsNotAnAbsoluteAddress(t *testing.T) {
 		MinParameterEntropy:       8,
 		PortTimeout:               time.Second,
 		OperationTimeout:          time.Second,
+		NewGrantID:                mintTestGrantID,
 	}
 
 	fields := map[string]func(*oauthceremony.Config, string){
@@ -752,12 +758,15 @@ func TestNewRejectsAnEndpointThatIsNotAnAbsoluteAddress(t *testing.T) {
 }
 
 // TestNewRejectsEveryMissingPort — порт, которого нет, называется поимённо.
+//
+// Близнец — те же настройки с полным набором портов: без него настройки,
+// которые сами не прошли бы проверку, давали бы тот же случай сборки, и
+// проба зеленела бы, не дойдя до портов.
 func TestNewRejectsEveryMissingPort(t *testing.T) {
 	store := newMemoryPorts()
 	cfg := oauthceremony.Config{
 		AuthorizationEndpoint:     testAuthorizationEndpoint,
 		TokenEndpoint:             testTokenEndpoint,
-		SigningSecret:             []byte("0123456789abcdef0123456789abcdef"),
 		AccessTokenLifespan:       testAccessLifespan,
 		RefreshTokenLifespan:      24 * time.Hour,
 		AuthorizationCodeLifespan: testCodeLifespan,
@@ -767,6 +776,11 @@ func TestNewRejectsEveryMissingPort(t *testing.T) {
 		MinParameterEntropy:       8,
 		PortTimeout:               time.Second,
 		OperationTimeout:          time.Second,
+		NewGrantID:                mintTestGrantID,
+	}
+
+	if _, err := oauthceremony.New(cfg, store.ports()); err != nil {
+		t.Fatalf("ПРЕДПОСЫЛКА: годная сборка с полным набором портов отвергнута: %v", err)
 	}
 
 	cases := map[string]func(*oauthceremony.Ports){
@@ -775,13 +789,18 @@ func TestNewRejectsEveryMissingPort(t *testing.T) {
 		"AccessTokens":       func(p *oauthceremony.Ports) { p.AccessTokens = nil },
 		"RefreshTokens":      func(p *oauthceremony.Ports) { p.RefreshTokens = nil },
 		"Grants":             func(p *oauthceremony.Ports) { p.Grants = nil },
+		"AccessTokenIssuer":  func(p *oauthceremony.Ports) { p.AccessTokenIssuer = nil },
 	}
 	for name, drop := range cases {
 		t.Run(name, func(t *testing.T) {
 			ports := store.ports()
 			drop(&ports)
-			if _, err := oauthceremony.New(cfg, ports); !errors.Is(err, oauthceremony.ErrCeremonyMisuse) {
+			_, err := oauthceremony.New(cfg, ports)
+			if !errors.Is(err, oauthceremony.ErrCeremonyMisuse) {
 				t.Fatalf("набор без порта %s принят: %v", name, err)
+			}
+			if !strings.Contains(err.Error(), "Ports."+name+" ") {
+				t.Errorf("отказ сборки без порта %s не называет его: %v", name, err)
 			}
 		})
 	}

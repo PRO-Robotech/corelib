@@ -201,7 +201,6 @@ func endpointProbeConfig(authorize, token string) Config {
 	return Config{
 		AuthorizationEndpoint:     authorize,
 		TokenEndpoint:             token,
-		SigningSecret:             []byte("0123456789abcdef0123456789abcdef"),
 		AccessTokenLifespan:       20 * time.Minute,
 		RefreshTokenLifespan:      24 * time.Hour,
 		AuthorizationCodeLifespan: 30 * time.Second,
@@ -212,6 +211,7 @@ func endpointProbeConfig(authorize, token string) Config {
 		MinParameterEntropy:       8,
 		PortTimeout:               2 * time.Second,
 		OperationTimeout:          5 * time.Second,
+		NewGrantID:                uncalledGrantIDHook,
 	}
 }
 
@@ -222,5 +222,6 @@ func uncalledPorts() Ports {
 		AccessTokens:       uncalledAccessTokens{},
 		RefreshTokens:      uncalledRefreshTokens{},
 		Grants:             uncalledGrants{},
+		AccessTokenIssuer:  uncalledAccessTokenIssuer{},
 	}
 }

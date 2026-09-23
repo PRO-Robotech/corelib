@@ -170,7 +170,14 @@ type (
 	uncalledAccessTokens       struct{ AccessTokenVault }
 	uncalledRefreshTokens      struct{ RefreshTokenVault }
 	uncalledGrants             struct{ GrantRevoker }
+	uncalledAccessTokenIssuer  struct{ AccessTokenIssuer }
 )
+
+// uncalledGrantIDHook — крючок чеканки идентификатора гранта, которого обход
+// тоже не вызывает. Вызов — громкое красное, как у портов выше.
+func uncalledGrantIDHook(context.Context) (string, error) {
+	panic("oauthceremony: the engine settings walk reached Config.NewGrantID")
+}
 
 // engineConfigOfNewCeremony собирает церемонию через New и достаёт настройки,
 // которые держит её движок. Предпосылка проверяется, а не предполагается:
@@ -181,7 +188,6 @@ func engineConfigOfNewCeremony(t *testing.T) *engine.Config {
 	c, err := New(Config{
 		AuthorizationEndpoint:     "https://iam.example.net/iam/v1/authorize",
 		TokenEndpoint:             "https://iam.example.net/iam/v1/token",
-		SigningSecret:             []byte("0123456789abcdef0123456789abcdef"),
 		AccessTokenLifespan:       20 * time.Minute,
 		RefreshTokenLifespan:      24 * time.Hour,
 		AuthorizationCodeLifespan: 30 * time.Second,
@@ -192,12 +198,14 @@ func engineConfigOfNewCeremony(t *testing.T) *engine.Config {
 		MinParameterEntropy:       8,
 		PortTimeout:               2 * time.Second,
 		OperationTimeout:          5 * time.Second,
+		NewGrantID:                uncalledGrantIDHook,
 	}, Ports{
 		Clients:            uncalledClients{},
 		AuthorizationCodes: uncalledAuthorizationCodes{},
 		AccessTokens:       uncalledAccessTokens{},
 		RefreshTokens:      uncalledRefreshTokens{},
 		Grants:             uncalledGrants{},
+		AccessTokenIssuer:  uncalledAccessTokenIssuer{},
 	})
 	if err != nil {
 		t.Fatalf("New не собрал церемонию: %v", err)
