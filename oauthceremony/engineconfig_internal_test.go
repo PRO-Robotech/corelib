@@ -172,6 +172,12 @@ type (
 	uncalledGrants             struct{ GrantRevoker }
 )
 
+// uncalledGrantIDHook — крючок чеканки идентификатора гранта, которого обход
+// тоже не вызывает. Вызов — громкое красное, как у портов выше.
+func uncalledGrantIDHook(context.Context) (string, error) {
+	panic("oauthceremony: the engine settings walk reached Config.NewGrantID")
+}
+
 // engineConfigOfNewCeremony собирает церемонию через New и достаёт настройки,
 // которые держит её движок. Предпосылка проверяется, а не предполагается:
 // другой вид движка или настроек означал бы, что проба судит не то.
@@ -192,6 +198,7 @@ func engineConfigOfNewCeremony(t *testing.T) *engine.Config {
 		MinParameterEntropy:       8,
 		PortTimeout:               2 * time.Second,
 		OperationTimeout:          5 * time.Second,
+		NewGrantID:                uncalledGrantIDHook,
 	}, Ports{
 		Clients:            uncalledClients{},
 		AuthorizationCodes: uncalledAuthorizationCodes{},

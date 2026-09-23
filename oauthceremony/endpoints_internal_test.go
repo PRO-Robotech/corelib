@@ -212,6 +212,7 @@ func endpointProbeConfig(authorize, token string) Config {
 		MinParameterEntropy:       8,
 		PortTimeout:               2 * time.Second,
 		OperationTimeout:          5 * time.Second,
+		NewGrantID:                uncalledGrantIDHook,
 	}
 }
 
