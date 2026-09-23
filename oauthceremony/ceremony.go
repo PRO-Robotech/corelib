@@ -656,6 +656,9 @@ func (c *Ceremony) CompleteAuthorization(ctx context.Context, intent Authorizati
 	if strings.TrimSpace(grant.Subject) == "" {
 		return AuthorizationResult{}, misuse("AuthorizationGrant.Subject is not named; a grant without a subject is not a grant")
 	}
+	if field, why := loginContextDefect(grant.SessionID, grant.ACR, grant.AuthTime, grant.Claims); field != "" {
+		return AuthorizationResult{}, misuse("AuthorizationGrant." + field + ": " + why)
+	}
 	if err := c.checkGrantWithinRequest(intent, grant); err != nil {
 		return AuthorizationResult{}, err
 	}
@@ -672,15 +675,19 @@ func (c *Ceremony) CompleteAuthorization(ctx context.Context, intent Authorizati
 
 	// Решение службы о сроках — ГРАНИЦА семейства, а не срок первого
 	// артефакта: срок каждому артефакту назначает движок в миг выпуска, а
-	// сеанс не даёт назначить его позже границы (ceremonySession).
+	// сеанс не даёт назначить его позже границы (ceremonySession). Контекст
+	// входа — снимок: сеанс семейства несёт его от кода до последнего оборота.
 	session := newSession()
-	if err := hydrateSession(session, SessionRecord{
-		Subject:  grant.Subject,
-		Username: grant.Username,
-		NotAfter: grant.ExpiresAt,
-		Claims:   grant.Claims,
-	}); err != nil {
-		return AuthorizationResult{}, err
+	if bad := hydrateSession(session, SessionRecord{
+		Subject:   grant.Subject,
+		Username:  grant.Username,
+		SessionID: grant.SessionID,
+		ACR:       grant.ACR,
+		AuthTime:  grant.AuthTime,
+		NotAfter:  grant.ExpiresAt,
+		Claims:    grant.Claims,
+	}); bad != nil {
+		return AuthorizationResult{}, bad
 	}
 
 	// Идентификатор гранта — службы (Config.NewGrantID). Он ставится запросу
@@ -1237,6 +1244,9 @@ func introspectionResultOf(responder engine.IntrospectionResponder) Introspectio
 	result.ClientID = rec.ClientID
 	result.Subject = rec.Session.Subject
 	result.Username = rec.Session.Username
+	result.SessionID = rec.Session.SessionID
+	result.ACR = rec.Session.ACR
+	result.AuthTime = rec.Session.AuthTime
 	result.Scopes = rec.GrantedScopes
 	result.Audiences = rec.GrantedAudiences
 	result.IssuedAt = rec.IssuedAt

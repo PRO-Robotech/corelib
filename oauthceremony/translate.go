@@ -356,8 +356,11 @@ func requesterFromGrant(ctx context.Context, clients func(context.Context, strin
 	if session == nil {
 		session = newSession()
 	}
-	if err := hydrateSession(session, rec.Session); err != nil {
-		return nil, err
+	// Порча записи сеанса заносится в ведомость по той же причине, что и
+	// запись без идентификатора: движок вправе огрубить отказ хранилища, и на
+	// интроспекции порченая запись читалась бы «токен неактивен».
+	if bad := hydrateSession(session, rec.Session); bad != nil {
+		return nil, note(ctx, bad)
 	}
 
 	return &engine.Request{
@@ -425,6 +428,20 @@ type ceremonySession struct {
 	// бывает: его отвергают при выдаче (checkGrantBounds) и при наполнении из
 	// хранилища (hydrateSession).
 	notAfter map[engine.TokenType]time.Time
+
+	// login — контекст входа, снятый на выдаче кода. Движок о нём не знает и
+	// его не пересчитывает: сеанс семейства переезжает от кода к паре и от
+	// пары к паре оборота, и контекст едет вместе с ним (Clone).
+	login loginContext
+}
+
+// loginContext — контекст входа в сеансе движка: сессия, уровень и момент
+// аутентификации. Одно значение, а не три поля сеанса: Clone копирует его
+// целиком, и поле, добавленное сюда, копию не минует.
+type loginContext struct {
+	sessionID string
+	acr       string
+	authTime  time.Time
 }
 
 // SetExpiresAt назначает срок, не позже границы семейства, и НИКОГДА не пишет
@@ -446,9 +463,9 @@ func (s *ceremonySession) SetExpiresAt(key engine.TokenType, exp time.Time) {
 	s.DefaultSession.SetExpiresAt(key, exp)
 }
 
-// Clone — копия вместе с границей. Унаследованная Clone копировала бы только
-// сеанс движка, и оборот, работающий на копии (`flow_refresh.go`), шёл бы
-// уже без границы.
+// Clone — копия вместе с границей и контекстом входа. Унаследованная Clone
+// копировала бы только сеанс движка, и оборот, работающий на копии
+// (`flow_refresh.go`), шёл бы уже без границы и без контекста входа.
 func (s *ceremonySession) Clone() engine.Session {
 	if s == nil {
 		return nil
@@ -457,7 +474,11 @@ func (s *ceremonySession) Clone() engine.Session {
 	if !ours || inner == nil {
 		inner = &engine.DefaultSession{}
 	}
-	out := &ceremonySession{DefaultSession: *inner, notAfter: make(map[engine.TokenType]time.Time, len(s.notAfter))}
+	out := &ceremonySession{
+		DefaultSession: *inner,
+		notAfter:       make(map[engine.TokenType]time.Time, len(s.notAfter)),
+		login:          s.login,
+	}
 	for k, v := range s.notAfter {
 		out.notAfter[k] = v
 	}
@@ -481,6 +502,9 @@ func sessionRecordOf(s engine.Session) SessionRecord {
 	if !ours {
 		return rec
 	}
+	rec.SessionID = cs.login.sessionID
+	rec.ACR = cs.login.acr
+	rec.AuthTime = cs.login.authTime
 	for kind, at := range cs.ExpiresAt {
 		rec.ExpiresAt[tokenKindOf(kind)] = at
 	}
@@ -523,20 +547,33 @@ func sessionRecordOf(s engine.Session) SessionRecord {
 // предъявленный — движок читает нулевой срок токена обновления как «без
 // срока». Трактовать ноль как «ключа нет» значило бы молча чинить чужую запись
 // в сторону меньшей строгости.
-func hydrateSession(s engine.Session, rec SessionRecord) error {
+//
+// # Контекст входа — из записи целиком, и без него записи нет
+//
+// Сессия, уровень и момент аутентификации — снимок выдачи кода, и сеанс берёт
+// их из записи как есть, ничего не пересчитывая. Запись без сессии, с уровнем
+// вне словаря, без момента или с ключом контекста входа в карте Claims такой
+// церемония не отдавала на хранение (loginContextDefect судит и выдачу), и она
+// — нарушение контракта порта, а не «контекста нет»: подставить его нечем, а
+// выданное без него несло бы в токене уровень, которого у входа не было.
+func hydrateSession(s engine.Session, rec SessionRecord) *ProtocolError {
 	cs, ours := s.(*ceremonySession)
 	if !ours {
 		return failf(CodeCeremonyMisuse, nil,
 			"The authorization engine asked to hydrate a session this package did not create.", "", "")
 	}
-	if err := checkStoredInstants("SessionRecord.NotAfter", rec.NotAfter); err != nil {
-		return err
+	if bad := checkStoredInstants("SessionRecord.NotAfter", rec.NotAfter); bad != nil {
+		return bad
 	}
-	if err := checkStoredInstants("SessionRecord.ExpiresAt", rec.ExpiresAt); err != nil {
-		return err
+	if bad := checkStoredInstants("SessionRecord.ExpiresAt", rec.ExpiresAt); bad != nil {
+		return bad
+	}
+	if field, why := loginContextDefect(rec.SessionID, rec.ACR, rec.AuthTime, rec.Claims); field != "" {
+		return contractBreach("SessionRecord."+field, why)
 	}
 	cs.Subject = rec.Subject
 	cs.Username = rec.Username
+	cs.login = loginContext{sessionID: rec.SessionID, acr: rec.ACR, authTime: rec.AuthTime}
 	cs.notAfter = make(map[engine.TokenType]time.Time, len(rec.NotAfter))
 	for kind, at := range rec.NotAfter {
 		cs.notAfter[engineTypeOf(kind)] = at
@@ -556,7 +593,7 @@ func hydrateSession(s engine.Session, rec SessionRecord) error {
 
 // checkStoredInstants отвергает нулевое время в карте сроков записи. Вид —
 // первый по порядку имени, чтобы текст отказа не зависел от порядка обхода.
-func checkStoredInstants(field string, instants map[TokenKind]time.Time) error {
+func checkStoredInstants(field string, instants map[TokenKind]time.Time) *ProtocolError {
 	for _, kind := range slices.Sorted(maps.Keys(instants)) {
 		if instants[kind].IsZero() {
 			return contractBreach(field, strconv.Quote(string(kind))+" is the zero time; "+

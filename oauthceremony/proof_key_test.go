@@ -135,10 +135,10 @@ func TestAuthorizationRequestWithoutAnS256ProofKeyIsRefused(t *testing.T) {
 				t.Fatalf("НЕ ВЫПОЛНИЛОСЬ: Authorize не выдал намерения (%v) — отказ некуда доставить", authorizeErr)
 			}
 
-			_, completeErr := ceremony.CompleteAuthorization(context.Background(), intent, oauthceremony.AuthorizationGrant{
+			_, completeErr := ceremony.CompleteAuthorization(context.Background(), intent, loggedIn(oauthceremony.AuthorizationGrant{
 				Subject:       testSubject,
 				GrantedScopes: []string{"openid", "offline"},
-			})
+			}))
 
 			if !tc.refused {
 				if authorizeErr != nil {

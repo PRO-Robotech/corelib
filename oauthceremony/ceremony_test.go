@@ -131,12 +131,12 @@ func issueCode(t *testing.T, ceremony *oauthceremony.Ceremony) (string, oauthcer
 		t.Fatalf("намерение называет клиента %q, ожидался %q", intent.ClientID(), testClientID)
 	}
 
-	result, err := ceremony.CompleteAuthorization(context.Background(), intent, oauthceremony.AuthorizationGrant{
+	result, err := ceremony.CompleteAuthorization(context.Background(), intent, loggedIn(oauthceremony.AuthorizationGrant{
 		Subject:       testSubject,
 		Username:      "console-operator",
 		GrantedScopes: []string{"openid", "offline"},
-		Claims:        map[string]any{"tenant": "b1g0000000000000a"},
-	})
+		Claims:        map[string]any{"tenant": testTenant},
+	}))
 	if err != nil {
 		t.Fatalf("CompleteAuthorization отказал: %v", err)
 	}
@@ -214,7 +214,7 @@ func TestAuthorizationCodeCeremonyRoundTrip(t *testing.T) {
 	if introspection.Subject != testSubject {
 		t.Errorf("интроспекция назвала субъекта %q, ожидался %q", introspection.Subject, testSubject)
 	}
-	if introspection.Claims["tenant"] != "b1g0000000000000a" {
+	if introspection.Claims["tenant"] != testTenant {
 		t.Errorf("утверждения сеанса не пережили обмен: %v", introspection.Claims)
 	}
 
@@ -506,18 +506,18 @@ func TestIntentFromAnotherCeremonyIsRejected(t *testing.T) {
 		t.Fatalf("Authorize отказал: %v", err)
 	}
 
-	_, err = second.CompleteAuthorization(context.Background(), intent, oauthceremony.AuthorizationGrant{
+	_, err = second.CompleteAuthorization(context.Background(), intent, loggedIn(oauthceremony.AuthorizationGrant{
 		Subject:       testSubject,
 		GrantedScopes: []string{"openid"},
-	})
+	}))
 	if !errors.Is(err, oauthceremony.ErrCeremonyMisuse) {
 		t.Fatalf("чужое намерение принято: %v", err)
 	}
 
 	var zero oauthceremony.AuthorizationIntent
-	if _, err := first.CompleteAuthorization(context.Background(), zero, oauthceremony.AuthorizationGrant{
+	if _, err := first.CompleteAuthorization(context.Background(), zero, loggedIn(oauthceremony.AuthorizationGrant{
 		Subject: testSubject,
-	}); !errors.Is(err, oauthceremony.ErrCeremonyMisuse) {
+	})); !errors.Is(err, oauthceremony.ErrCeremonyMisuse) {
 		t.Fatalf("нулевое намерение принято: %v", err)
 	}
 }
