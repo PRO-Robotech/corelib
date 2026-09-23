@@ -668,14 +668,20 @@ func TestNewRejectsAnEndpointThatIsNotAnAbsoluteAddress(t *testing.T) {
 	lawful := map[string]string{
 		"как в наборе":             "",
 		"с портом":                 "https://iam.example.net:8443/iam/v1/endpoint",
+		"с пустым портом":          "https://iam.example.net:/iam/v1/endpoint",
 		"на хосте, чужом издателю": "https://login.example.org/iam/v1/endpoint",
 	}
+	// «Порт без хоста» и «пустой порт без хоста» — близнецы «с портом» и «с
+	// пустым портом»: против них снято ровно имя хоста. Разбор кладёт порт в
+	// Host (`:8443`, `:`), и непустой Host у таких адресов хоста не означает.
 	spoiled := map[string]string{
 		"пустое":                     "",
 		"из пробелов":                "   ",
 		"относительное":              "/iam/v1/endpoint",
 		"без схемы":                  "iam.example.net/iam/v1/endpoint",
 		"без хоста":                  "https:///iam/v1/endpoint",
+		"порт без хоста":             "https://:8443/iam/v1/endpoint",
+		"пустой порт без хоста":      "https://:/iam/v1/endpoint",
 		"непрозрачное без хоста":     "https:iam.example.net/iam/v1/endpoint",
 		"со сведениями пользователя": "https://operator:secret@iam.example.net/iam/v1/endpoint",
 		"с запросом":                 "https://iam.example.net/iam/v1/endpoint?tenant=a",
@@ -723,6 +729,72 @@ func TestNewRejectsAnEndpointThatIsNotAnAbsoluteAddress(t *testing.T) {
 	t.Logf("перепись: полей %d · годных форм %d · негодных форм %d · случаев %d",
 		len(fields), len(lawful), len(spoiled), judged)
 	if judged != len(fields)*(len(lawful)+len(spoiled)) || judged == 0 {
+		t.Fatalf("НЕ ВЫПОЛНИЛОСЬ: осмотрено случаев %d", judged)
+	}
+}
+
+// TestNewRejectsAnIssuerWithoutAHost — издатель обязан быть абсолютным
+// адресом с именем хоста, и New отвергает адрес, где на месте хоста стоит
+// один порт, называя поле Config.Issuer.
+//
+// Отрицательные случаи — близнецы положительных с тем же портом: против
+// них снято ровно имя хоста.
+func TestNewRejectsAnIssuerWithoutAHost(t *testing.T) {
+	store := newMemoryPorts()
+	valid := oauthceremony.Config{
+		Issuer:                    testIssuer,
+		AuthorizationEndpoint:     testAuthorizationEndpoint,
+		TokenEndpoint:             testTokenEndpoint,
+		SigningSecret:             []byte("0123456789abcdef0123456789abcdef"),
+		AccessTokenLifespan:       time.Hour,
+		RefreshTokenLifespan:      24 * time.Hour,
+		AuthorizationCodeLifespan: 10 * time.Minute,
+		ScopeMatching:             oauthceremony.ScopeMatchingExact,
+		RefreshTokenIssuance:      oauthceremony.RefreshTokenIssuanceAlways,
+		SecretHashCost:            10,
+		MinParameterEntropy:       8,
+		PortTimeout:               time.Second,
+		OperationTimeout:          time.Second,
+	}
+
+	lawful := map[string]string{
+		"с портом":        "https://iam.example.net:8443",
+		"с пустым портом": "https://iam.example.net:",
+	}
+	spoiled := map[string]string{
+		"порт без хоста":        "https://:8443",
+		"пустой порт без хоста": "https://:",
+	}
+
+	var judged int
+	for name, value := range lawful {
+		t.Run("годное "+name, func(t *testing.T) {
+			cfg := valid
+			cfg.Issuer = value
+			if _, err := oauthceremony.New(cfg, store.ports()); err != nil {
+				t.Fatalf("годный издатель %q отвергнут: %v", value, err)
+			}
+		})
+		judged++
+	}
+	for name, value := range spoiled {
+		t.Run(name, func(t *testing.T) {
+			cfg := valid
+			cfg.Issuer = value
+			_, err := oauthceremony.New(cfg, store.ports())
+			if !errors.Is(err, oauthceremony.ErrCeremonyMisuse) {
+				t.Fatalf("издатель без хоста %q принят: %v", value, err)
+			}
+			if !strings.Contains(err.Error(), "Config.Issuer ") {
+				t.Fatalf("отказ не называет поле Config.Issuer: %v", err)
+			}
+			t.Logf("отказ: %v", err)
+		})
+		judged++
+	}
+	t.Logf("перепись: годных форм %d · негодных форм %d · случаев %d",
+		len(lawful), len(spoiled), judged)
+	if judged != len(lawful)+len(spoiled) || judged == 0 {
 		t.Fatalf("НЕ ВЫПОЛНИЛОСЬ: осмотрено случаев %d", judged)
 	}
 }

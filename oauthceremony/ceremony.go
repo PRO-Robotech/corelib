@@ -45,9 +45,17 @@ const (
 // решение, принятое за того, кто его не принимал; здесь такие решения
 // касаются сроков жизни токенов и строгости сопоставления областей.
 type Config struct {
-	// Issuer — кем выпущены артефакты. Обязан быть абсолютным адресом
-	// (`https://iam.example.net`). Уезжает в артефакты издателем — и только:
-	// адреса точек из него не выводятся, они названы полями ниже.
+	// Issuer — издатель. Обязан быть абсолютным адресом с именем хоста
+	// (`https://iam.example.net`). New передаёт его в настройки движка
+	// издателем токенов доступа и токенов личности (AccessTokenIssuer,
+	// IDTokenIssuer). Адреса точек из него не выводятся — они названы полями
+	// ниже.
+	//
+	// В артефакты, которые выпускает церемония, издатель НЕ попадает. Эти два
+	// поля движок читает лишь в стратегиях JWT, а New строит одну стратегию —
+	// HMAC: код авторизации, токен доступа и токен обновления у неё —
+	// непрозрачные строки без утверждений, и `iss` в них нести негде. Токена
+	// личности церемония не выдаёт (doc.go).
 	Issuer string
 
 	// AuthorizationEndpoint и TokenEndpoint — адреса точек авторизации и
@@ -65,8 +73,9 @@ type Config struct {
 	// сверка не исполняется — утверждение клиента церемония не обслуживает
 	// и движок отвергает его раньше (TestClientAssertionIsRefused).
 	//
-	// Каждый обязан быть абсолютным адресом с хостом, без сведений
-	// пользователя, строки запроса и фрагмента. Фрагмент адресу точки
+	// Каждый обязан быть абсолютным адресом с именем хоста (порт без имени,
+	// `https://:8443/…`, хостом не считается), без сведений пользователя,
+	// строки запроса и фрагмента. Фрагмент адресу точки
 	// запрещает сам RFC 6749 (§3.1, §3.2). Строку запроса он разрешает, и
 	// здесь она отвергается у обоих адресов: у точки авторизации церемония
 	// ставит параметры запроса строкой запроса поверх адреса, и принесённая
@@ -186,11 +195,6 @@ func New(cfg Config, ports Ports) (*Ceremony, error) {
 	}
 	if err := validatePorts(ports); err != nil {
 		return nil, err
-	}
-
-	issuer, err := url.Parse(cfg.Issuer)
-	if err != nil || !issuer.IsAbs() || issuer.Host == "" {
-		return nil, misuse("Config.Issuer must be an absolute URL with a host, for example https://iam.example.net")
 	}
 
 	engineCfg := &engine.Config{
@@ -357,6 +361,12 @@ func validateConfig(cfg *Config) error {
 	case cfg.OperationTimeout < cfg.PortTimeout:
 		return misuse("Config.OperationTimeout is shorter than Config.PortTimeout")
 	}
+	// Хост судится по имени (Hostname), а не по Host: у `https://:8443` разбор
+	// кладёт в Host один порт, и непустой Host хоста не означает.
+	issuer, err := url.Parse(cfg.Issuer)
+	if err != nil || !issuer.IsAbs() || issuer.Hostname() == "" {
+		return misuse("Config.Issuer must be an absolute URL with a host, for example https://iam.example.net")
+	}
 	if err := validateEndpoint("Config.AuthorizationEndpoint", cfg.AuthorizationEndpoint); err != nil {
 		return err
 	}
@@ -377,8 +387,10 @@ func validateEndpoint(field, value string) error {
 	if strings.ContainsAny(value, "?#") {
 		return misuse(field + " carries a query or a fragment; an endpoint here is a scheme, a host and a path only")
 	}
+	// Хост судится по имени, как у Config.Issuer: `https://:8443/…` и
+	// `https://:/…` несут в Host порт, а имени хоста не несут.
 	endpoint, err := url.Parse(value)
-	if err != nil || !endpoint.IsAbs() || endpoint.Host == "" {
+	if err != nil || !endpoint.IsAbs() || endpoint.Hostname() == "" {
 		return misuse(field + " must be an absolute URL with a scheme and a host")
 	}
 	if endpoint.User != nil {
