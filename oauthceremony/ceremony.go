@@ -45,10 +45,40 @@ const (
 // решение, принятое за того, кто его не принимал; здесь такие решения
 // касаются сроков жизни токенов и строгости сопоставления областей.
 type Config struct {
-	// Issuer — кем выпущены артефакты. Обязан быть абсолютным адресом
-	// (`https://iam.example.net`). Из него выводятся адреса точек,
-	// которые церемония подставляет в синтезированные запросы.
-	Issuer string
+	// AuthorizationEndpoint и TokenEndpoint — адреса точек авторизации и
+	// выдачи (RFC 6749 §3.1, §3.2), под которыми служба публикует
+	// церемонию, например `https://iam.example.net/iam/v1/authorize` и
+	// `https://iam.example.net/iam/v1/token`. Названы явно: путь, на котором
+	// служба публикует точки, — её решение, и ни из какого другого поля
+	// церемония его не выводит.
+	//
+	// Адрес точки авторизации — адрес запроса, который церемония подаёт
+	// движку от имени Authorize. Адрес точки выдачи — адрес запросов от имени
+	// Exchange, Introspect и Revoke (интроспекция и отзыв синтезируются на
+	// нём же) и значение TokenURL в настройках движка: с ним движок сверял бы
+	// `aud` утверждения клиента (RFC 7523 §3), но на путях церемонии эта
+	// сверка не исполняется — утверждение клиента церемония не обслуживает
+	// и движок отвергает его раньше (TestClientAssertionIsRefused).
+	//
+	// Каждый обязан быть абсолютным адресом с именем хоста (порт без имени,
+	// `https://:8443/…`, хостом не считается), без сведений пользователя,
+	// строки запроса и фрагмента, и записан так, как его получит движок:
+	// разбор и обратная запись адреса дают ту же строку. Адрес с пробелом,
+	// буквой не-ASCII или схемой в верхнем регистре разбирается, но в запросе к
+	// движку уехал бы в другом написании — экранированным или в нижнем
+	// регистре, — и адрес, который служба публикует, разошёлся бы с адресом, на
+	// который церемония подаёт запросы. Фрагмент адресу точки
+	// запрещает сам RFC 6749 (§3.1, §3.2). Строку запроса он разрешает, и
+	// здесь она отвергается у обоих адресов: у точки авторизации церемония
+	// ставит параметры запроса строкой запроса поверх адреса, и принесённая
+	// адресом строка слилась бы с ними; у точки выдачи её пришлось бы
+	// сохранять каждому клиенту и в `aud`, — контракт один на оба адреса, и
+	// он узкий. Сведения пользователя отвергаются потому, что адрес точки
+	// служба публикует клиентам, а учётные данные в публикуемом адресе —
+	// секрет в открытом виде; доказательство клиента приезжает заголовком
+	// или телом запроса (RFC 6749 §2.3.1), а не адресом.
+	AuthorizationEndpoint string
+	TokenEndpoint         string
 
 	// SigningSecret — ключ подписи артефактов. Не короче 32 байт: подпись
 	// HMAC-SHA256 на более коротком ключе не даёт заявленной стойкости.
@@ -137,9 +167,6 @@ type Ceremony struct {
 	// для одного: отозвать семейство повторённого кода или токена обновления
 	// ВНЕ единицы работы движка (см. revokeReplayedFamily).
 	bridge *storageBridge
-
-	authorizeURL string
-	tokenURL     string
 }
 
 // New собирает церемонию.
@@ -155,14 +182,12 @@ func New(cfg Config, ports Ports) (*Ceremony, error) {
 		return nil, err
 	}
 
-	issuer, err := url.Parse(cfg.Issuer)
-	if err != nil || !issuer.IsAbs() || issuer.Host == "" {
-		return nil, misuse("Config.Issuer must be an absolute URL with a host, for example https://iam.example.net")
-	}
-
-	authorizeURL := issuer.JoinPath("oauth2", "authorize").String()
-	tokenURL := issuer.JoinPath("oauth2", "token").String()
-
+	// Издателя (AccessTokenIssuer, IDTokenIssuer) настройки не называют: его
+	// читают лишь стратегии JWT движка, а New строит одну стратегию — HMAC
+	// (ниже), чьи код авторизации, токен доступа и токен обновления —
+	// непрозрачные строки без утверждений; `iss` в них нести негде, а токена
+	// личности церемония не выдаёт (doc.go).
+	//
 	// PKCE (RFC 7636) обязателен ВСЕМ клиентам и только с методом S256
 	// (EnforcePKCE, EnforcePKCEForPublicClients, EnablePKCEPlainChallengeMethod
 	// ниже): запись кода без привязки невыразима (AuthorizationCodeRecord), и
@@ -182,9 +207,7 @@ func New(cfg Config, ports Ports) (*Ceremony, error) {
 		EnforcePKCEForPublicClients:    true,
 		EnablePKCEPlainChallengeMethod: false,
 		SendDebugMessagesToClients:     false,
-		AccessTokenIssuer:              cfg.Issuer,
-		IDTokenIssuer:                  cfg.Issuer,
-		TokenURL:                       tokenURL,
+		TokenURL:                       cfg.TokenEndpoint,
 		RefreshTokenScopes:             refreshTokenScopesOf(cfg),
 		// Поля запроса авторизации, доезжающие до записи кода. Сверх
 		// умолчания движка (`code`, `redirect_uri`) — привязка PKCE, вызов и
@@ -273,11 +296,9 @@ func New(cfg Config, ports Ports) (*Ceremony, error) {
 	engineCfg.RevocationHandlers.Append(revoker)
 
 	return &Ceremony{
-		provider:     engine.NewOAuth2Provider(clientStore, engineCfg),
-		cfg:          cfg,
-		bridge:       bridge,
-		authorizeURL: authorizeURL,
-		tokenURL:     tokenURL,
+		provider: engine.NewOAuth2Provider(clientStore, engineCfg),
+		cfg:      cfg,
+		bridge:   bridge,
 	}, nil
 }
 
@@ -303,8 +324,6 @@ func validateConfig(cfg *Config) error {
 		minEntropy       = 8
 	)
 	switch {
-	case strings.TrimSpace(cfg.Issuer) == "":
-		return misuse("Config.Issuer is not named")
 	case len(cfg.SigningSecret) < minSigningSecret:
 		return misuse("Config.SigningSecret is shorter than 32 bytes")
 	case cfg.AccessTokenLifespan <= 0:
@@ -333,6 +352,43 @@ func validateConfig(cfg *Config) error {
 		return misuse("Config.OperationTimeout is not a positive duration")
 	case cfg.OperationTimeout < cfg.PortTimeout:
 		return misuse("Config.OperationTimeout is shorter than Config.PortTimeout")
+	}
+	if err := validateEndpoint("Config.AuthorizationEndpoint", cfg.AuthorizationEndpoint); err != nil {
+		return err
+	}
+	return validateEndpoint("Config.TokenEndpoint", cfg.TokenEndpoint)
+}
+
+// validateEndpoint отвергает адрес точки, который церемония не может подать
+// движку как есть. Отказ называет поле: проверка у двух адресов одна, и без
+// имени поля оператор не узнал бы, какой из них негоден.
+func validateEndpoint(field, value string) error {
+	if strings.TrimSpace(value) == "" {
+		return misuse(field + " is not named")
+	}
+	// Судится сама строка, а не разобранное: пустые строку запроса и фрагмент
+	// (`…/token?`, `…/token#`) разбор не сохраняет, а адрес с ними — второе
+	// написание того же адреса, и параметры, поставленные поверх него, они
+	// испортили бы так же, как непустые.
+	if strings.ContainsAny(value, "?#") {
+		return misuse(field + " carries a query or a fragment; an endpoint here is a scheme, a host and a path only")
+	}
+	// Хост судится по имени (Hostname), а не по Host: у `https://:8443/…` и
+	// `https://:/…` разбор кладёт в Host один порт, и непустой Host хоста не
+	// означает.
+	endpoint, err := url.Parse(value)
+	if err != nil || !endpoint.IsAbs() || endpoint.Hostname() == "" {
+		return misuse(field + " must be an absolute URL with a scheme and a host")
+	}
+	if endpoint.User != nil {
+		return misuse(field + " carries user information; an endpoint is an address published to clients, and credentials in it are a secret in the open")
+	}
+	// Запрос к движку церемония строит из этой строки, и движок получает
+	// адрес в том написании, какое даёт обратная запись разобранного. Строка,
+	// которая с ним не совпадает, — второе написание адреса: служба
+	// опубликовала бы одно, а запросы уходили бы на другое.
+	if endpoint.String() != value {
+		return misuse(field + " is not written the way it is served: parsing and re-serialising it changes it (whitespace, a non-ASCII character or an upper-case scheme); write the address percent-encoded and in lower case")
 	}
 	return nil
 }
@@ -501,7 +557,7 @@ func (c *Ceremony) Authorize(ctx context.Context, req AuthorizationRequest) (Aut
 		return AuthorizationIntent{}, err
 	}
 
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodGet, c.authorizeURL+"?"+form.Encode(), nil)
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodGet, c.cfg.AuthorizationEndpoint+"?"+form.Encode(), nil)
 	if err != nil {
 		return AuthorizationIntent{}, failf(CodeCeremonyMisuse, err,
 			"The authorization request could not be encoded.", "", err.Error())
@@ -913,7 +969,7 @@ func (c *Ceremony) postForm(ctx context.Context, form url.Values, clientID, clie
 		return nil, misuse("TokenRequest.AuthMethod is not one of the declared methods")
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.tokenURL, strings.NewReader(form.Encode()))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.cfg.TokenEndpoint, strings.NewReader(form.Encode()))
 	if err != nil {
 		return nil, failf(CodeCeremonyMisuse, err, "The token request could not be encoded.", "", err.Error())
 	}

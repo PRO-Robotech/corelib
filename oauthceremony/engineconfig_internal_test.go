@@ -179,7 +179,8 @@ func engineConfigOfNewCeremony(t *testing.T) *engine.Config {
 	t.Helper()
 
 	c, err := New(Config{
-		Issuer:                    "https://iam.example.net",
+		AuthorizationEndpoint:     "https://iam.example.net/iam/v1/authorize",
+		TokenEndpoint:             "https://iam.example.net/iam/v1/token",
 		SigningSecret:             []byte("0123456789abcdef0123456789abcdef"),
 		AccessTokenLifespan:       time.Hour,
 		RefreshTokenLifespan:      24 * time.Hour,
