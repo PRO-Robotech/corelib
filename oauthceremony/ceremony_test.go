@@ -28,13 +28,18 @@ import (
 )
 
 const (
-	testIssuer      = "https://iam.example.net"
-	testClientID    = "svc-console"
-	testSecret      = "correct-horse-battery-staple"
-	testRedirectURI = "https://console.example.net/oauth2/callback"
-	testSubject     = "usr-7f3c9a1e"
-	testState       = "s6BhdRkqt3s6BhdRkqt3s6BhdRkqt3xx"
-	testVerifier    = "dBjftJeZ4CVPmB92K27uhbUJU1p1r_wW1gFWFOEjXkQ"
+	testIssuer = "https://iam.example.net"
+	// Адреса точек нарочно лежат ВНЕ пути, который дал бы вывод из издателя
+	// (`<издатель>/oauth2/...`): проба, собранная на них, не может пройти за
+	// счёт совпадения назначенного с выведенным.
+	testAuthorizationEndpoint = "https://iam.example.net/iam/v1/authorize"
+	testTokenEndpoint         = "https://iam.example.net/iam/v1/token"
+	testClientID              = "svc-console"
+	testSecret                = "correct-horse-battery-staple"
+	testRedirectURI           = "https://console.example.net/oauth2/callback"
+	testSubject               = "usr-7f3c9a1e"
+	testState                 = "s6BhdRkqt3s6BhdRkqt3s6BhdRkqt3xx"
+	testVerifier              = "dBjftJeZ4CVPmB92K27uhbUJU1p1r_wW1gFWFOEjXkQ"
 )
 
 // newTestCeremony собирает церемонию с полным набором настроек. Ни одно поле
@@ -44,6 +49,8 @@ func newTestCeremony(t *testing.T, ports oauthceremony.Ports, tweaks ...func(*oa
 
 	cfg := oauthceremony.Config{
 		Issuer:                          testIssuer,
+		AuthorizationEndpoint:           testAuthorizationEndpoint,
+		TokenEndpoint:                   testTokenEndpoint,
 		SigningSecret:                   []byte("0123456789abcdef0123456789abcdef"),
 		AccessTokenLifespan:             time.Hour,
 		RefreshTokenLifespan:            24 * time.Hour,
@@ -387,7 +394,7 @@ func TestClientAssertionIsRefused(t *testing.T) {
 	assertion, err := jwt.NewWithClaims(jwt.SigningMethodRS256, jwt.MapClaims{
 		"iss": testClientID,
 		"sub": testClientID,
-		"aud": testIssuer + "/oauth2/token",
+		"aud": testTokenEndpoint,
 		"jti": "assertion-probe-1",
 		"exp": time.Now().Add(time.Minute).Unix(),
 	}).SignedString(key)
@@ -566,6 +573,8 @@ func TestNewRejectsEveryUnnamedSetting(t *testing.T) {
 	store := newMemoryPorts()
 	valid := oauthceremony.Config{
 		Issuer:                    testIssuer,
+		AuthorizationEndpoint:     testAuthorizationEndpoint,
+		TokenEndpoint:             testTokenEndpoint,
 		SigningSecret:             []byte("0123456789abcdef0123456789abcdef"),
 		AccessTokenLifespan:       time.Hour,
 		RefreshTokenLifespan:      24 * time.Hour,
@@ -625,11 +634,106 @@ func TestNewRejectsEveryUnnamedSetting(t *testing.T) {
 	}
 }
 
+// TestNewRejectsAnEndpointThatIsNotAnAbsoluteAddress — адреса точек
+// авторизации и выдачи названы явно, и New отвергает каждое из них, если оно
+// не абсолютный адрес с хостом и без запроса, фрагмента и сведений
+// пользователя, — поимённо, называя ровно то поле, которое испорчено.
+//
+// Положительные близнецы — те же настройки с годным адресом, в том числе с
+// портом и на хосте, отличном от издателя: проба не имеет права отвергать
+// законное. Каждый отрицательный случай меняет против годного набора ровно
+// один факт — значение одного поля.
+func TestNewRejectsAnEndpointThatIsNotAnAbsoluteAddress(t *testing.T) {
+	store := newMemoryPorts()
+	valid := oauthceremony.Config{
+		Issuer:                    testIssuer,
+		AuthorizationEndpoint:     testAuthorizationEndpoint,
+		TokenEndpoint:             testTokenEndpoint,
+		SigningSecret:             []byte("0123456789abcdef0123456789abcdef"),
+		AccessTokenLifespan:       time.Hour,
+		RefreshTokenLifespan:      24 * time.Hour,
+		AuthorizationCodeLifespan: 10 * time.Minute,
+		ScopeMatching:             oauthceremony.ScopeMatchingExact,
+		RefreshTokenIssuance:      oauthceremony.RefreshTokenIssuanceAlways,
+		SecretHashCost:            10,
+		MinParameterEntropy:       8,
+		PortTimeout:               time.Second,
+		OperationTimeout:          time.Second,
+	}
+
+	fields := map[string]func(*oauthceremony.Config, string){
+		"Config.AuthorizationEndpoint": func(c *oauthceremony.Config, v string) { c.AuthorizationEndpoint = v },
+		"Config.TokenEndpoint":         func(c *oauthceremony.Config, v string) { c.TokenEndpoint = v },
+	}
+	lawful := map[string]string{
+		"как в наборе":             "",
+		"с портом":                 "https://iam.example.net:8443/iam/v1/endpoint",
+		"на хосте, чужом издателю": "https://login.example.org/iam/v1/endpoint",
+	}
+	spoiled := map[string]string{
+		"пустое":                     "",
+		"из пробелов":                "   ",
+		"относительное":              "/iam/v1/endpoint",
+		"без схемы":                  "iam.example.net/iam/v1/endpoint",
+		"без хоста":                  "https:///iam/v1/endpoint",
+		"непрозрачное без хоста":     "https:iam.example.net/iam/v1/endpoint",
+		"со сведениями пользователя": "https://operator:secret@iam.example.net/iam/v1/endpoint",
+		"с запросом":                 "https://iam.example.net/iam/v1/endpoint?tenant=a",
+		"с пустым запросом":          "https://iam.example.net/iam/v1/endpoint?",
+		"с фрагментом":               "https://iam.example.net/iam/v1/endpoint#part",
+		"с пустым фрагментом":        "https://iam.example.net/iam/v1/endpoint#",
+		"неразбираемое":              "https://iam.example.net:port/iam/v1/endpoint",
+	}
+
+	var judged int
+	for field, set := range fields {
+		for name, value := range lawful {
+			t.Run(field+"/годное "+name, func(t *testing.T) {
+				cfg := valid
+				if value != "" {
+					set(&cfg, value)
+				}
+				if _, err := oauthceremony.New(cfg, store.ports()); err != nil {
+					t.Fatalf("годный адрес %q в %s отвергнут: %v", value, field, err)
+				}
+			})
+			judged++
+		}
+		for name, value := range spoiled {
+			t.Run(field+"/"+name, func(t *testing.T) {
+				cfg := valid
+				set(&cfg, value)
+				_, err := oauthceremony.New(cfg, store.ports())
+				if !errors.Is(err, oauthceremony.ErrCeremonyMisuse) {
+					t.Fatalf("негодный адрес %q в %s принят: %v", value, field, err)
+				}
+				if !strings.Contains(err.Error(), field+" ") {
+					t.Fatalf("отказ не называет испорченное поле %s: %v", field, err)
+				}
+				for other := range fields {
+					if other != field && strings.Contains(err.Error(), other) {
+						t.Fatalf("отказ называет не то поле: испорчено %s, названо %s: %v", field, other, err)
+					}
+				}
+				t.Logf("отказ: %v", err)
+			})
+			judged++
+		}
+	}
+	t.Logf("перепись: полей %d · годных форм %d · негодных форм %d · случаев %d",
+		len(fields), len(lawful), len(spoiled), judged)
+	if judged != len(fields)*(len(lawful)+len(spoiled)) || judged == 0 {
+		t.Fatalf("НЕ ВЫПОЛНИЛОСЬ: осмотрено случаев %d", judged)
+	}
+}
+
 // TestNewRejectsEveryMissingPort — порт, которого нет, называется поимённо.
 func TestNewRejectsEveryMissingPort(t *testing.T) {
 	store := newMemoryPorts()
 	cfg := oauthceremony.Config{
 		Issuer:                    testIssuer,
+		AuthorizationEndpoint:     testAuthorizationEndpoint,
+		TokenEndpoint:             testTokenEndpoint,
 		SigningSecret:             []byte("0123456789abcdef0123456789abcdef"),
 		AccessTokenLifespan:       time.Hour,
 		RefreshTokenLifespan:      24 * time.Hour,
