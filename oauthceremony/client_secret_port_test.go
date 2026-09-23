@@ -224,3 +224,66 @@ func TestPresentedSecretIsNeverPrinted(t *testing.T) {
 	}
 	t.Logf("перепись: печатей %d (глаголов %d)", len(rendered), len(verbs))
 }
+
+// failingDirectory — справочник клиентов, который не отвечает: сбой хранилища,
+// а не «клиента нет».
+type failingDirectory struct{}
+
+func (failingDirectory) LookupClient(context.Context, string) (oauthceremony.ClientRegistration, error) {
+	return oauthceremony.ClientRegistration{}, errors.New("client directory: connection refused")
+}
+
+// TestClientDirectoryFailureFailsTheOperation — отказ справочника клиентов —
+// отказ ОПЕРАЦИИ, а не «клиент не доказан» и не «клиента нет»: у второго
+// порта доказательства правило то же, что у порта сверки. Иначе сбой хранилища
+// выглядел бы для клиента как отказ его доказательству, а для журнала службы —
+// как поток неверных секретов. Правило держится и на точке авторизации:
+// «справочник не ответил» там тоже не «клиента нет».
+//
+// Близнец — та же церемония над тем же хранилищем с исправным справочником:
+// операция исполняется. Против него меняется ровно один факт — порт
+// справочника.
+func TestClientDirectoryFailureFailsTheOperation(t *testing.T) {
+	operations := authenticatedOperations()
+	operations = append(operations, authenticatedOperation{
+		name:    "запрос авторизации",
+		prepare: func(*testing.T, *oauthceremony.Ceremony) string { return "" },
+		perform: func(ceremony *oauthceremony.Ceremony, _ string, _ clientProof) (bool, error) {
+			intent, err := ceremony.Authorize(context.Background(), authorizeRequest())
+			return err == nil && intent.Issued(), err
+		},
+	})
+
+	for _, op := range operations {
+		for _, directoryDown := range []bool{false, true} {
+			name := op.name + "/близнец: справочник исправен"
+			if directoryDown {
+				name = op.name + "/справочник не отвечает"
+			}
+			t.Run(name, func(t *testing.T) {
+				store := newMemoryPorts()
+				registerTestClient(t, store)
+				subject := op.prepare(t, newTestCeremony(t, store.ports()))
+
+				ports := store.ports()
+				if directoryDown {
+					ports.Clients = failingDirectory{}
+				}
+				done, err := op.perform(newTestCeremony(t, ports), subject, rightProof())
+
+				if !directoryDown {
+					if !done || err != nil {
+						t.Fatalf("операция не исполнилась: исполнилась=%v, отказ %v", done, err)
+					}
+					return
+				}
+				if done || err == nil {
+					t.Fatalf("операция исполнилась при отказавшем справочнике: %v", err)
+				}
+				if got := oauthceremony.CodeOf(err); got != oauthceremony.CodeServerError {
+					t.Errorf("отказ справочника назван случаем %v, ожидался %v: %v", got, oauthceremony.CodeServerError, err)
+				}
+			})
+		}
+	}
+}

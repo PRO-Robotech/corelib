@@ -174,6 +174,14 @@ func pairEngine(ctx context.Context, ours *ProtocolError, engineSentinel error) 
 //
 // Клиент, о котором спросили, записывается в ведомость операции: по ней хешер
 // церемонии узнаёт, чей секрет сверять.
+//
+// # Отказ справочника — отказ операции
+//
+// Справочник, который не ответил, — не «клиента нет» и не «клиент не доказан»:
+// движок сжимает всякий отказ этого вызова в отказ доказательства (на
+// интроспекции — не оборачивая), и сбой хранилища выглядел бы потоком
+// неверных секретов. Поэтому отказ пишется в ведомость операции любым случаем,
+// и операция отвечает им, как отказом порта сверки (verifyClientSecret).
 func (b *storageBridge) GetClient(ctx context.Context, id string) (engine.Client, error) {
 	ctx, cancel := b.deadline(ctx)
 	defer cancel()
@@ -189,7 +197,8 @@ func (b *storageBridge) GetClient(ctx context.Context, id string) (engine.Client
 		case ours.Code == CodeGrantNotFound:
 			return nil, pairEngine(ctx, ours, engine.ErrNotFound)
 		default:
-			return nil, note(ctx, ours)
+			notes.record(ours)
+			return nil, ours
 		}
 	}
 	notes.noteClientClaim(id, true)
