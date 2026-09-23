@@ -45,25 +45,12 @@ const (
 // решение, принятое за того, кто его не принимал; здесь такие решения
 // касаются сроков жизни токенов и строгости сопоставления областей.
 type Config struct {
-	// Issuer — издатель. Обязан быть абсолютным адресом с именем хоста
-	// (`https://iam.example.net`). New передаёт его в настройки движка
-	// издателем токенов доступа и токенов личности (AccessTokenIssuer,
-	// IDTokenIssuer). Адреса точек из него не выводятся — они названы полями
-	// ниже.
-	//
-	// В артефакты, которые выпускает церемония, издатель НЕ попадает. Эти два
-	// поля движок читает лишь в стратегиях JWT, а New строит одну стратегию —
-	// HMAC: код авторизации, токен доступа и токен обновления у неё —
-	// непрозрачные строки без утверждений, и `iss` в них нести негде. Токена
-	// личности церемония не выдаёт (doc.go).
-	Issuer string
-
 	// AuthorizationEndpoint и TokenEndpoint — адреса точек авторизации и
 	// выдачи (RFC 6749 §3.1, §3.2), под которыми служба публикует
 	// церемонию, например `https://iam.example.net/iam/v1/authorize` и
-	// `https://iam.example.net/iam/v1/token`. Названы явно, а не выводятся
-	// из Issuer: путь, на котором служба публикует точки, — её решение, и
-	// вывод из издателя его не знает.
+	// `https://iam.example.net/iam/v1/token`. Названы явно: путь, на котором
+	// служба публикует точки, — её решение, и ни из какого другого поля
+	// церемония его не выводит.
 	//
 	// Адрес точки авторизации — адрес запроса, который церемония подаёт
 	// движку от имени Authorize. Адрес точки выдачи — адрес запросов от имени
@@ -75,7 +62,12 @@ type Config struct {
 	//
 	// Каждый обязан быть абсолютным адресом с именем хоста (порт без имени,
 	// `https://:8443/…`, хостом не считается), без сведений пользователя,
-	// строки запроса и фрагмента. Фрагмент адресу точки
+	// строки запроса и фрагмента, и записан так, как его получит движок:
+	// разбор и обратная запись адреса дают ту же строку. Адрес с пробелом,
+	// буквой не-ASCII или схемой в верхнем регистре разбирается, но в запросе к
+	// движку уехал бы в другом написании — экранированным или в нижнем
+	// регистре, — и адрес, который служба публикует, разошёлся бы с адресом, на
+	// который церемония подаёт запросы. Фрагмент адресу точки
 	// запрещает сам RFC 6749 (§3.1, §3.2). Строку запроса он разрешает, и
 	// здесь она отвергается у обоих адресов: у точки авторизации церемония
 	// ставит параметры запроса строкой запроса поверх адреса, и принесённая
@@ -197,6 +189,11 @@ func New(cfg Config, ports Ports) (*Ceremony, error) {
 		return nil, err
 	}
 
+	// Издателя (AccessTokenIssuer, IDTokenIssuer) настройки не называют: его
+	// читают лишь стратегии JWT движка, а New строит одну стратегию — HMAC
+	// (ниже), чьи код авторизации, токен доступа и токен обновления —
+	// непрозрачные строки без утверждений; `iss` в них нести негде, а токена
+	// личности церемония не выдаёт (doc.go).
 	engineCfg := &engine.Config{
 		AccessTokenLifespan:            cfg.AccessTokenLifespan,
 		RefreshTokenLifespan:           cfg.RefreshTokenLifespan,
@@ -211,8 +208,6 @@ func New(cfg Config, ports Ports) (*Ceremony, error) {
 		EnforcePKCEForPublicClients:    cfg.RequireProofKeyForPublicClients,
 		EnablePKCEPlainChallengeMethod: false,
 		SendDebugMessagesToClients:     false,
-		AccessTokenIssuer:              cfg.Issuer,
-		IDTokenIssuer:                  cfg.Issuer,
 		TokenURL:                       cfg.TokenEndpoint,
 		RefreshTokenScopes:             refreshTokenScopesOf(cfg),
 		// Поля запроса авторизации, доезжающие до записи кода. Сверх
@@ -330,8 +325,6 @@ func validateConfig(cfg *Config) error {
 		minEntropy       = 8
 	)
 	switch {
-	case strings.TrimSpace(cfg.Issuer) == "":
-		return misuse("Config.Issuer is not named")
 	case len(cfg.SigningSecret) < minSigningSecret:
 		return misuse("Config.SigningSecret is shorter than 32 bytes")
 	case cfg.AccessTokenLifespan <= 0:
@@ -361,12 +354,6 @@ func validateConfig(cfg *Config) error {
 	case cfg.OperationTimeout < cfg.PortTimeout:
 		return misuse("Config.OperationTimeout is shorter than Config.PortTimeout")
 	}
-	// Хост судится по имени (Hostname), а не по Host: у `https://:8443` разбор
-	// кладёт в Host один порт, и непустой Host хоста не означает.
-	issuer, err := url.Parse(cfg.Issuer)
-	if err != nil || !issuer.IsAbs() || issuer.Hostname() == "" {
-		return misuse("Config.Issuer must be an absolute URL with a host, for example https://iam.example.net")
-	}
 	if err := validateEndpoint("Config.AuthorizationEndpoint", cfg.AuthorizationEndpoint); err != nil {
 		return err
 	}
@@ -387,14 +374,22 @@ func validateEndpoint(field, value string) error {
 	if strings.ContainsAny(value, "?#") {
 		return misuse(field + " carries a query or a fragment; an endpoint here is a scheme, a host and a path only")
 	}
-	// Хост судится по имени, как у Config.Issuer: `https://:8443/…` и
-	// `https://:/…` несут в Host порт, а имени хоста не несут.
+	// Хост судится по имени (Hostname), а не по Host: у `https://:8443/…` и
+	// `https://:/…` разбор кладёт в Host один порт, и непустой Host хоста не
+	// означает.
 	endpoint, err := url.Parse(value)
 	if err != nil || !endpoint.IsAbs() || endpoint.Hostname() == "" {
 		return misuse(field + " must be an absolute URL with a scheme and a host")
 	}
 	if endpoint.User != nil {
 		return misuse(field + " carries user information; an endpoint is an address published to clients, and credentials in it are a secret in the open")
+	}
+	// Запрос к движку церемония строит из этой строки, и движок получает
+	// адрес в том написании, какое даёт обратная запись разобранного. Строка,
+	// которая с ним не совпадает, — второе написание адреса: служба
+	// опубликовала бы одно, а запросы уходили бы на другое.
+	if endpoint.String() != value {
+		return misuse(field + " is not written the way it is served: parsing and re-serialising it changes it (whitespace, a non-ASCII character or an upper-case scheme); write the address percent-encoded and in lower case")
 	}
 	return nil
 }

@@ -2,8 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // endpoints_internal_test.go — адреса точек авторизации и выдачи, которые
-// церемония отдаёт движку, — ровно те, что названы в Config, и издатель на них
-// не влияет.
+// церемония отдаёт движку, — ровно те, что названы в Config.
 //
 // Судятся оба места, где адрес доезжает до движка:
 //
@@ -35,8 +34,8 @@ import (
 	engine "github.com/PRO-Robotech/corelib/internal/oauth2"
 )
 
-// recordedRequest — запрос, поданный движку: точка входа движка, метод и
-// адрес без строки запроса.
+// recordedRequest — запрос, поданный движку: точка входа движка, метод, адрес
+// без строки запроса и сама строка запроса — отдельно от адреса.
 type recordedRequest struct {
 	entry   string
 	method  string
@@ -81,39 +80,39 @@ func (r *requestAddressRecorder) NewRevocationRequest(_ context.Context, req *ht
 	return r.record("NewRevocationRequest", req)
 }
 
-// TestEndpointsReachTheEngineAsNamedInConfig — издатель, чей путь отличен от
-// адресов точек, не меняет ни TokenURL движка, ни адресов синтезированных
-// запросов: они равны значениям из Config.
+// TestEndpointsReachTheEngineAsNamedInConfig — TokenURL движка и адреса
+// синтезированных запросов равны значениям из Config, какими бы они ни были.
 //
-// Первый случай — законный близнец: адреса совпадают с тем, что дал бы вывод
-// из издателя без пути, и проба обязана молчать при любом способе получить
-// адрес. Второй меняет против него ровно один факт — путь издателя. Третий —
-// адреса, под которыми служба доступа публикует церемонию на деле: вне пути
-// издателя вовсе.
+// Случаи различаются тем, чего церемония не вправе подставить сама: путём
+// (`/oauth2/...` и `/iam/v1/...` — последний служба доступа публикует на
+// деле), хостом и портом (точки на разных хостах) и написанием (экранированные
+// знаки уезжают движку как названы, а не раскрытыми). Константа, вывод из
+// одного поля или из хоста совпали бы самое большее с одним из них.
 func TestEndpointsReachTheEngineAsNamedInConfig(t *testing.T) {
 	cases := map[string]struct {
-		issuer, authorize, token string
+		authorize, token string
 	}{
-		"издатель без пути, адреса на его корне": {
-			issuer:    "https://iam.example.net",
+		"на корне хоста": {
 			authorize: "https://iam.example.net/oauth2/authorize",
 			token:     "https://iam.example.net/oauth2/token",
 		},
-		"издатель с путём, адреса на корне хоста": {
-			issuer:    "https://iam.example.net/realms/platform",
-			authorize: "https://iam.example.net/oauth2/authorize",
-			token:     "https://iam.example.net/oauth2/token",
-		},
-		"адреса вне пути издателя": {
-			issuer:    "https://iam.example.net",
+		"под путём службы доступа": {
 			authorize: "https://iam.example.net/iam/v1/authorize",
 			token:     "https://iam.example.net/iam/v1/token",
+		},
+		"на разных хостах, с портом": {
+			authorize: "https://login.example.org/iam/v1/authorize",
+			token:     "https://iam.example.net:8443/iam/v1/token",
+		},
+		"с экранированными знаками": {
+			authorize: "https://iam.example.net/iam%20v1/%D1%82%D0%BE%D1%87%D0%BA%D0%B0",
+			token:     "https://iam.example.net/iam%2Fv1/token",
 		},
 	}
 
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
-			c, err := New(endpointProbeConfig(tc.issuer, tc.authorize, tc.token), uncalledPorts())
+			c, err := New(endpointProbeConfig(tc.authorize, tc.token), uncalledPorts())
 			if err != nil {
 				t.Fatalf("НЕ ВЫПОЛНИЛОСЬ: New не собрал церемонию: %v", err)
 			}
@@ -131,10 +130,6 @@ func TestEndpointsReachTheEngineAsNamedInConfig(t *testing.T) {
 			}
 			if got := settings.GetTokenURLs(context.Background()); !slices.Equal(got, []string{tc.token}) {
 				t.Errorf("GetTokenURLs движка %q, назначено Config.TokenEndpoint %q", got, tc.token)
-			}
-			if settings.AccessTokenIssuer != tc.issuer || settings.IDTokenIssuer != tc.issuer {
-				t.Errorf("издатель в настройках движка %q/%q, назначено Config.Issuer %q",
-					settings.AccessTokenIssuer, settings.IDTokenIssuer, tc.issuer)
 			}
 
 			recorder := &requestAddressRecorder{OAuth2Provider: c.provider}
@@ -202,9 +197,8 @@ func driveEverySynthesizedRequest(t *testing.T, c *Ceremony) {
 	}
 }
 
-func endpointProbeConfig(issuer, authorize, token string) Config {
+func endpointProbeConfig(authorize, token string) Config {
 	return Config{
-		Issuer:                          issuer,
 		AuthorizationEndpoint:           authorize,
 		TokenEndpoint:                   token,
 		SigningSecret:                   []byte("0123456789abcdef0123456789abcdef"),
