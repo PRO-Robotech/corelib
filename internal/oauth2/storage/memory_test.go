@@ -1,0 +1,62 @@
+// Copyright © 2024 Ory Corp
+// SPDX-License-Identifier: Apache-2.0
+// Изменено PRO-Robotech (modified by PRO-Robotech): перечень изменений — internal/oauth2/PROVENANCE.md.
+
+package storage
+
+import (
+	"context"
+	"errors"
+	"testing"
+
+	fosite "github.com/PRO-Robotech/corelib/internal/oauth2"
+)
+
+func TestMemoryStore_Authenticate(t *testing.T) {
+	// Правка Kacho: поле `usersMutex sync.RWMutex` убрано из таблицы. Во всех её
+	// случаях оно нулевое, а хранение мьютекса ПО ЗНАЧЕНИЮ заставляло `go vet`
+	// (copylocks) краснеть дважды: на копии в `range` и на копии в литерале
+	// `MemoryStore`. Нулевой мьютекс у `MemoryStore` и так готов к работе.
+	type fields struct {
+		Users map[string]MemoryUserRelation
+	}
+	type args struct {
+		in0    context.Context
+		name   string
+		secret string
+	}
+	tests := []struct {
+		name    string
+		fields  fields
+		args    args
+		wantErr error
+	}{
+		{
+			name: "invalid_password",
+			args: args{
+				name:   "peter",
+				secret: "invalid",
+			},
+			fields: fields{
+				Users: map[string]MemoryUserRelation{
+					"peter": {
+						Username: "peter",
+						Password: "secret",
+					},
+				},
+			},
+			// ResourceOwnerPasswordCredentialsGrantHandler expects ErrNotFound
+			wantErr: fosite.ErrNotFound,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			s := &MemoryStore{
+				Users: tt.fields.Users,
+			}
+			if _, err := s.Authenticate(tt.args.in0, tt.args.name, tt.args.secret); err == nil || !errors.Is(err, tt.wantErr) {
+				t.Errorf("Authenticate() error = %v, wantErr %v", err, tt.wantErr)
+			}
+		})
+	}
+}
