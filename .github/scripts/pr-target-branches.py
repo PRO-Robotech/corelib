@@ -16,7 +16,14 @@
   3. запрос в ветку НЕ-номер его НЕ запускает (образцы NON_NUMBER_BRANCHES):
      сужение шапки ci.yml намеренное, и держится оно этим пунктом;
   4. событие не сужено по путям: защита ствола требует контексты поимённо, а
-     не начавшийся контекст остаётся «ожидается» и блокирует слияние навсегда.
+     не начавшийся контекст остаётся «ожидается» и блокирует слияние навсегда;
+  5. событие пускает запрос на открытии, движении и переоткрытии: `types`,
+     если задан, содержит opened, synchronize и reopened (умолчание хостинга —
+     ровно они). Без `opened` у запроса нет ни одного контекста, без
+     `synchronize` вердикт остаётся от прежнего дерева;
+  6. ни одно задание процесса не гаснет на запросе, который событие пустило
+     (см. «Условия»).
+Ключи события — закрытый словарь PR_KEYS; ключ вне него — исход 2.
 
 ФИЛЬТР ВЫЧИСЛЯЕТСЯ, А НЕ ИЩЕТСЯ ОБРАЗЦОМ. Разбирается YAML, шаблоны ветки
 читаются по правилам хостинга: `*` — любые символы, кроме `/`; `**` — любые;
@@ -26,19 +33,35 @@
 разборщик не знает, — исход 2, а не «не совпало»: молчание на незнакомой
 записи было бы зелёным без осмотра.
 
-ПРЕДПОСЫЛКА ЗАЯВЛЕНА И ПРОВЕРЯЕТСЯ. Условия `if:` заданий и шагов не
-вычисляются. Условие по ветке (`base_ref`, `github.ref`, `pull_request.base`)
-гасит задание или шаг на запросе, который событие пустило, — и зелёное пришло
-бы без исполнения. Таких условий в дереве ноль; появится — исход 2
-«предпосылка не держится»: гейт дорастить, а не обойти.
+УСЛОВИЯ ТОЖЕ ВЫЧИСЛЯЮТСЯ — В ЗАКРЫТОМ СЛОВАРЕ. `if:` задания и шага процесса
+с событием запроса разбирается грамматикой, где есть только функции статуса
+(`success()`, `failure()`, `cancelled()`, `always()`), литералы `true` и
+`false`, `!`, `&&`, `||` и скобки, в обёртке `${{ }}` или без. Такое условие
+не зависит ни от события, ни от ветки, и гейт его ВЫЧИСЛЯЕТ на трёх путях —
+зелёном, провале, отмене:
+  - истинно на зелёном — исполняется на каждом запросе, который событие пустило;
+  - ложно на зелёном, истинно на провале или отмене — отчётное (выгрузка на
+    провале); это позволено шагу не первому и заданию с `needs:`: без
+    вышестоящих другого пути, кроме зелёного, нет;
+  - иначе — нарушение: пропущенное задание защита ствола засчитывает успехом,
+    и зелёное пришло бы без исполнения.
+Любая другая запись — обращение к контексту (`github.*`, `env.*`, `needs.*`,
+индексная форма `github.event['…']`), сравнение, иная функция — исход 2
+«предпосылка не держится»: такое условие гейт не вычисляет и образцом не
+угадывает. Задание, зовущее процесс (`uses:`), — тоже исход 2: его заданий гейт
+не видит. Условия процесса БЕЗ события запроса не судятся — на запросе его
+задания не исполняются; перепись называет их числом.
 
 ИСХОДОВ ТРИ: 0 — свойство держится у всех; 1 — нарушение, названо файлом и
-веткой; 2 — проверка не состоялась (нет разборщика YAML, пустой обход,
-незнакомая форма, предпосылка).
+веткой, типом события или заданием; 2 — проверка не состоялась (нет
+разборщика YAML, пустой обход, незнакомая форма, предпосылка).
 
-ЧЕГО ГЕЙТ НЕ ДОКАЗЫВАЕТ: что хостинг читает шаблон так же. Это доказывает
-только живой запрос — `gh pr view <N> --json statusCheckRollup` на запросе в
-ветку-номер. Разборщик сверен с примерами шпаргалки фильтров (самопроверка).
+ЧЕГО ГЕЙТ НЕ ДОКАЗЫВАЕТ: что хостинг читает шаблон так же — это доказывает
+только живой запрос (`gh pr view <N> --json statusCheckRollup` на запросе в
+ветку-номер); разборщик сверен с примерами шпаргалки фильтров (самопроверка).
+Что отчётное условие стоит у отчёта, а не у проверки: различие не
+синтаксическое, и такие условия перепись называет числом. Условия внутри
+действий, которые зовёт шаг (`uses:`).
 
 Запуск:
   python3 .github/scripts/pr-target-branches.py --self-test
@@ -62,9 +85,29 @@ NUMBER_BRANCHES = ("7", "26", "2564")
 # репозитории до правила.
 NON_NUMBER_BRANCHES = ("lane/oauth2-engine-intake", "batch-quota-fate",
                        "26a", "release/26", "issue-31")
-BRANCH_CONDITION = re.compile(
-    r"\b(?:base_ref|head_ref|ref_name)\b|\bgithub\.ref\b|pull_request\.base")
 CLASS_BODY = re.compile(r"(?:[A-Za-z0-9](?:-[A-Za-z0-9])?)+")
+# Ключи события запроса — все, какие хостинг знает. Прочий ключ хостинг
+# отвергает вместе с процессом, а гейт, молча его пропустивший, зеленел бы.
+PR_KEYS = ("types", "branches", "branches-ignore", "paths", "paths-ignore")
+# Умолчание хостинга для `types` — и минимум, без которого запрос остаётся без
+# вердикта (opened) или с вердиктом прежнего дерева (synchronize, reopened).
+REQUIRED_TYPES = ("opened", "synchronize", "reopened")
+KNOWN_TYPES = REQUIRED_TYPES + (
+    "assigned", "unassigned", "labeled", "unlabeled", "edited", "closed",
+    "converted_to_draft", "ready_for_review", "locked", "unlocked",
+    "review_requested", "review_request_removed", "auto_merge_enabled",
+    "auto_merge_disabled", "milestoned", "demilestoned", "enqueued", "dequeued")
+# Пути исполнения, на которых вычисляется условие: значения функций статуса.
+PATHS = {
+    "зелёный": {"success": True, "failure": False, "cancelled": False, "always": True},
+    "провал": {"success": False, "failure": True, "cancelled": False, "always": True},
+    "отмена": {"success": False, "failure": False, "cancelled": True, "always": True},
+}
+COND_TOKEN = re.compile(
+    r"\s*(?:(?P<op>&&|\|\||!(?!=)|\(|\))"
+    r"|(?P<fn>[A-Za-z_][A-Za-z0-9_]*)\(\s*\)"
+    r"|(?P<lit>true|false)(?![A-Za-z0-9_.\-\[(]))")
+WRAPPED = re.compile(r"\s*\$\{\{(?P<body>.*)\}\}\s*", re.S)
 
 
 class Unknown(Exception):
@@ -154,12 +197,35 @@ def _events(rel, doc):
     raise Unknown("%s: `on` — %r, разбору не известно" % (rel, on))
 
 
+def _types(rel, event, cfg, findings):
+    """→ типы действия запроса, на которых событие пускает процесс."""
+    raw = cfg.get("types", list(REQUIRED_TYPES))
+    if isinstance(raw, str):
+        raw = [raw]
+    if not isinstance(raw, list) or not raw:
+        raise Unknown("%s: on.%s.types — %r, а не непустой список" % (rel, event, raw))
+    alien = [t for t in raw if t not in KNOWN_TYPES]
+    if alien:
+        raise Unknown("%s: on.%s.types: %s — типа действия запроса хостинг не знает, "
+                      "разбору не известно" % (rel, event, ", ".join(map(repr, alien))))
+    for t in REQUIRED_TYPES:
+        if t not in raw:
+            findings.append("%s: on.%s.types [%s] — запрос на «%s» процесс НЕ запускает"
+                            % (rel, event, ", ".join(raw), t))
+    return raw
+
+
 def _branch_filter(rel, event, cfg, findings):
-    """→ (вид фильтра, шаблоны) либо None, если судить нечего."""
+    """→ (вид фильтра, шаблоны, типы действия); вид None — фильтра по ветке нет."""
     if cfg is None:
-        return None, []
+        return None, [], list(REQUIRED_TYPES)
     if not isinstance(cfg, dict):
         raise Unknown("%s: on.%s — %r, разбору не известно" % (rel, event, cfg))
+    alien = [k for k in cfg if k not in PR_KEYS]
+    if alien:
+        raise Unknown("%s: on.%s: ключ %s разбору не известен (знакомы: %s)"
+                      % (rel, event, ", ".join(map(repr, alien)), ", ".join(PR_KEYS)))
+    types = _types(rel, event, cfg, findings)
     for key in ("paths", "paths-ignore"):
         if key in cfg:
             findings.append("%s: on.%s.%s — событие сужено по путям: контекст, "
@@ -168,10 +234,10 @@ def _branch_filter(rel, event, cfg, findings):
     if "branches" in cfg and "branches-ignore" in cfg:
         findings.append("%s: on.%s несёт и branches, и branches-ignore — хостинг "
                         "такой процесс отвергает" % (rel, event))
-        return "refused", []
+        return "refused", [], types
     key = next((k for k in ("branches", "branches-ignore") if k in cfg), None)
     if key is None:
-        return None, []
+        return None, [], types
     raw = cfg[key]
     if isinstance(raw, str):
         raw = [raw]
@@ -184,30 +250,167 @@ def _branch_filter(rel, event, cfg, findings):
     if key == "branches-ignore" and any(neg for neg, _ in compiled):
         raise Unknown("%s: on.%s.branches-ignore с «!» — как хостинг это читает, "
                       "разбору не известно" % (rel, event))
-    return key, compiled
+    return key, compiled, types
 
 
-def _premise(rel, doc, census):
-    jobs = doc.get("jobs") or {}
-    if not isinstance(jobs, dict):
-        raise Unknown("%s: `jobs` — не отображение" % rel)
+# ── УСЛОВИЕ ЗАДАНИЯ И ШАГА ───────────────────────────────────────────────────
+
+def parse_condition(cond):
+    """`if:` → дерево в словаре функций статуса; всё прочее — Unknown.
+
+    Разбор, а не поиск образцом: запись, не выводимая грамматикой целиком,
+    отвергается, какой бы безобидной ни выглядела.
+    """
+    if isinstance(cond, bool):
+        text = "true" if cond else "false"
+    elif isinstance(cond, str):
+        text = cond
+    else:
+        raise Unknown("условие %r — не строка и не булево" % (cond,))
+    wrapped = WRAPPED.fullmatch(text)
+    if wrapped:
+        text = wrapped.group("body")
+    if "${{" in text or "}}" in text:
+        raise Unknown("условие «%s» — обёртка ${{ }} не на всю запись" % cond)
+    tokens, pos = [], 0
+    while pos < len(text):
+        if not text[pos:].strip():
+            break
+        m = COND_TOKEN.match(text, pos)
+        if not m:
+            raise Unknown("условие «%s»: «%s» вне словаря функций статуса"
+                          % (cond, text[pos:].strip()))
+        if m.group("fn") is not None:
+            if m.group("fn") not in PATHS["зелёный"]:
+                raise Unknown("условие «%s»: функция %s() вне словаря функций статуса"
+                              % (cond, m.group("fn")))
+            tokens.append(("fn", m.group("fn")))
+        elif m.group("lit") is not None:
+            tokens.append(("lit", m.group("lit") == "true"))
+        else:
+            tokens.append(("op", m.group("op")))
+        pos = m.end()
+    if not tokens:
+        raise Unknown("условие «%s» пусто" % cond)
+
+    def expect(i, op):
+        if i >= len(tokens) or tokens[i] != ("op", op):
+            raise Unknown("условие «%s»: грамматика не сходится у лексемы %d" % (cond, i + 1))
+
+    def disj(i):
+        node, i = conj(i)
+        while i < len(tokens) and tokens[i] == ("op", "||"):
+            rhs, i = conj(i + 1)
+            node = ("or", node, rhs)
+        return node, i
+
+    def conj(i):
+        node, i = unary(i)
+        while i < len(tokens) and tokens[i] == ("op", "&&"):
+            rhs, i = unary(i + 1)
+            node = ("and", node, rhs)
+        return node, i
+
+    def unary(i):
+        if i < len(tokens) and tokens[i] == ("op", "!"):
+            node, i = unary(i + 1)
+            return ("not", node), i
+        if i < len(tokens) and tokens[i] == ("op", "("):
+            node, i = disj(i + 1)
+            expect(i, ")")
+            return node, i + 1
+        if i < len(tokens) and tokens[i][0] in ("fn", "lit"):
+            return tokens[i], i + 1
+        raise Unknown("условие «%s»: грамматика не сходится у лексемы %d" % (cond, i + 1))
+
+    tree, end = disj(0)
+    if end != len(tokens):
+        raise Unknown("условие «%s»: грамматика не сходится у лексемы %d" % (cond, end + 1))
+    return tree
+
+
+def evaluate(tree, path):
+    kind = tree[0]
+    if kind == "fn":
+        return PATHS[path][tree[1]]
+    if kind == "lit":
+        return tree[1]
+    if kind == "not":
+        return not evaluate(tree[1], path)
+    if kind == "and":
+        return evaluate(tree[1], path) and evaluate(tree[2], path)
+    return evaluate(tree[1], path) or evaluate(tree[2], path)
+
+
+def _judge(rel, where, cond, has_upstream, census, findings):
+    if isinstance(cond, bool):
+        cond = "true" if cond else "false"  # как записано в YAML, а не как в Python
+    try:
+        tree = parse_condition(cond)
+    except Unknown as e:
+        raise Unknown(
+            "ПРЕДПОСЫЛКА НЕ ДЕРЖИТСЯ: %s: %s — %s. Условие, зависящее от события, "
+            "ветки или окружения, гейт не вычисляет, и зелёное здесь пришло бы без "
+            "исполнения; дорастить разбор, а не обойти." % (rel, where, e)) from e
+    census["conditions"] += 1
+    true_on = [p for p in PATHS if evaluate(tree, p)]
+    if "зелёный" in true_on:
+        return
+    if has_upstream and true_on:
+        census["reporting"] += 1
+        return
+    census["conditions_bad"] += 1
+    if true_on:
+        findings.append("%s: %s — условие «%s» ложно на зелёном пути, а вышестоящих "
+                        "нет: на запросе НЕ исполняется, и пропущенное задание защита "
+                        "ствола засчитывает успехом" % (rel, where, cond))
+    else:
+        findings.append("%s: %s — условие «%s» не истинно ни на одном пути: НЕ "
+                        "исполняется никогда, и зелёное приходит без исполнения"
+                        % (rel, where, cond))
+
+
+def _conditions(rel, doc, census, findings):
+    """Условия процесса С событием запроса: ни одно не гасит задание на запросе."""
+    jobs = doc.get("jobs")
+    if not isinstance(jobs, dict) or not jobs:
+        raise Unknown("%s: `jobs` — %r, а не непустое отображение: процесс, который "
+                      "гонится на запрос, без заданий хостинг отвергает" % (rel, jobs))
     for name, job in jobs.items():
         census["jobs"] += 1
         if not isinstance(job, dict):
+            raise Unknown("%s: задание %s — %r, а не отображение" % (rel, name, job))
+        if "uses" in job:
+            raise Unknown("%s: задание %s зовёт процесс %r — его заданий и условий гейт "
+                          "не осматривает" % (rel, name, job["uses"]))
+        if "if" in job:
+            _judge(rel, "задание %s" % name, job["if"], bool(job.get("needs")),
+                   census, findings)
+        steps = job.get("steps")
+        if not isinstance(steps, list) or not steps:
+            raise Unknown("%s: задание %s: `steps` — %r, а не непустой список"
+                          % (rel, name, steps))
+        for n, step in enumerate(steps, 1):
+            if not isinstance(step, dict):
+                raise Unknown("%s: задание %s, шаг %d — %r, а не отображение"
+                              % (rel, name, n, step))
+            if "if" in step:
+                # Вышестоящие шага — шаги до него; у первого их нет.
+                _judge(rel, "задание %s, шаг %d" % (name, n), step["if"], n > 1,
+                       census, findings)
+
+
+def _other_conditions(doc, census):
+    """Процесс без события запроса: условия не судятся, но счёт им ведётся."""
+    jobs = doc.get("jobs")
+    if not isinstance(jobs, dict):
+        return
+    for job in jobs.values():
+        if not isinstance(job, dict):
             continue
-        conds = [("задание %s" % name, job.get("if"))]
-        for n, step in enumerate(job.get("steps") or [], 1):
-            if isinstance(step, dict):
-                conds.append(("задание %s, шаг %d" % (name, n), step.get("if")))
-        for where, cond in conds:
-            if cond is None:
-                continue
-            census["conditions"] += 1
-            if BRANCH_CONDITION.search(str(cond)):
-                raise Unknown(
-                    "ПРЕДПОСЫЛКА НЕ ДЕРЖИТСЯ: %s: %s — условие по ветке «%s». "
-                    "Условия гейт не вычисляет, и зелёное здесь пришло бы без "
-                    "исполнения; дорастить разбор, а не обойти." % (rel, where, cond))
+        census["unjudged"] += "if" in job
+        for step in job.get("steps") or []:
+            census["unjudged"] += isinstance(step, dict) and "if" in step
 
 
 def audit(files, out):
@@ -218,9 +421,10 @@ def audit(files, out):
         print("ПРОВЕРКА НЕ СОСТОЯЛАСЬ: нет PyYAML, разобрать процессы нечем: %s" % e,
               file=out)
         return 2
-    census = {"files": len(files), "jobs": 0, "conditions": 0,
+    census = {"files": len(files), "jobs": 0, "conditions": 0, "reporting": 0,
+              "conditions_bad": 0, "unjudged": 0,
               "pull_request": 0, "pull_request_target": 0, "without": 0}
-    findings = []
+    findings, filters = [], []
     try:
         if not files:
             raise Unknown("обход пуст: в индексе нет ни одного процесса .github/workflows/*.y(a)ml")
@@ -230,13 +434,22 @@ def audit(files, out):
             except yaml.YAMLError as e:
                 raise Unknown("%s: не разбирается как YAML: %s" % (rel, e)) from e
             events = _events(rel, doc)
-            _premise(rel, doc, census)
             present = [e for e in EVENTS if e in events]
             if not present:
                 census["without"] += 1
+                _other_conditions(doc, census)
+                continue
+            _conditions(rel, doc, census, findings)
             for event in present:
                 census[event] += 1
-                kind, compiled = _branch_filter(rel, event, events[event], findings)
+                cfg = events[event]
+                kind, compiled, types = _branch_filter(rel, event, cfg, findings)
+                branches = {"refused": "ветки отвергнуты хостингом",
+                            None: "ветки любые"}.get(kind) or "%s %s" % (kind, cfg[kind])
+                defaulted = not (isinstance(cfg, dict) and "types" in cfg)
+                filters.append("%s · %s: %s · типы %s%s" % (
+                    rel, event, branches, ", ".join(types),
+                    " (умолчание)" if defaulted else ""))
                 if kind == "refused":
                     continue
                 for base in (TRUNK,) + NUMBER_BRANCHES:
@@ -258,8 +471,12 @@ def audit(files, out):
           "без события запроса %d)" % (census["files"], census["pull_request"],
                                        census["pull_request_target"], census["without"]),
           file=out)
-    print("заданий осмотрено   : %d  (условий if: %d, по ветке 0)"
-          % (census["jobs"], census["conditions"]), file=out)
+    for line in filters:
+        print("событие             : %s" % line, file=out)
+    print("заданий осмотрено   : %d  (условий if вычислено: %d — только вне зелёного "
+          "пути %d, гасящих %d; в процессах без события запроса не судится %d)"
+          % (census["jobs"], census["conditions"], census["reporting"],
+             census["conditions_bad"], census["unjudged"]), file=out)
     print("образцы             : %s · номер %s · не-номер %s"
           % (TRUNK, ", ".join(NUMBER_BRANCHES), ", ".join(NON_NUMBER_BRANCHES)), file=out)
     if findings:
@@ -268,8 +485,8 @@ def audit(files, out):
             print("  НАРУШЕНИЕ %s" % f, file=out)
         print("КРАСНЫЙ: нарушений %d." % len(findings), file=out)
         return 1
-    print("ЗЕЛЁНЫЙ: запрос в main и в ветку-номер гонит конвейер, в ветку не-номер — нет.",
-          file=out)
+    print("ЗЕЛЁНЫЙ: запрос в main и в ветку-номер гонит конвейер на открытии, движении и "
+          "переоткрытии, и условия заданий его не гасят; в ветку не-номер — нет.", file=out)
     return 0
 
 
@@ -413,6 +630,109 @@ def self_test():
     run(0, "(−) процесс без события запроса рядом с гонимым — не нарушение",
         {F: GOOD, ".github/workflows/nightly.yml": "on:\n  schedule:\n    - cron: '1 1 * * *'\njobs: {}\n"},
         must=("без события запроса 1",))
+
+    # ── ТИПЫ ДЕЙСТВИЯ ЗАПРОСА (on.<событие>.types) ─────────────────────────────
+    # Прежде ключ не судился вовсе: `types: [closed]` давал ЗЕЛЁНЫЙ, хотя запрос
+    # на открытии и движении процесс уже не запускал (приёмка #31, B1).
+    def pr_types(value, text=GOOD):
+        return text.replace("    branches: [main, '[0-9]+']\n",
+                            "    branches: [main, '[0-9]+']\n    types: %s\n" % value)
+    run(1, "(+) types: [closed] — открытие, движение, переоткрытие не гонят",
+        {F: pr_types("[closed]")},
+        must=("on.pull_request.types [closed] — запрос на «opened» процесс НЕ запускает",
+              "«synchronize»", "«reopened»", "КРАСНЫЙ: нарушений 3."))
+    run(1, "(+) types без synchronize — движение ветки не перепрогоняет",
+        {F: pr_types("[opened, reopened]")},
+        must=("на «synchronize» процесс НЕ запускает", "КРАСНЫЙ: нарушений 1."))
+    run(1, "(+) types строкой `opened` — та же нехватка",
+        {F: pr_types("opened")}, must=("«synchronize»", "«reopened»"))
+    run(0, "(−) types: [opened, synchronize, reopened] — умолчание, записанное явно",
+        {F: pr_types("[opened, synchronize, reopened]")}, must=("ЗЕЛЁНЫЙ",))
+    run(0, "(−) types шире умолчания — ready_for_review сверх трёх",
+        {F: pr_types("[opened, synchronize, reopened, ready_for_review]")})
+    run(2, "(+) тип, которого хостинг не знает, — не состоялось",
+        {F: pr_types("[opened, synchronize, reopened, synchronise]")},
+        must=("'synchronise' — типа действия запроса хостинг не знает",))
+    run(2, "(+) types: [] — не состоялось", {F: pr_types("[]")}, must=("непустой список",))
+    run(2, "(+) незнакомый ключ события — не состоялось",
+        {F: GOOD.replace("[main, '[0-9]+']\n", "[main, '[0-9]+']\n    branch: [x]\n")},
+        must=("ключ 'branch' разбору не известен",))
+    target = GOOD.replace("  pull_request:\n", "  pull_request_target:\n")
+    run(0, "(−) pull_request_target той же записью", {F: target},
+        must=("pull_request_target 1",))
+    run(1, "(+) pull_request_target с types: [closed]", {F: pr_types("[closed]", target)},
+        must=("on.pull_request_target.types [closed]",))
+
+    # ── УСЛОВИЯ ЗАДАНИЯ И ШАГА: закрытый словарь, вычисление по путям ──────────
+    # Прежде условие искалось образцом по тексту: индексная запись того же
+    # условия по ветке давала ЗЕЛЁНЫЙ (приёмка #31, B4), условие по событию и
+    # `if: false` — тоже.
+    def job_if(cond):
+        return GOOD.replace("    runs-on: ubuntu-latest\n",
+                            "    if: %s\n    runs-on: ubuntu-latest\n" % cond, 1)
+    run(2, "(+) условие по ветке в индексной записи — не состоялось",
+        {F: job_if("github.event['pull_request']['base']['ref'] == 'main'")},
+        must=("ПРЕДПОСЫЛКА НЕ ДЕРЖИТСЯ", "задание build", "вне словаря функций статуса"))
+    run(2, "(+) условие по событию — не состоялось",
+        {F: job_if("github.event_name == 'push'")}, must=("ПРЕДПОСЫЛКА НЕ ДЕРЖИТСЯ",))
+    run(2, "(+) условие через окружение — не состоялось",
+        {F: job_if("${{ env.GATE == 'on' }}")}, must=("ПРЕДПОСЫЛКА НЕ ДЕРЖИТСЯ",))
+    run(2, "(+) функция статуса в паре с контекстом — не состоялось",
+        {F: job_if("success() && github.actor != 'bot'")}, must=("ПРЕДПОСЫЛКА НЕ ДЕРЖИТСЯ",))
+    run(2, "(+) обёртка ${{ }} не на всю запись — не состоялось",
+        {F: job_if("${{ always() }} && github.ref == 'x'")},
+        must=("обёртка ${{ }} не на всю запись",))
+    run(1, "(+) if: false у задания — не исполняется никогда",
+        {F: job_if("false")}, must=("задание build — условие «false» не истинно ни на "
+                                    "одном пути",))
+    run(1, "(+) ${{ !always() }} у задания — не исполняется никогда",
+        {F: job_if("${{ !always() }}")}, must=("не истинно ни на одном пути",))
+    run(1, "(+) failure() у задания без needs — на зелёном не исполняется",
+        {F: job_if("failure()")}, must=("ложно на зелёном пути, а вышестоящих нет",))
+    run(0, "(−) always() у задания — законный близнец индексной записи",
+        {F: job_if("always()")}, must=("условий if вычислено: 2",))
+    run(0, "(−) ${{ !cancelled() }} у задания", {F: job_if("${{ !cancelled() }}")})
+    run(0, "(−) if: true (булево YAML) у задания", {F: job_if("true")})
+    run(0, "(−) (success() || failure()) && !cancelled() у задания",
+        {F: job_if("${{ (success() || failure()) && !cancelled() }}")})
+    report = "  report:\n    %sif: failure()\n    runs-on: ubuntu-latest\n" \
+             "    steps:\n      - run: echo report\n"
+    run(0, "(−) отчётное задание: needs + failure()",
+        {F: GOOD + report % "needs: build\n    "},
+        must=("только вне зелёного пути 1",))
+    run(1, "(+) то же задание без needs — не исполняется",
+        {F: GOOD + report % ""}, must=("задание report — условие «failure()»",))
+    run(1, "(+) if: false у шага — не исполняется никогда",
+        {F: GOOD.replace("if: always()", "if: false")},
+        must=("задание build, шаг 2 — условие «false»",))
+    run(0, "(−) отчётный шаг: failure() после вышестоящего шага",
+        {F: GOOD.replace("if: always()", "if: failure()")},
+        must=("только вне зелёного пути 1",))
+    run(1, "(+) failure() у первого шага — вышестоящих нет",
+        {F: GOOD.replace("      - run: go build ./...\n",
+                         "      - if: failure()\n        run: go build ./...\n")},
+        must=("задание build, шаг 1 — условие «failure()» ложно на зелёном пути",))
+    run(2, "(+) задание зовёт процесс — его заданий гейт не видит",
+        {F: GOOD + "  called:\n    uses: ./.github/workflows/x.yml\n"},
+        must=("задание called зовёт процесс",))
+    run(2, "(+) задание без шагов — не состоялось",
+        {F: GOOD + "  empty:\n    runs-on: ubuntu-latest\n"},
+        must=("задание empty: `steps`",))
+    run(2, "(+) задание — не отображение", {F: GOOD + "  broken: 7\n"},
+        must=("задание broken — 7, а не отображение",))
+    run(0, "(−) условие по событию в процессе БЕЗ события запроса — не судится, но счёт",
+        {F: GOOD, ".github/workflows/nightly.yml":
+            "on:\n  schedule:\n    - cron: '1 1 * * *'\njobs:\n  n:\n"
+            "    if: github.event_name == 'schedule'\n    runs-on: ubuntu-latest\n"
+            "    steps:\n      - run: 'true'\n"},
+        must=("не судится 1",))
+    for bad in ("(always()", "always() always()", "Always()", "always(1)", "!", "&& always()"):
+        try:
+            parse_condition(bad)
+            check("незнакомое условие %r — отказ разбора" % bad, False)
+        except Unknown:
+            check("незнакомое условие %r — отказ разбора" % bad, True)
+
     # (+) исход 2: проверка не состоялась, и это не зелёное.
     run(2, "(+) пустой обход — не состоялось", {}, must=("обход пуст",))
     run(2, "(+) условие шага по ветке — предпосылка не держится",
