@@ -1,8 +1,10 @@
 // Copyright (c) PRO-Robotech
 // SPDX-License-Identifier: Apache-2.0
 
-// engineconfig_internal_test.go — настройки движка, собранные New, на пути
-// запроса только ЧИТАЮТСЯ.
+// engineconfig_internal_test.go — методы настроек движка, собранных New, на
+// пути запроса не ЗАМЕНЯЮТ значения их полей. Это половина утверждения
+// «настройки только читаются»; вторую — запись в содержимое поля — держит
+// engineconfig_static_internal_test.go.
 //
 // Геттер настроек движка (internal/oauth2/config_default.go) заполняет
 // неназванное поле умолчанием ЛЕНИВО: первым вызовом и без синхронизации.
@@ -12,11 +14,23 @@
 // против :262 записи, путь Exchange → AuthenticateClient → checkClientSecret).
 //
 // Проба судит КЛАСС, а не экземпляр: вызывает КАЖДЫЙ метод настроек, которые
-// держит движок собранной церемонии, и называет каждое поле, изменённое
-// вызовом. Ленивый геттер, пришедший с обновлением апстрима, краснеет здесь без
-// -race и без одновременности. Слепая зона названа: геттер, пишущий в поле то
-// же значение, что там уже лежит, сверкой не виден — его ловит -race пробой
-// одновременных обменов (settings_race_test.go).
+// держит движок собранной церемонии, и называет каждое поле, чьё значение
+// вызов ЗАМЕНИЛ. Ленивый геттер, пришедший с обновлением апстрима, краснеет
+// здесь без -race и без одновременности.
+//
+// Слепых зон две, и у каждой назван держатель:
+//
+//   - Геттер, пишущий в поле то же значение, что там уже лежит, сверкой не
+//     виден. Его ловит -race проба одновременных обменов
+//     (settings_race_test.go) — и только на пути обмена, который она проходит.
+//   - Запись в СОДЕРЖИМОЕ ссылочного поля не видна вовсе, даже если поле
+//     названо в New: тождество указателя и карты — адрес, среза — адрес,
+//     длина и ёмкость, интерфейса — тождество лежащего в нём (identityOf), а
+//     запись элемента карты или среза либо поля значения под указателем
+//     адреса не меняет. Её держит статическая проба по исходнику
+//     TestEngineSettingsMethodsWriteNoFieldContent
+//     (engineconfig_static_internal_test.go); что она разбирает и чего не
+//     судит — в её шапке.
 //
 // Файл внутренний намеренно: настройки движка не видны снаружи ни одним
 // элементом пакета.
@@ -27,6 +41,7 @@ import (
 	"fmt"
 	"reflect"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -82,7 +97,8 @@ func censusGetterWrites(cfg *engine.Config) getterCensus {
 // fieldIdentities — тождество каждого поля cfg: у ссылочных видов — адрес
 // (и длина с ёмкостью у среза), у интерфейса — тождество лежащего в нём, у
 // прочих — само значение. Ленивая инициализация меняет nil на значение и
-// потому видна.
+// потому видна; запись в содержимое ссылочного поля адреса не меняет и
+// потому НЕ видна — её судит TestEngineSettingsMethodsWriteNoFieldContent.
 func fieldIdentities(cfg *engine.Config) []string {
 	v := reflect.ValueOf(cfg).Elem()
 	out := make([]string, v.NumField())
@@ -211,8 +227,9 @@ func requireCensusCovered(t *testing.T, c getterCensus) {
 }
 
 // TestEngineSettingsBuiltByNewAreOnlyReadOnTheRequestPath — ни один метод
-// настроек движка собранной церемонии не пишет в них, кроме геттеров,
-// которых путь запроса не достигает, — и те названы с предикатом.
+// настроек движка собранной церемонии не заменяет значения их поля, кроме
+// геттеров, которых путь запроса не достигает, — и те названы с предикатом.
+// Запись в содержимое поля судит TestEngineSettingsMethodsWriteNoFieldContent.
 func TestEngineSettingsBuiltByNewAreOnlyReadOnTheRequestPath(t *testing.T) {
 	census := censusGetterWrites(engineConfigOfNewCeremony(t))
 	requireCensusCovered(t, census)
@@ -231,8 +248,48 @@ func TestEngineSettingsBuiltByNewAreOnlyReadOnTheRequestPath(t *testing.T) {
 		found = slices.Delete(found, i, i+1)
 	}
 	for _, w := range found {
-		t.Errorf("геттер движка пишет в настройки на пути запроса: %s — поле не названо в New, "+
-			"и первая запись из одного запроса гоняется с чтением из другого", w)
+		t.Error(replacedFieldFindingText(w))
+	}
+}
+
+// replacedFieldFindingText — текст находки переписи. Он часть свойства:
+// средство «назови поле в New» годится только ленивому заполнению пустого поля
+// и не годится записи в содержимое, которую перепись не видит.
+func replacedFieldFindingText(w getterWrite) string {
+	return fmt.Sprintf("геттер движка заменяет значение поля настроек на пути запроса: %s — первая запись "+
+		"из одного запроса гоняется с чтением из другого. Если геттер заполняет поле лениво (пишет только "+
+		"в пустое), назови поле %s в New; если пишет и в названное, названия мало: запись снимается "+
+		"правкой поддерева, а вне пути запроса — исключением offRequestPath с предикатом. Запись в "+
+		"СОДЕРЖИМОЕ ссылочного поля эта перепись не видит вовсе: её судит "+
+		"TestEngineSettingsMethodsWriteNoFieldContent", w, w.field)
+}
+
+// TestReplacedFieldFindingTextKeepsNamingInNewToLazyFill — текст находки на
+// настоящем входе: ленивые геттеры пустых настроек. Он называет запись,
+// ставит «назови поле в New» под условие ленивого заполнения и отсылает запись
+// в содержимое к её держателю, а не обещает, что названия поля достаточно.
+func TestReplacedFieldFindingTextKeepsNamingInNewToLazyFill(t *testing.T) {
+	census := censusGetterWrites(&engine.Config{})
+	requireCensusCovered(t, census)
+	if len(census.writes) == 0 {
+		t.Fatalf("НЕ ВЫПОЛНИЛОСЬ: на пустых настройках ни одной записи — тексту судить нечего")
+	}
+	for _, w := range census.writes {
+		text := replacedFieldFindingText(w)
+		for _, part := range []string{
+			w.String(),
+			"лениво (пишет только в пустое), назови поле " + w.field + " в New",
+			"названия мало",
+			"СОДЕРЖИМОЕ ссылочного поля эта перепись не видит",
+			"TestEngineSettingsMethodsWriteNoFieldContent",
+		} {
+			if !strings.Contains(text, part) {
+				t.Errorf("текст находки для %s не называет %q: %s", w, part, text)
+			}
+		}
+		if strings.Contains(text, "поле не названо в New") {
+			t.Errorf("текст находки для %s выдаёт «поле не названо в New» за причину: %s", w, text)
+		}
 	}
 }
 

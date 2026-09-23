@@ -11,9 +11,10 @@
 // пришёл первым, без синхронизации с остальными.
 //
 // Сила пробы — под -race (конвейер гонит `go test ./... -race`): без детектора
-// она проверяет лишь, что каждый обмен прошёл. Класс «геттер настроек пишет»
-// судится без детектора и без одновременности внутренней пробой
-// TestEngineSettingsBuiltByNewAreOnlyReadOnTheRequestPath.
+// она проверяет лишь, что каждый обмен прошёл. Класс «метод настроек пишет в
+// них» судится без детектора и без одновременности двумя внутренними пробами:
+// замену значения поля ловит TestEngineSettingsBuiltByNewAreOnlyReadOnTheRequestPath,
+// запись в содержимое поля — TestEngineSettingsMethodsWriteNoFieldContent.
 package oauthceremony_test
 
 import (
