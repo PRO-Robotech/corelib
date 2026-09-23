@@ -64,6 +64,22 @@ import (
 // пропавшая запись PKCE — без гранта и без признака, была ли она вообще.
 // Выборка кода в той же операции стоит раньше обоих, и её грант и признак
 // привязки к PKCE мост записывает сюда: по ним повтор узнаётся и там.
+//
+// # Четвёртое: почему в этой операции отзывают
+//
+// Порт отзыва получает причину (RevocationReason), а отзывают в операции двое
+// — движок и церемония, — и движок причины не передаёт: его хранилище
+// отзывает по одному идентификатору запроса. Причина берётся отсюда, и
+// источников у неё ровно два:
+//
+//   - операция называет её сама — отзыв, о котором просит клиент (Revoke);
+//   - мост замечает повтор кода или токена обновления и записывает её вместе с
+//     семейством.
+//
+// Названная операцией побеждает: клиент, отзывающий прежним, уже обёрнутым
+// токеном обновления, просит отзыва, хотя мост и замечает повтор. Нет ни
+// одного источника — отзыва в операции быть не должно, и мост отказывает, не
+// позвав порта (см. revocationReason).
 type operationNotes struct {
 	mu      sync.Mutex
 	precise *ProtocolError
@@ -73,6 +89,9 @@ type operationNotes struct {
 	// presented — код, предъявленный в этой операции. Нулевое значение —
 	// кода не предъявляли.
 	presented presentedCode
+	// requested — причина отзыва, названная самой операцией. Нулевое
+	// значение — операция причины не называет.
+	requested RevocationReason
 }
 
 // replayedFamily — грант повторённого артефакта, клиент, которому грант
@@ -86,10 +105,14 @@ type operationNotes struct {
 //
 // refusal — отказ, которым церемония отвечает, если движок сам обмен НЕ
 // отверг: выданное таким обменом принадлежит отозванному семейству.
+//
+// reason — причина отзыва по этому повтору: повтор кода или повтор токена
+// обновления. Её называет тот, кто повтор заметил, вместе с отказом.
 type replayedFamily struct {
 	grantID  string
 	clientID string
 	refusal  *ProtocolError
+	reason   RevocationReason
 }
 
 // presentedCode — код, выбранный в этой операции: подпись, грант, клиент и
@@ -150,18 +173,45 @@ func (n *operationNotes) preferRecorded(engineVerdict error) error {
 }
 
 // markReplayedFamily записывает грант, чьё семейство обязано быть отозвано,
-// и случай, которым отвечается повтор. Пустой идентификатор сюда не доходит:
-// мост отвергает его раньше как нарушение контракта порта (отозвать семейство
-// без имени нечем).
-func (n *operationNotes) markReplayedFamily(grantID, clientID string, refusal *ProtocolError) {
+// случай, которым отвечается повтор, и причину отзыва. Пустой идентификатор
+// сюда не доходит: мост отвергает его раньше как нарушение контракта порта
+// (отозвать семейство без имени нечем).
+func (n *operationNotes) markReplayedFamily(grantID, clientID string, refusal *ProtocolError, reason RevocationReason) {
 	if n == nil || grantID == "" {
 		return
 	}
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	if n.replayedFamily.grantID == "" {
-		n.replayedFamily = replayedFamily{grantID: grantID, clientID: clientID, refusal: refusal}
+		n.replayedFamily = replayedFamily{grantID: grantID, clientID: clientID, refusal: refusal, reason: reason}
 	}
+}
+
+// requestRevocation записывает причину отзыва, названную самой операцией.
+func (n *operationNotes) requestRevocation(reason RevocationReason) {
+	if n == nil {
+		return
+	}
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	n.requested = reason
+}
+
+// revocationReason отдаёт причину отзыва в этой операции: названную ею самой,
+// а если она не названа — причину замеченного повтора. Ложь — причины нет ни
+// у операции, ни у повтора (или ведомости нет вовсе): отзыв в такой операции —
+// дефект провязки, и порт отзыва звать нельзя.
+func (n *operationNotes) revocationReason() (RevocationReason, bool) {
+	if n == nil {
+		return "", false
+	}
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	reason := n.requested
+	if !reason.Declared() {
+		reason = n.replayedFamily.reason
+	}
+	return reason, reason.Declared()
 }
 
 // notePresentedCode записывает код, выбранный в этой операции.

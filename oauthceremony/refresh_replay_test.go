@@ -118,7 +118,8 @@ func requireReplayRefusal(t *testing.T, err error) {
 }
 
 // requireFamilyDead — у гранта не осталось ни одного живого артефакта, и
-// отозвано именно СЕМЕЙСТВО, а не снято по одному то, что попалось.
+// отозвано именно СЕМЕЙСТВО, а не снято по одному то, что попалось, — с
+// причиной «повтор токена обновления» у каждого вызова порта отзыва.
 func requireFamilyDead(t *testing.T, ceremony *oauthceremony.Ceremony, store *memoryPorts, grantID string,
 	accessTokens, refreshTokens []string) {
 	t.Helper()
@@ -126,6 +127,7 @@ func requireFamilyDead(t *testing.T, ceremony *oauthceremony.Ceremony, store *me
 	if !store.familyRevoked(grantID) {
 		t.Errorf("семейство гранта %s не отозвано", grantID)
 	}
+	requireRevokedFor(t, store, grantID, oauthceremony.RevocationRefreshReplay)
 	if access, refresh := store.liveArtifactsOf(grantID); access != 0 || refresh != 0 {
 		t.Errorf("у гранта %s после повтора живы токенов доступа %d шт, токенов обновления %d шт",
 			grantID, access, refresh)
@@ -164,6 +166,7 @@ func TestRefreshWithoutReplayKeepsTheFamilyAlive(t *testing.T) {
 	if store.familyRevoked(grantID) {
 		t.Fatal("оборот без повтора отозвал семейство")
 	}
+	requireNotRevoked(t, store, grantID)
 	if !introspect(t, ceremony, second.AccessToken, oauthceremony.TokenKindAccess).Active {
 		t.Error("токен доступа, выданный оборотом, назван негодным")
 	}
@@ -316,6 +319,9 @@ func TestRevokingAStaleRefreshTokenRevokesTheFamily(t *testing.T) {
 	if !store.familyRevoked(grantID) {
 		t.Error("отзыв обёрнутым токеном не отозвал семейство")
 	}
+	// Обёрнутый токен, предъявленный точке отзыва, мост замечает как повтор,
+	// но семейство снимается потому, что клиент попросил (RFC 7009 §2.1).
+	requireRevokedFor(t, store, grantID, oauthceremony.RevocationClientRevoke)
 	if introspect(t, ceremony, second.AccessToken, oauthceremony.TokenKindAccess).Active {
 		t.Error("токен доступа, выданный оборотом, пережил отзыв")
 	}
@@ -356,6 +362,7 @@ func TestReplayOfATokenWhoseClientIsGoneStillRevokesTheFamily(t *testing.T) {
 	if !store.familyRevoked(grantID) {
 		t.Error("семейство гранта снятого клиента пережило повтор")
 	}
+	requireRevokedFor(t, store, grantID, oauthceremony.RevocationRefreshReplay)
 	if access, refresh := store.liveArtifactsOf(grantID); access != 0 || refresh != 0 {
 		t.Errorf("у гранта после повтора живы токенов доступа %d шт, токенов обновления %d шт", access, refresh)
 	}

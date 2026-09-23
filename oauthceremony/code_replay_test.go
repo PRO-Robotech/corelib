@@ -61,7 +61,8 @@ func requireCodeReplayRefusal(t *testing.T, err error) {
 	}
 }
 
-// requirePairDead — пара, выданная по коду, негодна, и отозвано семейство.
+// requirePairDead — пара, выданная по коду, негодна, и отозвано семейство —
+// с причиной «повтор кода авторизации» у каждого вызова порта отзыва.
 func requirePairDead(t *testing.T, ceremony *oauthceremony.Ceremony, store *memoryPorts, grantID string,
 	tokens oauthceremony.TokenResult) {
 	t.Helper()
@@ -69,6 +70,7 @@ func requirePairDead(t *testing.T, ceremony *oauthceremony.Ceremony, store *memo
 	if !store.familyRevoked(grantID) {
 		t.Errorf("семейство гранта %s не отозвано", grantID)
 	}
+	requireRevokedFor(t, store, grantID, oauthceremony.RevocationCodeReplay)
 	if access, refresh := store.liveArtifactsOf(grantID); access != 0 || refresh != 0 {
 		t.Errorf("у гранта %s после повтора кода живы токенов доступа %d шт, токенов обновления %d шт",
 			grantID, access, refresh)
@@ -95,6 +97,7 @@ func TestSingleCodeExchangeKeepsThePairAlive(t *testing.T) {
 	if store.familyRevoked(grantID) {
 		t.Fatal("одиночный обмен отозвал семейство")
 	}
+	requireNotRevoked(t, store, grantID)
 	if !introspect(t, ceremony, tokens.RefreshToken, oauthceremony.TokenKindRefresh).Active {
 		t.Error("токен обновления одиночного обмена назван негодным")
 	}
@@ -228,6 +231,7 @@ func TestCodePresentedAfterItsProofKeyWasTakenIsAReplay(t *testing.T) {
 			if issued != 0 {
 				t.Errorf("по коду, лишившемуся записи PKCE, положено токенов доступа %d шт", issued)
 			}
+			requireRevokedFor(t, store, grantOfStored(t, store), oauthceremony.RevocationCodeReplay)
 		})
 	}
 }
