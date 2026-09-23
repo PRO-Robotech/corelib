@@ -1,0 +1,17 @@
+{
+  "vulns": [
+    {
+      "affected": [
+        {
+          "package": {
+            "ecosystem": "Go",
+            "name": "example.test/withdrawn"
+          }
+        }
+      ],
+      "aliases": [],
+      "id": "TEST-0001",
+      "withdrawn": "2026-01-01T00:00:00Z"
+    }
+  ]
+}

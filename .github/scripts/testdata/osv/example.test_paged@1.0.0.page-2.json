@@ -1,0 +1,16 @@
+{
+  "vulns": [
+    {
+      "affected": [
+        {
+          "package": {
+            "ecosystem": "Go",
+            "name": "example.test/paged"
+          }
+        }
+      ],
+      "aliases": [],
+      "id": "TEST-0002"
+    }
+  ]
+}
