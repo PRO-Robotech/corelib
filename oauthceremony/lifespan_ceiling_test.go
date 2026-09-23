@@ -1,9 +1,9 @@
 // Copyright (c) PRO-Robotech
 // SPDX-License-Identifier: Apache-2.0
 
-// lifespan_ceiling_test.go — у сроков кода авторизации и токена обновления
-// есть потолок фундамента (tokenpolicy), и New судит ВЕЛИЧИНУ, а не только
-// факт, что срок назван.
+// lifespan_ceiling_test.go — у сроков всех трёх артефактов церемонии — токена
+// доступа, кода авторизации и токена обновления — есть потолок фундамента
+// (tokenpolicy), и New судит ВЕЛИЧИНУ, а не только факт, что срок назван.
 //
 // Предмет — отказ сборки: значение выше потолка не собирает церемонию, и текст
 // отказа называет и поле, и потолок. Близнец каждого отказа — то же значение,
@@ -31,6 +31,13 @@ func TestNewRefusesAnArtifactLifespanAboveItsCeiling(t *testing.T) {
 		ceiling     time.Duration
 		set         func(*oauthceremony.Config, time.Duration)
 	}{
+		{
+			name:        "токен доступа",
+			field:       "Config.AccessTokenLifespan",
+			ceilingName: "tokenpolicy.MaxTokenTTL",
+			ceiling:     tokenpolicy.MaxTokenTTL,
+			set:         func(c *oauthceremony.Config, d time.Duration) { c.AccessTokenLifespan = d },
+		},
 		{
 			name:        "код авторизации",
 			field:       "Config.AuthorizationCodeLifespan",

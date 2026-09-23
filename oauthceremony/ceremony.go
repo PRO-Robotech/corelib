@@ -90,13 +90,12 @@ type Config struct {
 	RotatedSigningSecrets [][]byte
 
 	// AccessTokenLifespan, RefreshTokenLifespan, AuthorizationCodeLifespan
-	// — сроки жизни артефактов. Все три обязаны быть положительными.
-	//
-	// RefreshTokenLifespan и AuthorizationCodeLifespan к тому же не длиннее
-	// своих потолков фундамента — tokenpolicy.MaxRefreshTokenTTL и
-	// tokenpolicy.MaxAuthorizationCodeTTL. Срок выше потолка New отвергает,
-	// называя поле и потолок, а не урезает молча; решение, из которого взято
-	// значение каждого потолка, записано у самой константы.
+	// — сроки жизни артефактов. Все три обязаны быть положительными и не
+	// длиннее своих потолков фундамента — tokenpolicy.MaxTokenTTL,
+	// tokenpolicy.MaxRefreshTokenTTL и tokenpolicy.MaxAuthorizationCodeTTL.
+	// Срок выше потолка New отвергает, называя поле и потолок, а не урезает
+	// молча; решение, из которого взято значение каждого потолка, записано у
+	// самой константы.
 	AccessTokenLifespan       time.Duration
 	RefreshTokenLifespan      time.Duration
 	AuthorizationCodeLifespan time.Duration
@@ -335,6 +334,10 @@ func validateConfig(cfg *Config) error {
 		return misuse("Config.SigningSecret is shorter than 32 bytes")
 	case cfg.AccessTokenLifespan <= 0:
 		return misuse("Config.AccessTokenLifespan is not a positive duration")
+	case cfg.AccessTokenLifespan > tokenpolicy.MaxTokenTTL:
+		return misuse("Config.AccessTokenLifespan " + cfg.AccessTokenLifespan.String() +
+			" exceeds tokenpolicy.MaxTokenTTL " + tokenpolicy.MaxTokenTTL.String() +
+			"; an access token is a bearer credential, usable by whoever holds it for its whole lifespan")
 	case cfg.RefreshTokenLifespan <= 0:
 		return misuse("Config.RefreshTokenLifespan is not a positive duration")
 	case cfg.RefreshTokenLifespan > tokenpolicy.MaxRefreshTokenTTL:
