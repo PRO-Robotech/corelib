@@ -15,6 +15,7 @@ package oauthceremony_test
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"time"
 
@@ -75,6 +76,18 @@ type memoryPorts struct {
 
 	// revokeFailure — отказ порта отзыва. Пусто — отзыв исполняется.
 	revokeFailure error
+
+	// revocations — каждый вызов порта отзыва в порядке прихода: метод,
+	// грант и ПРИЧИНА, которую назвала церемония. Ведётся подставкой, чтобы
+	// проба утверждала причину, полученную портом, а не только факт вызова.
+	revocations []revocationCall
+}
+
+// revocationCall — один вызов порта отзыва так, как его увидела служба.
+type revocationCall struct {
+	method  string
+	grantID string
+	reason  oauthceremony.RevocationReason
 }
 
 // rendezvous — встреча ровно n участников. Пока не собрались все, каждый
@@ -160,6 +173,20 @@ func (m *memoryPorts) familyRevoked(grantID string) bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return m.revoked[grantID]
+}
+
+// revocationsOf — вызовы порта отзыва по гранту, в порядке прихода.
+func (m *memoryPorts) revocationsOf(grantID string) []revocationCall {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	var calls []revocationCall
+	for _, call := range m.revocations {
+		if call.grantID == grantID {
+			calls = append(calls, call)
+		}
+	}
+	return calls
 }
 
 func newMemoryPorts() *memoryPorts {
@@ -386,12 +413,30 @@ func (m *memoryPorts) RotateRefreshToken(_ context.Context, grantID, signature s
 
 // ── GrantRevoker ────────────────────────────────────────────────────────────
 
-func (m *memoryPorts) RevokeGrantRefreshTokens(_ context.Context, grantID string) (oauthceremony.StoreOutcome, error) {
+// errReasonOutsideDictionary — отказ службы на причину вне её закрытого
+// словаря. Подставка отказывает так же, как отказало бы ограничение таблицы
+// службы: причина, которой служба не знает, не записывается молча.
+var errReasonOutsideDictionary = errors.New("revoker: the revocation reason is outside the closed dictionary")
+
+// admitRevocation записывает вызов порта отзыва и отвечает, принимает ли его
+// служба. Вызывается под замком подставки.
+func (m *memoryPorts) admitRevocation(method, grantID string, reason oauthceremony.RevocationReason) error {
+	m.revocations = append(m.revocations, revocationCall{method: method, grantID: grantID, reason: reason})
+	if m.revokeFailure != nil {
+		return m.revokeFailure
+	}
+	if !reason.Declared() {
+		return errReasonOutsideDictionary
+	}
+	return nil
+}
+
+func (m *memoryPorts) RevokeGrantRefreshTokens(_ context.Context, grantID string, reason oauthceremony.RevocationReason) (oauthceremony.StoreOutcome, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	if m.revokeFailure != nil {
-		return oauthceremony.StoreOutcome{}, m.revokeFailure
+	if err := m.admitRevocation("RevokeGrantRefreshTokens", grantID, reason); err != nil {
+		return oauthceremony.StoreOutcome{}, err
 	}
 
 	m.revoked[grantID] = true
@@ -405,12 +450,12 @@ func (m *memoryPorts) RevokeGrantRefreshTokens(_ context.Context, grantID string
 	return oauthceremony.RowsTouched(touched), nil
 }
 
-func (m *memoryPorts) RevokeGrantAccessTokens(_ context.Context, grantID string) (oauthceremony.StoreOutcome, error) {
+func (m *memoryPorts) RevokeGrantAccessTokens(_ context.Context, grantID string, reason oauthceremony.RevocationReason) (oauthceremony.StoreOutcome, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	if m.revokeFailure != nil {
-		return oauthceremony.StoreOutcome{}, m.revokeFailure
+	if err := m.admitRevocation("RevokeGrantAccessTokens", grantID, reason); err != nil {
+		return oauthceremony.StoreOutcome{}, err
 	}
 
 	m.revoked[grantID] = true
