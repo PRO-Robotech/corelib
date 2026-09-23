@@ -106,7 +106,8 @@ type Config struct {
 //
 // Значение НЕИЗМЕНЯЕМО после New и пригодно для одновременного использования
 // из многих исполнителей: собственного изменяемого состояния у него нет, а
-// движок и настройки после сборки только читаются.
+// движок и настройки после сборки только читаются (предикат — проба
+// TestEngineSettingsBuiltByNewAreOnlyReadOnTheRequestPath).
 type Ceremony struct {
 	provider engine.OAuth2Provider
 	cfg      Config
@@ -166,6 +167,16 @@ func New(cfg Config, ports Ports) (*Ceremony, error) {
 		// storageBridge.GetPKCERequestSession).
 		SanitationWhiteList: []string{"code", "redirect_uri", "code_challenge"},
 	}
+	// Хешер секрета клиента назван ЗДЕСЬ, а не оставлен движку. Геттер движка
+	// заполняет неназванное поле ЛЕНИВО — первым вызовом и без синхронизации,
+	// — и первые одновременные обмены писали бы его из одного запроса под
+	// чтением из другого: гонка данных. Значение — то же, что завёл бы движок:
+	// bcrypt, цена — SecretHashCost. Два других лениво заполняемых поля,
+	// ScopeStrategy и AudienceMatchingStrategy, названы выше; четвёртое,
+	// JWKSFetcherStrategy, не названо намеренно — путь запроса церемонии его
+	// геттера не достигает. Предикат всех трёх утверждений — проба
+	// TestEngineSettingsBuiltByNewAreOnlyReadOnTheRequestPath.
+	engineCfg.ClientSecretsHasher = &engine.BCrypt{Config: engineCfg}
 
 	bridge, store := newStorageBridge(ports, cfg.PortTimeout)
 	coreStore, ok := store.(enginehandler.CoreStorage)
