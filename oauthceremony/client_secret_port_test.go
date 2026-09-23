@@ -13,6 +13,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/PRO-Robotech/corelib/oauthceremony"
 )
@@ -367,6 +368,56 @@ func TestClientDirectoryFailureFailsTheOperation(t *testing.T) {
 				wires.add(t, name, err, false, directoryDownText)
 			})
 		}
+	}
+}
+
+// TestClientSecretVerifierCallCarriesThePortDeadline — вызову порта сверки
+// назначен СВОЙ срок, срок вызова порта (Config.PortTimeout), а не только срок
+// всей операции: зависшая сверка держала бы запрос до срока операции, и
+// обещание ClientSecretVerifier («срок вызова — Config.PortTimeout») осталось
+// бы словами. Судится каждый вызов порта в каждой операции доказательства — о
+// зарегистрированном клиенте и о неизвестном.
+func TestClientSecretVerifierCallCarriesThePortDeadline(t *testing.T) {
+	const portTimeout = 2 * time.Second // newTestCeremony: PortTimeout 2s, OperationTimeout 5s.
+
+	proofs := []struct {
+		name  string
+		proof clientProof
+	}{
+		{name: "зарегистрированный клиент", proof: rightProof()},
+		{name: "неизвестный клиент", proof: clientProof{clientID: unknownClientID, secret: testSecret, method: oauthceremony.ClientAuthBasic}},
+	}
+
+	var judged int
+	for _, op := range authenticatedOperations() {
+		for _, tc := range proofs {
+			judged++
+			t.Run(op.name+"/"+tc.name, func(t *testing.T) {
+				store := newMemoryPorts()
+				registerTestClient(t, store)
+				ceremony := newTestCeremony(t, store.ports())
+				subject := op.prepare(t, ceremony)
+				before := len(store.verificationLog())
+
+				// Исход операции судят другие пробы; здесь — срок вызова порта.
+				_, _ = op.perform(ceremony, subject, tc.proof)
+				calls := store.verificationLog()[before:]
+
+				if len(calls) != 1 {
+					t.Fatalf("ПРЕДПОСЫЛКА: порт сверки позван %d раз, ожидался один", len(calls))
+				}
+				if !calls[0].limited {
+					t.Fatal("вызов порта сверки пришёл без срока")
+				}
+				if left := calls[0].remaining; left > portTimeout {
+					t.Errorf("остаток срока вызова порта сверки %v больше срока вызова порта %v — порту назначен срок операции", left, portTimeout)
+				}
+			})
+		}
+	}
+	t.Logf("перепись: операций %d · доказательств %d · судимо %d", len(authenticatedOperations()), len(proofs), judged)
+	if judged == 0 || judged != len(authenticatedOperations())*len(proofs) {
+		t.Fatalf("НЕ ВЫПОЛНИЛОСЬ: судимо %d", judged)
 	}
 }
 

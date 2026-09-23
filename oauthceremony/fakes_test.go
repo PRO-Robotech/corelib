@@ -98,10 +98,15 @@ type memoryPorts struct {
 	issuer *recordingIssuer
 }
 
-// verifierCall — один вызов порта сверки секрета так, как его увидела служба.
+// verifierCall — один вызов порта сверки секрета так, как его увидела служба:
+// о ком спросили, что предъявлено и какой срок пришёл с контекстом вызова.
+// limited — у контекста был срок; remaining — сколько от него оставалось в миг
+// вызова.
 type verifierCall struct {
 	clientID  string
 	presented string
+	limited   bool
+	remaining time.Duration
 }
 
 // decoySecret — приманка подставки: против неё сверяется секрет клиента,
@@ -466,12 +471,16 @@ func (m *memoryPorts) LookupClient(ctx context.Context, clientID string) (oauthc
 
 // VerifyClientSecret сверяет секрет так, как сверяет служба: постоянным
 // временем, а для клиента без проверочного значения — против приманки, чей
-// исход выбрасывается. Каждый вызов записывается.
-func (m *memoryPorts) VerifyClientSecret(_ context.Context, clientID string, presented oauthceremony.PresentedSecret) (oauthceremony.SecretVerdict, error) {
+// исход выбрасывается. Каждый вызов записывается вместе со сроком контекста.
+func (m *memoryPorts) VerifyClientSecret(ctx context.Context, clientID string, presented oauthceremony.PresentedSecret) (oauthceremony.SecretVerdict, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	m.verifications = append(m.verifications, verifierCall{clientID: clientID, presented: presented.Reveal()})
+	call := verifierCall{clientID: clientID, presented: presented.Reveal()}
+	if deadline, limited := ctx.Deadline(); limited {
+		call.limited, call.remaining = true, time.Until(deadline)
+	}
+	m.verifications = append(m.verifications, call)
 	if m.verifyOverride != nil {
 		return m.verifyOverride(clientID)
 	}
