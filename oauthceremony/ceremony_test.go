@@ -57,6 +57,7 @@ func newTestCeremony(t *testing.T, ports oauthceremony.Ports, tweaks ...func(*oa
 		MinParameterEntropy:             8,
 		PortTimeout:                     2 * time.Second,
 		OperationTimeout:                5 * time.Second,
+		NewGrantID:                      mintTestGrantID,
 	}
 	for _, tweak := range tweaks {
 		tweak(&cfg)
@@ -576,6 +577,7 @@ func TestNewRejectsEveryUnnamedSetting(t *testing.T) {
 		MinParameterEntropy:       8,
 		PortTimeout:               time.Second,
 		OperationTimeout:          time.Second,
+		NewGrantID:                mintTestGrantID,
 	}
 	if _, err := oauthceremony.New(valid, store.ports()); err != nil {
 		t.Fatalf("годная сборка отвергнута: %v", err)
@@ -613,6 +615,7 @@ func TestNewRejectsEveryUnnamedSetting(t *testing.T) {
 			c.PortTimeout = 2 * time.Second
 			c.OperationTimeout = time.Second
 		},
+		"NewGrantID не назван": func(c *oauthceremony.Config) { c.NewGrantID = nil },
 	}
 	for name, spoil := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -640,6 +643,7 @@ func TestNewRejectsEveryMissingPort(t *testing.T) {
 		MinParameterEntropy:       8,
 		PortTimeout:               time.Second,
 		OperationTimeout:          time.Second,
+		NewGrantID:                mintTestGrantID,
 	}
 
 	cases := map[string]func(*oauthceremony.Ports){

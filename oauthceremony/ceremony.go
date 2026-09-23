@@ -100,6 +100,29 @@ type Config struct {
 	// меньше PortTimeout: иначе первый же вызов порта не уложился бы в
 	// операцию, и срок порта не значил бы ничего.
 	OperationTimeout time.Duration
+
+	// NewGrantID — крючок чеканки идентификатора гранта. Обязателен.
+	//
+	// Идентификатор гранта — ключ семейства: по нему служба отзывает все
+	// артефакты одной выдачи и под ним ведёт свою запись семейства, форму
+	// которой держит ограничение её схемы. Поэтому его выбирает СЛУЖБА:
+	// движок, получив запрос без идентификатора, чеканит свой при первом
+	// чтении, и ключ, которого служба не выбирала, лёг бы во все её записи.
+	// Приставки платформы — предмет пакета `ids`, а не этого.
+	//
+	// Церемония зовёт крючок ровно один раз на грант — в CompleteAuthorization,
+	// после своих проверок выдачи и до выпуска кода — и ставит идентификатор
+	// запросу движка раньше, чем тот его прочтёт. Разбор запроса, отказ в
+	// согласии, обмен кода, оборот токена обновления, интроспекция и отзыв
+	// крючка не зовут: идентификатор едет из записи хранилища.
+	//
+	// Вызову назначается срок Config.PortTimeout, как вызову порта. Отказ
+	// крючка — отказ выдачи (случай разбирается, как отказ порта), и записи
+	// кода в хранилище не появляется. Пустой идентификатор — нарушение
+	// контракта (ErrPortContract): на пустом движок начеканил бы свой.
+	// Уникальность — забота службы: церемония её не сверяет, её держит ключ
+	// записи семейства в хранилище службы.
+	NewGrantID func(ctx context.Context) (string, error)
 }
 
 // Ceremony — церемония OAuth 2.0 платформы.
@@ -335,6 +358,8 @@ func validateConfig(cfg *Config) error {
 		return misuse("Config.OperationTimeout is not a positive duration")
 	case cfg.OperationTimeout < cfg.PortTimeout:
 		return misuse("Config.OperationTimeout is shorter than Config.PortTimeout")
+	case cfg.NewGrantID == nil:
+		return misuse("Config.NewGrantID is not named; the grant identifier is minted by the service, not by the engine")
 	}
 	return nil
 }
@@ -565,6 +590,16 @@ func (c *Ceremony) CompleteAuthorization(ctx context.Context, intent Authorizati
 		return AuthorizationResult{}, err
 	}
 
+	// Идентификатор гранта — службы (Config.NewGrantID). Он ставится запросу
+	// ДО выпуска: впервые движок читает его, сохраняя код и запрос PKCE, и на
+	// пустом начеканил бы свой. Чеканка — последним шагом перед выпуском,
+	// чтобы выдача, отвергнутая проверками выше, идентификатора не расходовала.
+	grantID, err := c.mintGrantID(ctx)
+	if err != nil {
+		return AuthorizationResult{}, err
+	}
+	intent.requester.SetID(grantID)
+
 	responder, engineErr := c.provider.NewAuthorizeResponse(ctx, intent.requester, session)
 	if engineErr != nil {
 		return AuthorizationResult{}, notes.preferRecorded(fromEngine(engineErr))
@@ -573,6 +608,30 @@ func (c *Ceremony) CompleteAuthorization(ctx context.Context, intent Authorizati
 	sink := newResponseSink()
 	c.provider.WriteAuthorizeResponse(ctx, sink, intent.requester, responder)
 	return sink.authorizationResult(intent.Delivery()), nil
+}
+
+// mintGrantID спрашивает у службы идентификатор нового гранта.
+//
+// Крючок — вызов службы, как и порт, и срок у него тот же: Config.PortTimeout.
+// Его отказ разбирается, как отказ порта (истёкший срок остаётся истёкшим
+// сроком, наш случай — нашим случаем, прочее — ошибкой сервера с текстом в
+// Debug). Пустой идентификатор — нарушение контракта: движок принял бы его за
+// «не назван» и начеканил бы свой.
+func (c *Ceremony) mintGrantID(ctx context.Context) (string, error) {
+	const op = "Config.NewGrantID"
+
+	ctx, cancel := context.WithTimeout(ctx, c.cfg.PortTimeout)
+	defer cancel()
+
+	grantID, err := c.cfg.NewGrantID(ctx)
+	if err != nil {
+		return "", fromPort(op, err)
+	}
+	if grantID == "" {
+		return "", contractBreach(op, "the hook returned an empty grant identifier; "+
+			"the engine would mint one of its own in its place")
+	}
+	return grantID, nil
 }
 
 // DenyAuthorization закрывает намерение отказом.

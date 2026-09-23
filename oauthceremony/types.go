@@ -222,6 +222,11 @@ type SessionRecord struct {
 type GrantRecord struct {
 	// GrantID — идентификатор гранта. По нему отзываются ВСЕ артефакты
 	// одного гранта (RFC 7009 §2.1, замечание о реализации).
+	//
+	// Его чеканит служба крючком Config.NewGrantID при выдаче кода; записи
+	// токенов наследуют его от записи кода. Запись, которую хранилище отдаёт
+	// живой, обязана его нести: пустой — нарушение контракта порта
+	// (ErrPortContract), а не повод движку начеканить свой.
 	GrantID string
 
 	// ClientID — клиент, которому выдан грант.
@@ -465,7 +470,8 @@ type IntrospectionResult struct {
 	// обновления.
 	AccessTokenType string
 
-	// GrantID — идентификатор гранта, породившего артефакт.
+	// GrantID — идентификатор гранта, породившего артефакт: тот, что выдал
+	// крючок Config.NewGrantID.
 	GrantID string
 
 	ClientID  string
