@@ -661,6 +661,7 @@ func TestNewRejectsAnEndpointThatIsNotAnAbsoluteAddress(t *testing.T) {
 		MinParameterEntropy:       8,
 		PortTimeout:               time.Second,
 		OperationTimeout:          time.Second,
+		NewGrantID:                mintTestGrantID,
 	}
 
 	fields := map[string]func(*oauthceremony.Config, string){
@@ -747,6 +748,10 @@ func TestNewRejectsAnEndpointThatIsNotAnAbsoluteAddress(t *testing.T) {
 }
 
 // TestNewRejectsEveryMissingPort — порт, которого нет, называется поимённо.
+//
+// Близнец — те же настройки с полным набором портов: без него настройки,
+// которые сами не прошли бы проверку, давали бы тот же случай сборки, и
+// проба зеленела бы, не дойдя до портов.
 func TestNewRejectsEveryMissingPort(t *testing.T) {
 	store := newMemoryPorts()
 	cfg := oauthceremony.Config{
@@ -765,6 +770,10 @@ func TestNewRejectsEveryMissingPort(t *testing.T) {
 		NewGrantID:                mintTestGrantID,
 	}
 
+	if _, err := oauthceremony.New(cfg, store.ports()); err != nil {
+		t.Fatalf("ПРЕДПОСЫЛКА: годная сборка с полным набором портов отвергнута: %v", err)
+	}
+
 	cases := map[string]func(*oauthceremony.Ports){
 		"Clients":            func(p *oauthceremony.Ports) { p.Clients = nil },
 		"AuthorizationCodes": func(p *oauthceremony.Ports) { p.AuthorizationCodes = nil },
@@ -776,8 +785,12 @@ func TestNewRejectsEveryMissingPort(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			ports := store.ports()
 			drop(&ports)
-			if _, err := oauthceremony.New(cfg, ports); !errors.Is(err, oauthceremony.ErrCeremonyMisuse) {
+			_, err := oauthceremony.New(cfg, ports)
+			if !errors.Is(err, oauthceremony.ErrCeremonyMisuse) {
 				t.Fatalf("набор без порта %s принят: %v", name, err)
+			}
+			if !strings.Contains(err.Error(), "Ports."+name+" ") {
+				t.Errorf("отказ сборки без порта %s не называет его: %v", name, err)
 			}
 		})
 	}
