@@ -29,6 +29,15 @@
 # запроса → 200 С полем `pull_request`; нет номера → 404 `{"message":"Not Found"}`.
 # Сверх замера подставной отдаёт 410, 301 и 500 — ответы, которые API называет
 # в документации (задача удалена, перенесена, сбой). Сеть проба не трогает.
+# О КОММИТАХ (repos/PRO-Robotech/corelib/commits/<sha>, замер 2026-09-24):
+# слияние площадки 372daa90 → 200, committer.login web-flow, verified true;
+# слияние клиента c6d8b1b3 → 200, login автора, verified false, unsigned;
+# sha, которого на площадке нет, → 422 «No commit found for SHA». Подставной
+# отвечает по записи «<sha> <вид> <родителей>» в $work/api.commits. Сверх
+# замера — 500 и ответы 200, отличные от ответа о 372daa90 ровно одним
+# условием вида «площадка» (подпись, login, адрес, число родителей): близнец
+# подделки в два факта — слияние клиента c6d8b1b3 — не держит ни одного из
+# них, снятое условие он не пропускает, пока стоит второе.
 #
 # КОНТРОЛЬ — дерево без хука коммита (как ветка волны до corelib#25): тот же
 # дефектный коммит там записывается. Без этого прогона нечем показать, что
@@ -714,15 +723,52 @@ else bad "мелкий клон: страж отправки не сказал �
 echo "== проверка запроса (подставной API трекера)"
 cat > "$work/api.py" <<'PY'
 import http.server, json, sys
-port_file, log_file = sys.argv[1], sys.argv[2]
+port_file, log_file, commits_file = sys.argv[1], sys.argv[2], sys.argv[3]
 REPO = "/repos/probe/corelib/issues/"
+COMMITS = "/repos/probe/corelib/commits/"
 ISSUES = {1, 7, 8, 25, 26, 32, 41, 57, 58, 59}
+# Ответ о коммите — по записи «<sha> <вид> <родителей>» в commits_file,
+# прочитанной на каждом запросе. Вид server — слияние площадки (замер
+# 372daa90: login web-flow, verified true, адрес noreply@github.com). Прочие
+# виды 200 — сверх замера, и каждый отличается от server РОВНО одним фактом
+# ответа, по виду на условие «площадка» у проверки запроса: unverified —
+# подпись не проверена, author — login автора, address — адрес коммиттера не
+# noreply@github.com. <родителей> — сколько их в ответе, столько, сколько у
+# коммита фикстуры. fail — 500. Коммита без записи на площадке нет — 422.
+def commit_answer(sha):
+    records = {}
+    try:
+        for line in open(commits_file):
+            parts = line.split()
+            if len(parts) == 3:
+                records[parts[0]] = (parts[1], int(parts[2]))
+    except OSError:
+        pass
+    if sha not in records:
+        return 422, {"message": "No commit found for SHA: " + sha, "status": "422"}
+    kind, parents = records[sha]
+    if kind == "fail":
+        return 500, {"message": "Server Error"}
+    login, verified, email = "web-flow", True, "noreply@github.com"
+    if kind == "unverified":
+        verified = False
+    elif kind == "author":
+        login = "probe-root"
+    elif kind == "address":
+        email = "probe-root@example.invalid"
+    who = {"name": "GitHub", "email": email, "date": "2026-09-24T00:00:00Z"}
+    return 200, {"sha": sha, "committer": {"login": login},
+                 "commit": {"committer": who,
+                            "verification": {"verified": verified, "reason": "valid" if verified else "unsigned"}},
+                 "parents": [{"sha": "p%d" % i} for i in range(1, parents + 1)]}
 class H(http.server.BaseHTTPRequestHandler):
     def do_GET(self):
         with open(log_file, "a") as f:
             f.write("%s %s\n" % (self.path, self.headers.get("Authorization") or "-"))
         code, body = 404, {"message": "Not Found"}
-        if self.path.startswith(REPO) and self.path[len(REPO):].isdigit():
+        if self.path.startswith(COMMITS):
+            code, body = commit_answer(self.path[len(COMMITS):])
+        elif self.path.startswith(REPO) and self.path[len(REPO):].isdigit():
             n = int(self.path[len(REPO):])
             url = "https://api.example.invalid/repos/probe/corelib"
             if n in ISSUES:
@@ -748,7 +794,8 @@ with open(port_file, "w") as f:
     f.write(str(srv.server_address[1]))
 srv.serve_forever()
 PY
-python3 "$work/api.py" "$work/api.port" "$work/api.log" >/dev/null 2>&1 &
+: > "$work/api.commits"
+python3 "$work/api.py" "$work/api.port" "$work/api.log" "$work/api.commits" >/dev/null 2>&1 &
 api_pid=$!
 for _ in $(seq 100); do [ -s "$work/api.port" ] && break; sleep 0.05; done
 [ -s "$work/api.port" ] || void "подставной API не встал"
@@ -844,6 +891,137 @@ verdict "номер заголовка и головы — тоже задача
 on 26 "$pr25"; nv -m "#5000 x"
 pr pull_request "#26 x" "" 26 "$pr25" "$(git -C "$F" rev-parse HEAD)"
 verdict "API трекера ответил 500 — судить не смог: исход 2, а не зелёное" 2 "500"
+
+# ── СЕРВЕРНОЕ СЛИЯНИЕ (corelib#70) ───────────────────────────────────────────
+# Слияние запроса, собранное площадкой: два родителя, коммиттер «GitHub
+# <noreply@github.com>». Его сообщение составлено ПОСЛЕ проверки своего
+# запроса, и судит его проверка СЛЕДУЮЩЕГО запроса, когда переписать его можно
+# только --force. Серверным его делает ответ API площадки, а не имя
+# коммиттера: имя задаёт клиент (утверждения «подделка — …»). Вид «площадка»
+# у проверки запроса — четыре условия ответа сразу, и у каждого свой близнец,
+# отличный от законного ответа ровно этим условием: login, подпись, адрес —
+# у кандидата, число родителей — у записи послабления (кандидат — всегда
+# слияние, а запись называет любой коммит).
+echo "== серверное слияние (подставной API коммитов площадки)"
+body17="$(seq 17 | sed 's/^/строка тела /')"
+srv_n=0
+# server_merge <ответ API: server|unverified|author|address|fail|none> <первая
+# строка> [<тело>] [<родителей: 2|1>] — коммит с коммиттером площадки поверх
+# pr25 (вторым родителем — h8b); у каждого свои даты, и sha не совпадают. Ответ
+# подставного API о нём — первый аргумент (none — записи нет, API отвечает
+# 422), с тем же числом родителей, что у коммита. sha — в $srv.
+server_merge() {
+    local parents=(-p "$pr25") n="${4:-2}" at
+    case "$1" in server | unverified | author | address | fail | none) ;; *) void "server_merge: вид ответа «$1» подставному API не известен" ;; esac
+    case "$n" in 1) ;; 2) parents+=(-p "$h8b") ;; *) void "server_merge: родителей «$n», а не 1 или 2" ;; esac
+    srv_n=$((srv_n + 1))
+    at="$(($(date +%s) + srv_n)) +0000"
+    srv="$(printf '%s\n\n%s\n' "$2" "${3:-}" | GIT_AUTHOR_DATE="$at" GIT_COMMITTER_DATE="$at" \
+        GIT_COMMITTER_NAME=GitHub GIT_COMMITTER_EMAIL=noreply@github.com \
+        git -C "$F" commit-tree "${parents[@]}" -F - "$pr25^{tree}")" || void "серверное слияние фикстуры не собрано"
+    [ "$1" = none ] || printf '%s %s %s\n' "$srv" "$1" "$n" >> "$work/api.commits"
+}
+srvpr() { pr pull_request "#26 x" "" 26 "$pr25" "$srv"; }
+server_merge server "#25 сборка пачки: предмет второй (#46)"
+srv_ok="$srv"
+srvpr
+verdict "серверное слияние «<заголовок запроса> (#<запрос>)» на голове 26 — законно: номер задачи сборки, не ветки" 0 \
+    "нарушений нет" "серверных слияний 1 из кандидатов 1"
+fact "проверка запроса спрашивала API площадки о коммите серверного слияния с ключом" \
+    grep -qx "/repos/probe/corelib/commits/$srv Bearer probe-token" "$work/api.log"
+server_merge server "сборка пачки: предмет второй (#46)"
+srvpr
+verdict "близнец без номера: то же серверное слияние без «#<N> » — отказ с его sha" 1 \
+    "${srv:0:10} серверное слияние — первая строка"
+server_merge server "Merge pull request #46 from probe/25" "#25 сборка пачки"
+srvpr
+verdict "серверное слияние в форме площадки по умолчанию «Merge pull request #<запрос> from <владелец>/<ветка>» — законно" 0 \
+    "нарушений нет"
+server_merge server "Merge pull request from probe/25" "#25 сборка пачки"
+srvpr
+verdict "«Merge pull request» без номера запроса — отказ" 1 "${srv:0:10} серверное слияние — первая строка"
+server_merge server "Merge pull request #46 from probe/99999" "#99999 сборка пачки"
+srvpr
+verdict "ветка в «… from <владелец>/<номер>» — задача этого репозитория: отказ" 1 "нет задачи #99999"
+# Подделка — законный ответ о законном слиянии (srv_ok выше), кроме ОДНОГО
+# условия вида «площадка»: близнец, отличный двумя, не держит ни одного из
+# них — снятое условие он не пропускает, пока стоит второе.
+for twin in "unverified:подпись не проверена (verified false)" \
+    "author:login коммиттера — автор, не web-flow" \
+    "address:адрес коммиттера в ответе — не noreply@github.com"; do
+    server_merge "${twin%%:*}" "#25 сборка пачки: предмет второй (#46)"
+    srvpr
+    verdict "подделка — ${twin#*:}, прочее как у слияния площадки: судится как слияние клиента, отказ" 1 \
+        "${srv:0:10} слияние — «#<N> merge #<M>: …»" "${srv:0:10} слияние «#25» на ветке «26»"
+done
+server_merge none "#25 сборка пачки: предмет второй (#46)"
+srvpr
+verdict "коммита на площадке нет (ответ 422) — не серверное слияние: отказ по форме слияния" 1 \
+    "${srv:0:10} слияние — «#<N> merge #<M>: …»"
+server_merge fail "#25 сборка пачки: предмет второй (#46)"
+srvpr
+verdict "API площадки ответил 500 о коммите — судить не смог: исход 2, а не зелёное" 2 "коммит ${srv:0:10} (ответ 500)"
+server_merge server "Update README.md" "" 1
+srvpr
+verdict "коммит площадки с одним родителем (правка через веб) — не слияние: форма обычного коммита, отказ" 1 \
+    "${srv:0:10} первая строка не начинается с «#<N> »"
+fact "о коммите площадки с одним родителем API не спрашивали: кандидат — только слияние" \
+    not grep -qF "/commits/$srv " "$work/api.log"
+server_merge server "#25 сборка пачки (#46)" "Co-Authored-By: Claude <noreply@example.invalid>"
+srvpr
+verdict "серверное слияние с атрибуцией — отказ" 1 "${srv:0:10} атрибуция в сообщении"
+server_merge server "#25 сборка пачки (#46)" "$body17"
+srv17="$srv"
+srvpr
+verdict "серверное слияние с телом в 17 строк — отказ: предел тела один на все коммиты" 1 "${srv:0:10} тело — 17 строк"
+
+# ── ПОСЛАБЛЕНИЕ ПОИМЁННО: .github/scripts/pr-rule-exemptions.txt ─────────────
+echo "== послабление поимённо (запись: sha · класс · причина с предикатом снятия)"
+ledger="$F/.github/scripts/pr-rule-exemptions.txt"
+mkdir -p "$F/.github/scripts"
+reason="серверное слияние влито до --body \"\"; снимается, когда оно — предок main"
+printf '# комментарий\n\n%s тело %s\n' "$srv17" "$reason" > "$ledger"
+srvpr
+verdict "запись «тело» у серверного слияния — нарушение тела прощено и названо с причиной" 0 \
+    "нарушений нет" "послаблено: ${srv17:0:10} тело — $reason" "записей послабления 1"
+server_merge server "#25 сборка пачки (#46)" "$body17"
+srvpr
+verdict "запись прощает свой sha, а не класс: второе такое же слияние — отказ" 1 "${srv:0:10} тело — 17 строк"
+printf '%s длина %s\n' "$srv17" "$reason" > "$ledger"
+pr pull_request "#26 x" "" 26 "$pr25" "$srv17"
+verdict "класс записи не из словаря — отказ, записью не прощено" 1 "класс «длина» не из словаря" "${srv17:0:10} тело — 17 строк"
+printf '%s тело\n' "$srv17" > "$ledger"
+pr pull_request "#26 x" "" 26 "$pr25" "$srv17"
+verdict "запись без причины — отказ" 1 "без причины"
+on 26 "$pr25"; nv -m "#26 x" -m "$body17"
+own17="$(git -C "$F" rev-parse HEAD)"
+mkdir -p "$F/.github/scripts"
+printf '%s тело %s\n' "$own17" "$reason" > "$ledger"
+pr pull_request "#26 x" "" 26 "$pr25" "$own17"
+verdict "запись у коммита клиента — отказ: свой коммит переписывается, а не прощается" 1 \
+    "${own17:0:10} — не серверное слияние" "${own17:0:10} тело — 17 строк"
+# Близнец законной записи (srv17) в один факт: коммит площадки подтверждён
+# так же, но родитель у него один — правка через веб на ветке запроса, её
+# переписывают до слияния.
+server_merge server "#25 правка через веб" "$body17" 1
+lone17="$srv"
+printf '%s тело %s\n' "$lone17" "$reason" > "$ledger"
+srvpr
+verdict "запись у коммита площадки с одним родителем — отказ: не слияние, переписывается, а не прощается" 1 \
+    "${lone17:0:10} — не серверное слияние" "${lone17:0:10} тело — 17 строк"
+printf '%s тело %s\n' "0123456789abcdef0123456789abcdef01234567" "$reason" > "$ledger"
+srvpr
+verdict "запись о коммите, которого нет в клоне, — отказ: исключать нечего" 1 "0123456789 — коммита нет в клоне"
+printf '%s тело %s\n' "$srv17" "$reason" > "$ledger"
+git -C "$F" update-ref refs/heads/main "$srv17" || void "ссылка main фикстуры не переставлена"
+pr pull_request "#26 x" "" 26 "$pr25" "$srv17"
+verdict "запись о коммите, уже влитом в main, — отказ: запись пережила предмет" 1 "${srv17:0:10} — уже предок main"
+git -C "$F" update-ref refs/heads/main "$h1" || void "ссылка main фикстуры не возвращена"
+printf '# записей нет\n' > "$ledger"
+pr pull_request "#26 x" "" 26 "$pr25" "$srv_ok"
+verdict "ведомость без записей — цель, а не отказ: законный запрос зелёный, перепись названа" 0 \
+    "нарушений нет" "записей послабления 0"
+rm -rf "$F/.github"
 pr push "" "" "" "" ""
 verdict "событие не запрос (push) — судить нечего, и это сказано" 0 "запроса нет"
 pr pull_request "#1 x" "" 1 "$h0" "$h0"
