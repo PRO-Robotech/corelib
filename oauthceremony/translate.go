@@ -353,7 +353,9 @@ func requesterFromCode(ctx context.Context, clients func(context.Context, string
 //
 // Клиент берётся из справочника ЗАНОВО, а не из записи: между выдачей кода и
 // его обменом клиента могли снять, сделать публичным или сузить ему права, и
-// решение обязано приниматься по нынешней записи, а не по слепку.
+// решение обязано приниматься по нынешней записи, а не по слепку. Отказ
+// справочника clients отдаёт уже переведённым для движка
+// (storageBridge.grantClient), и здесь он возвращается как есть.
 //
 // # Запись без идентификатора гранта — нарушение контракта порта
 //
@@ -370,6 +372,16 @@ func requesterFromGrant(ctx context.Context, clients func(context.Context, strin
 	if rec.GrantID == "" {
 		return nil, note(ctx, contractBreach("GrantRecord.GrantID", "a stored grant carries no identifier; "+
 			"the engine would mint one of its own, and what is issued or revoked under it would belong to no family"))
+	}
+	// Выданная область записи — `scope-token`: иной церемония на хранение не
+	// отдаёт (checkGrantWithinRequest), а по записи обмен кода и оборот выдают
+	// области заново, без сверки движком.
+	for _, scope := range rec.GrantedScopes {
+		if defect := scopeTokenDefect(scope); defect != "" {
+			return nil, note(ctx, contractBreach("GrantRecord.GrantedScopes", strconv.Quote(scope)+
+				" is not a scope-token (RFC 6749 §3.3): "+defect+
+				"; the ceremony stores scope-tokens only, and the exchange would issue the stored scope again"))
+		}
 	}
 
 	reg, err := clients(ctx, rec.ClientID)
@@ -418,7 +430,6 @@ var engineTokenTypes = map[TokenKind]engine.TokenType{
 	TokenKindAccess:            engine.AccessToken,
 	TokenKindRefresh:           engine.RefreshToken,
 	TokenKindAuthorizationCode: engine.AuthorizeCode,
-	TokenKindIdentity:          engine.IDToken,
 }
 
 // engineTypeOf переводит наш вид в вид движка. Вид вне словаря — вид,

@@ -20,10 +20,10 @@ import (
 
 // expectedVerifications — сколько раз операция обязана позвать порт сверки при
 // доказательстве proof. Интроспекция принимает доказательство только
-// заголовком (RFC 7662 §2.1): запрос без заголовка движок отвергает раньше, чем
-// спросит справочник, — и тогда порт не зовётся ни для кого.
+// заголовком (RFC 7662 §2.1, IntrospectionAuthMethods): иной способ церемония
+// отвергает по имени до движка, — и тогда порт не зовётся ни для кого.
 func expectedVerifications(op authenticatedOperation, proof clientProof) int {
-	if op.headerOnly && proof.method != oauthceremony.ClientAuthBasic {
+	if !op.accepted(proof.method) {
 		return 0
 	}
 	return 1
@@ -58,8 +58,8 @@ func TestClientSecretIsVerifiedByTheServicePortExactlyOnce(t *testing.T) {
 		for _, tc := range cases {
 			judged++
 			want := expectedVerifications(op, tc.proof)
-			// Без заголовка интроспекция отказывает всякому — и верному секрету
-			// телом тоже.
+			// Способ, которого операция не принимает, отвергается всякому — и
+			// верному секрету телом тоже.
 			done := tc.done && want == 1
 			if want == 1 {
 				calledOnce++
@@ -89,8 +89,8 @@ func TestClientSecretIsVerifiedByTheServicePortExactlyOnce(t *testing.T) {
 					t.Fatalf("операция исполнилась=%v, ожидалось %v; отказ %v", gotDone, done, err)
 				}
 				if !done {
-					if got := oauthceremony.CodeOf(err); got != op.refusal {
-						t.Errorf("отказ случаем %v, ожидался %v: %v", got, op.refusal, err)
+					if got, want := oauthceremony.CodeOf(err), op.refusalOf(tc.proof); got != want {
+						t.Errorf("отказ случаем %v, ожидался %v: %v", got, want, err)
 					}
 				}
 			})
@@ -644,7 +644,9 @@ func (d *flakyDirectory) refusals() int {
 // grantLookupFailures — отказы справочника, который отвечает уже после
 // доказательства клиента: простой сбой, срок и каждый случай пакета, кроме
 // «клиента нет». «Клиента нет» у записи гранта — сигнал контракта (клиента
-// сняли), и его судит TestReplayOfATokenWhoseClientIsGoneStillRevokesTheFamily.
+// сняли), и его судят TestArtifactOfARemovedClientIsAnInvalidArtifact (артефакт
+// без повтора) и TestReplayOfATokenWhoseClientIsGoneStillRevokesTheFamily
+// (повтор).
 func grantLookupFailures() []struct {
 	name string
 	err  error

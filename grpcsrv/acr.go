@@ -33,8 +33,12 @@
 // include layers with no transport at all (deployment-config validation, access
 // service use-cases), so it lives in the transport-free package `acrlevel`
 // (acrlevel.Rank / acrlevel.Satisfies, with the normative ordering), and this
-// rule takes it from there. That is one table reached through one address, not a
-// second home: grpcsrv keeps no ranking of its own.
+// rule takes it from there. That is one table, not a second home: grpcsrv keeps
+// no ranking of its own. ACRRank and ACRSatisfies below are the address the
+// ranking had in v1.9.0, kept as deprecated forwarders to acrlevel — the module
+// path carries no major-version suffix, so removing them in a v1 minor release
+// would break every consumer that raises its pin. They go away only with a
+// major release of the module.
 package grpcsrv
 
 import (
@@ -62,6 +66,26 @@ const MDKeyTokenACR = principalwire.MetaTokenACR
 // EvaluateStepUp). `user`, `system`, an empty/absent type and any unknown value
 // are NOT exempt (fail-closed).
 const PrincipalTypeServiceAccount = "service_account"
+
+// ACRRank maps an ACR string to a comparable integer — the pre-acrlevel address
+// of the ranking, answering exactly what acrlevel.Rank answers. It holds no
+// table: the body forwards.
+//
+// Deprecated: use acrlevel.Rank. This address is kept for consumers pinned to
+// v1.9.0 and is removed only with a major release of the module.
+func ACRRank(acr string) int {
+	return acrlevel.Rank(acr)
+}
+
+// ACRSatisfies reports whether a presented acr meets a required floor — the
+// pre-acrlevel address of the check, answering exactly what acrlevel.Satisfies
+// answers. Enforcement points call EvaluateStepUp, not this.
+//
+// Deprecated: use acrlevel.Satisfies. This address is kept for consumers pinned
+// to v1.9.0 and is removed only with a major release of the module.
+func ACRSatisfies(presented, required string) bool {
+	return acrlevel.Satisfies(presented, required)
+}
 
 // StepUpInput — every input of the step-up decision. Both enforcement points
 // build one of these and read nothing else.

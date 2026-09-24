@@ -79,16 +79,35 @@ const (
 type TokenKind string
 
 // Виды артефактов.
+//
+// Токена личности (`id_token`, OpenID Connect) здесь НЕТ: обработчика OpenID
+// Connect церемония не провязывает (doc.go), и вид без выпуска обещал бы
+// поведение, которого нет. Выдача токена личности — свой предмет со своим
+// портом ключей и своими настройками.
 const (
 	TokenKindAccess            TokenKind = "access_token"
 	TokenKindRefresh           TokenKind = "refresh_token"
 	TokenKindAuthorizationCode TokenKind = "authorization_code"
-	TokenKindIdentity          TokenKind = "id_token"
 	// TokenKindUnspecified — вид не назван. Отдельно от пустой строки в
 	// значении поля: в интроспекции «вид определить не удалось» —
 	// законный исход, и он обязан быть выразим.
 	TokenKindUnspecified TokenKind = ""
 )
+
+// TokenKinds возвращает словарь видов, которые церемония ВЫПУСКАЕТ, — службе,
+// которая хранит сроки и границы по видам (SessionRecord.ExpiresAt,
+// SessionRecord.NotAfter) и сопрягает словарь со своим (ограничение столбца
+// вида). Вида без выпуска в словаре нет: граница или срок под ним не значили
+// бы ничего.
+func TokenKinds() []TokenKind {
+	return []TokenKind{TokenKindAccess, TokenKindRefresh, TokenKindAuthorizationCode}
+}
+
+// Declared отвечает, входит ли вид в словарь выпускаемых. Нулевое значение
+// (TokenKindUnspecified) НЕ входит: это «вид не назван», а не вид.
+func (k TokenKind) Declared() bool {
+	return slices.Contains(TokenKinds(), k)
+}
 
 // ClientAuthMethod — способ, которым клиент доказывает себя точке токена
 // (RFC 6749 §2.3).
@@ -107,6 +126,26 @@ const (
 	// ClientAuthPost — секрет в теле запроса.
 	ClientAuthPost ClientAuthMethod = "client_secret_post"
 )
+
+// ClientAuthMethods возвращает словарь способов целиком — тому, кто строит
+// метаданные сервера обнаружения (`token_endpoint_auth_methods_supported`,
+// RFC 8414 §2) или проверяет запись клиента. Точка токена и отзыв принимают
+// каждый способ словаря; интроспекция — только те, что называет
+// IntrospectionAuthMethods.
+func ClientAuthMethods() []ClientAuthMethod {
+	return []ClientAuthMethod{ClientAuthNone, ClientAuthBasic, ClientAuthPost}
+}
+
+// IntrospectionAuthMethods — способы, которыми спрашивающий доказывает себя
+// точке интроспекции (`introspection_endpoint_auth_methods_supported`,
+// RFC 8414 §2). Перечень уже словаря ClientAuthMethods: движок на этой точке
+// берёт доказательство только заголовком Authorization (RFC 7662 §2.1), и
+// ни секрета в теле запроса, ни запроса без доказательства не принимает.
+// Способ вне перечня Introspect отвергает по имени до движка
+// (ErrCeremonyMisuse).
+func IntrospectionAuthMethods() []ClientAuthMethod {
+	return []ClientAuthMethod{ClientAuthBasic}
+}
 
 // ScopeMatching — правило сопоставления запрошенной области с разрешённой.
 type ScopeMatching uint8
@@ -131,7 +170,7 @@ const (
 // # Почему структура, а не интерфейс
 //
 // Движок объявляет клиента интерфейсом из семи методов и расширяет его ещё
-// тремя интерфейсами, которые он проверяет утверждением типа. Реализуй службa
+// тремя интерфейсами, которые он проверяет утверждением типа. Реализуй служба
 // такой интерфейс — и состав её обязанностей менялся бы при обновлении
 // апстрима молча: новый необязательный интерфейс просто перестал бы
 // подхватываться. Структура делает состав ЯВНЫМ: новое поле видно в диффе.
@@ -158,8 +197,8 @@ type ClientRegistration struct {
 	GrantKinds []GrantKind
 
 	// ResponseKinds — разрешённые СОЧЕТАНИЯ типов ответа. Каждый элемент —
-	// одно сочетание; составное сочетание записывается через пробел
-	// ("code id_token"), как того требует RFC 6749 §3.1.1.
+	// одно сочетание; составное записывается через пробел (RFC 6749 §3.1.1).
+	// Церемония обслуживает одно сочетание — `code` (ResponseKindCode).
 	ResponseKinds []string
 
 	// Scopes — области, которые клиенту дозволено запрашивать.
@@ -257,6 +296,11 @@ type GrantRecord struct {
 	// RequestedScopes / GrantedScopes — что просили и что дали. Хранятся
 	// ОБА: отказ в области — это разница между ними, и она обязана быть
 	// восстановима из записи, а не вычисляема заново.
+	//
+	// Каждая выданная область — `scope-token` (RFC 6749 §3.3): иной
+	// церемония на хранение не отдаёт, и запись из хранилища с такой областью —
+	// нарушение контракта порта (ErrPortContract): по ней обмен и оборот
+	// выдали бы область заново.
 	RequestedScopes []string
 	GrantedScopes   []string
 
@@ -364,7 +408,9 @@ type AuthorizationRequest struct {
 	// ResponseKinds — `response_type`, разобранный по пробелу.
 	ResponseKinds []ResponseKind
 
-	// Scopes — `scope`, разобранный по пробелу.
+	// Scopes — `scope`, разобранный по пробелу. Область вне грамматики
+	// `scope-token` (RFC 6749 §3.3) Authorize отвергает случаем
+	// CodeInvalidScope и возвращает намерение, годное для DenyAuthorization.
 	Scopes []string
 
 	// Audiences — `audience`.
@@ -412,6 +458,11 @@ type AuthorizationGrant struct {
 	// сузить запрос, но не расширить: область, не покрытая запрошенными по
 	// правилу Config.ScopeMatching, отвергается ЦЕРЕМОНИЕЙ
 	// (ErrCeremonyMisuse) до выпуска кода. Движок выданное не сверяет.
+	//
+	// Каждая область — `scope-token` (RFC 6749 §3.3,
+	// `1*( %x21 / %x23-5B / %x5D-7E )`); иная отвергается так же — до выпуска
+	// кода и раньше сверки с запросом: образец `tenant.*` покрыл бы и
+	// `tenant.a b`, а клиент прочёл бы её двумя областями.
 	GrantedScopes []string
 
 	// GrantedAudiences — получатели, которых служба решила выдать. Тоже не
@@ -431,7 +482,8 @@ type AuthorizationGrant struct {
 	// Нулевое время — не граница и отвергается церемонией по имени вида
 	// (ErrCeremonyMisuse) до выпуска кода: движок читает нулевой срок
 	// токена обновления как «без срока», и граница-ноль сделала бы семейство
-	// бессрочным.
+	// бессрочным. Вид вне словаря TokenKinds отвергается так же: церемония
+	// его не выпускает, и граница под ним не ограничила бы ничего.
 	ExpiresAt map[TokenKind]time.Time
 }
 
@@ -529,9 +581,6 @@ type TokenResult struct {
 	// RefreshToken — токен обновления. Пусто, если не выдавался.
 	RefreshToken string
 
-	// IdentityToken — токен личности (OIDC). Пусто, если не выдавался.
-	IdentityToken string
-
 	// Scopes — выданные области.
 	Scopes []string
 
@@ -556,6 +605,15 @@ type IntrospectionRequest struct {
 
 	// ClientID / ClientSecret / AuthMethod — чем доказывает себя тот, кто
 	// спрашивает. Интроспекция без доказательства запрещена RFC 7662 §2.1.
+	//
+	// AuthMethod принимает ОДИН способ — ClientAuthBasic
+	// (IntrospectionAuthMethods): движок на этой точке берёт доказательство
+	// только заголовком Authorization. Пустое значение разрешается так же, как
+	// в TokenRequest: при непустом секрете — ClientAuthBasic, при пустом —
+	// ClientAuthNone. ClientAuthPost и ClientAuthNone, названные явно или
+	// полученные разрешением пустого, Introspect отвергает по имени до
+	// обращения к движку (ErrCeremonyMisuse): иначе они уезжали бы в движок и
+	// получали его отказ «заголовка Authorization нет», не называющий способа.
 	ClientID     string
 	ClientSecret string
 	AuthMethod   ClientAuthMethod

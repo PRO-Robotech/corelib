@@ -208,7 +208,7 @@ type Ceremony struct {
 // рабочем пути означала бы, что негодная сборка живёт до первого обращения и
 // падает на пользователе.
 func New(cfg Config, ports Ports) (*Ceremony, error) {
-	if err := validateConfig(&cfg); err != nil {
+	if err := validateConfig(cfg); err != nil {
 		return nil, err
 	}
 	if err := validatePorts(ports); err != nil {
@@ -217,13 +217,12 @@ func New(cfg Config, ports Ports) (*Ceremony, error) {
 
 	bridge, store := newStorageBridge(ports, cfg.PortTimeout)
 
-	// Издателя (AccessTokenIssuer, IDTokenIssuer) настройки движка не
-	// называют: его читают лишь стратегии JWT движка, а New строит свою
-	// стратегию (artifactStrategy, ниже), которая его не читает. Код
-	// авторизации и токен обновления у неё — непрозрачные строки без
-	// утверждений, и `iss` в них нести негде; токен доступа выпускает порт
-	// службы, и `iss` в него кладёт служба; токена личности церемония не
-	// выдаёт (doc.go).
+	// Издателя токенов настройки движка не называют: его читают лишь стратегии
+	// JWT движка, а New строит свою стратегию (artifactStrategy, ниже), которая
+	// его не читает. Код авторизации и токен обновления у неё — непрозрачные
+	// строки без утверждений, и `iss` в них нести негде; токен доступа
+	// выпускает порт службы, и `iss` в него кладёт служба; токена личности
+	// церемония не выдаёт (doc.go).
 	//
 	// PKCE (RFC 7636) обязателен ВСЕМ клиентам и только с методом S256
 	// (EnforcePKCE, EnforcePKCEForPublicClients, EnablePKCEPlainChallengeMethod
@@ -357,7 +356,10 @@ var (
 	_ engineproofkey.PKCERequestStorage    = (*transactionalStorageBridge)(nil)
 )
 
-func validateConfig(cfg *Config) error {
+// validateConfig судит настройки и не меняет их: принимает значение, а не
+// указатель, и поправить настройки, с которыми New соберёт церемонию, не может
+// по построению.
+func validateConfig(cfg Config) error {
 	const minEntropy = 8
 	switch {
 	case cfg.AccessTokenLifespan <= 0:
@@ -433,8 +435,15 @@ func validateEndpoint(field, value string) error {
 	// адрес в том написании, какое даёт обратная запись разобранного. Строка,
 	// которая с ним не совпадает, — второе написание адреса: служба
 	// опубликовала бы одно, а запросы уходили бы на другое.
+	//
+	// Правила у частей адреса разные, и отказ называет правило каждой: схему
+	// разбор понижает в регистре; хост не-ASCII обратная запись экранирует, а
+	// клиентам он публикуется A-меткой; путь обратная запись экранирует, но
+	// регистра его не трогает, и путь к регистру чувствителен.
 	if endpoint.String() != value {
-		return misuse(field + " is not written the way it is served: parsing and re-serialising it changes it (whitespace, a non-ASCII character or an upper-case scheme); write the address percent-encoded and in lower case")
+		return misuse(field + " is not written the way it is served: parsing and re-serialising it changes it; " +
+			"write the scheme in lower case, a non-ASCII host as its A-label (the xn-- form), " +
+			"and whitespace and non-ASCII characters of the path percent-encoded, keeping the letter case of the path")
 	}
 	return nil
 }
@@ -621,6 +630,9 @@ func (c *Ceremony) Authorize(ctx context.Context, req AuthorizationRequest) (Aut
 	if err := requireProofKey(requester); err != nil {
 		return intent, err
 	}
+	if err := requireScopeTokens(requester); err != nil {
+		return intent, err
+	}
 	return intent, nil
 }
 
@@ -663,6 +675,11 @@ func (c *Ceremony) CompleteAuthorization(ctx context.Context, intent Authorizati
 		return AuthorizationResult{}, err
 	}
 	if err := requireProofKey(intent.requester); err != nil {
+		return AuthorizationResult{}, err
+	}
+	// Намерение, чей отказ служба не доставила, кода не получает: запись кода
+	// несла бы запрошенную область вне грамматики.
+	if err := requireScopeTokens(intent.requester); err != nil {
 		return AuthorizationResult{}, err
 	}
 	if strings.TrimSpace(grant.Subject) == "" {
@@ -782,10 +799,19 @@ func (c *Ceremony) DenyAuthorization(ctx context.Context, intent AuthorizationIn
 // Область сверяется по правилу Config.ScopeMatching (запрошенное `tenant.*`
 // при правиле с образцом покрывает `tenant.read`); получатель — точным
 // совпадением с запрошенным: у получателя правила с образцом нет.
+//
+// Прежде покрытия область судится по форме: выданная область — `scope-token`
+// (scopeTokenDefect). Образец покрывает и `tenant.a b`, и клиент прочёл бы
+// такую область двумя.
 func (c *Ceremony) checkGrantWithinRequest(intent AuthorizationIntent, grant AuthorizationGrant) error {
 	requested := intent.RequestedScopes()
 	covers := scopeStrategyOf(c.cfg.ScopeMatching)
 	for _, scope := range grant.GrantedScopes {
+		if defect := scopeTokenDefect(scope); defect != "" {
+			return misuse("AuthorizationGrant.GrantedScopes carries " + strconv.Quote(scope) +
+				", which is not a scope-token (RFC 6749 §3.3): " + defect +
+				"; a scope is issued as granted, and the client would read it otherwise")
+		}
 		if !covers(requested, scope) {
 			return misuse("AuthorizationGrant.GrantedScopes carries " + strconv.Quote(scope) +
 				", which the authorization request did not ask for; a grant may narrow the request, never widen it")
@@ -801,16 +827,25 @@ func (c *Ceremony) checkGrantWithinRequest(intent AuthorizationIntent, grant Aut
 	return nil
 }
 
-// checkGrantBounds отвергает границу семейства, равную нулевому времени.
+// checkGrantBounds отвергает границу семейства, равную нулевому времени, и
+// границу под видом, которого церемония не выпускает.
 //
 // Нулевое время — не граница. Движок читает нулевой срок токена обновления как
 // «без срока», и граница-ноль, сжав к себе каждый назначаемый срок, сделала бы
 // семейство БЕССРОЧНЫМ — обратное тому, о чём служба просила, назвав границу.
-// Вид без границы выражается отсутствием ключа, а не нулём. Отказ называет
-// вид; при нескольких нулевых — первый по порядку имени, чтобы текст отказа не
-// зависел от порядка обхода карты.
+// Вид без границы выражается отсутствием ключа, а не нулём.
+//
+// Вид вне словаря TokenKinds церемония не выпускает, и граница под ним не
+// ограничила бы ничего, а служба считала бы её действующей.
+//
+// Отказ называет вид; при нескольких негодных — первый по порядку имени, чтобы
+// текст отказа не зависел от порядка обхода карты.
 func checkGrantBounds(bounds map[TokenKind]time.Time) error {
 	for _, kind := range slices.Sorted(maps.Keys(bounds)) {
+		if !kind.Declared() {
+			return misuse("AuthorizationGrant.ExpiresAt[" + strconv.Quote(string(kind)) + "] names a kind the ceremony " +
+				"does not issue, so the bound would limit nothing; the kinds issued are those of TokenKinds")
+		}
 		if bounds[kind].IsZero() {
 			return misuse("AuthorizationGrant.ExpiresAt[" + strconv.Quote(string(kind)) + "] is the zero time; " +
 				"the zero time is no bound (a zero refresh token expiry reads as no expiry at all) — " +
@@ -960,6 +995,9 @@ func (c *Ceremony) Introspect(ctx context.Context, req IntrospectionRequest) (In
 	if strings.TrimSpace(req.Token) == "" {
 		return IntrospectionResult{}, misuse("IntrospectionRequest.Token is empty")
 	}
+	if err := requireIntrospectionMethod(req.AuthMethod, req.ClientSecret); err != nil {
+		return IntrospectionResult{}, err
+	}
 
 	form := url.Values{}
 	form.Set("token", req.Token)
@@ -989,6 +1027,54 @@ func (c *Ceremony) Introspect(ctx context.Context, req IntrospectionRequest) (In
 		return IntrospectionResult{}, ours
 	}
 	return introspectionResultOf(responder), nil
+}
+
+// requireIntrospectionMethod отвергает по имени способ доказательства, которого
+// точка интроспекции не принимает (IntrospectionAuthMethods).
+//
+// # Почему до движка
+//
+// Движок на точке интроспекции берёт доказательство спрашивающего только
+// заголовком Authorization. Секрет телом и запрос без доказательства он
+// отвергает на разборе заголовка — «заголовка Authorization нет», — не называя
+// способа и раньше, чем спросит справочник. Такой отказ служба прочла бы как
+// недоказанного клиента, хотя недоказан не клиент, а выбор способа. Отказ
+// здесь называет поле и способ; способ судится после разрешения пустого
+// значения (resolveAuthMethod), и отказ называет, во что пустое разрешилось.
+//
+// Точка токена и отзыв сюда не ходят: там движок принимает каждый способ
+// словаря.
+func requireIntrospectionMethod(method ClientAuthMethod, clientSecret string) error {
+	resolved := resolveAuthMethod(method, clientSecret)
+	if slices.Contains(IntrospectionAuthMethods(), resolved) {
+		return nil
+	}
+	named := "IntrospectionRequest.AuthMethod " + strconv.Quote(string(resolved))
+	if method == "" {
+		named = "IntrospectionRequest.AuthMethod is empty and resolves to " + strconv.Quote(string(resolved)) +
+			" (no client secret); that method"
+	}
+	accepted := make([]string, 0, len(IntrospectionAuthMethods()))
+	for _, m := range IntrospectionAuthMethods() {
+		accepted = append(accepted, strconv.Quote(string(m)))
+	}
+	return misuse(named + " is not accepted at the introspection endpoint, which takes the proof of the " +
+		"introspecting party from the Authorization header only (RFC 7662 §2.1); accepted: " +
+		strings.Join(accepted, ", "))
+}
+
+// resolveAuthMethod разрешает пустой способ доказательства: ClientAuthNone при
+// пустом секрете, ClientAuthBasic при непустом. Названный способ — он сам.
+// Одно разрешение на все операции: иначе один и тот же запрос интроспекция и
+// точка токена читали бы разными способами.
+func resolveAuthMethod(method ClientAuthMethod, clientSecret string) ClientAuthMethod {
+	if method != "" {
+		return method
+	}
+	if clientSecret == "" {
+		return ClientAuthNone
+	}
+	return ClientAuthBasic
 }
 
 // ── Отзыв ───────────────────────────────────────────────────────────────────
@@ -1062,14 +1148,7 @@ func (c *Ceremony) Revoke(ctx context.Context, req RevocationRequest) error {
 func (c *Ceremony) postForm(ctx context.Context, form url.Values, clientID, clientSecret string, method ClientAuthMethod) (*http.Request, error) {
 	notesFrom(ctx).expectClientProof()
 
-	if method == "" {
-		if clientSecret == "" {
-			method = ClientAuthNone
-		} else {
-			method = ClientAuthBasic
-		}
-	}
-
+	method = resolveAuthMethod(method, clientSecret)
 	switch method {
 	case ClientAuthNone:
 		if clientSecret != "" {
@@ -1229,10 +1308,6 @@ func tokenResultOf(responder engine.AccessResponder) TokenResult {
 		case "refresh_token":
 			if token, ok := value.(string); ok {
 				result.RefreshToken = token
-			}
-		case "id_token":
-			if token, ok := value.(string); ok {
-				result.IdentityToken = token
 			}
 		default:
 			result.Additional[key] = value

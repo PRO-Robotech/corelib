@@ -19,8 +19,17 @@
 # клоне и пропустил бы молча следующую отправку дерева без хука.
 #
 # Подпись фикстурных коммитов и прочие настройки git — из собственного конфига
-# пробы (GIT_CONFIG_GLOBAL во временном каталоге): клоны одноразовые, это не
-# история, а конфиг машины (в том числе core.hooksPath) на них не влияет.
+# пробы: HOME во временном каталоге, его `~/.gitconfig` — корневая учётная
+# запись фикстуры. Не GIT_CONFIG_GLOBAL: хук отправки первым судит правило git
+# (scripts/hooks/git-rule-push.sh), а оно корень, перенаправленный этой
+# переменной, отвергает. Клоны одноразовые, это не история, а конфиг машины (в
+# том числе core.hooksPath) на них не влияет; кэши Go остаются машинными.
+#
+# ПРАВИЛО GIT В ХУКЕ ОТПРАВКИ здесь судится тем, что оно идёт ДО проверок: коммит
+# без `#<N> ` останавливает отправку с «исполнено проверок: 0», и обход
+# CORELIB_SKIP_PREPUSH его не снимает. Прочие свойства правила — в пробе
+# scripts/hooks/git-rule-inject.sh; коммиты и ветки этой фикстуры правилу
+# подчиняются, иначе каждое утверждение ниже краснело бы от соседа.
 #
 # ОХВАТ СУДИТСЯ, А НЕ ТОЛЬКО КОД. В фикстуре хука три пакета, два вложенных.
 # У сборки и vet дефект кладётся по очереди в КАЖДЫЙ пакет фикстуры, у gofmt —
@@ -89,8 +98,15 @@ work="$(cd "$work" && pwd -P)"
 
 unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_OBJECT_DIRECTORY \
       GIT_ALTERNATE_OBJECT_DIRECTORIES GIT_COMMON_DIR GIT_PREFIX CORELIB_SKIP_PREPUSH \
-      MAKEFLAGS MAKELEVEL MFLAGS
-cat > "$work/gitconfig" <<'CFG'
+      GIT_CONFIG_PARAMETERS GIT_CONFIG_COUNT GIT_AUTHOR_NAME GIT_AUTHOR_EMAIL GIT_AUTHOR_DATE \
+      GIT_COMMITTER_NAME GIT_COMMITTER_EMAIL GIT_COMMITTER_DATE MAKEFLAGS MAKELEVEL MFLAGS
+# Кэши Go — машинные, до смены HOME: иначе сборка фикстуры шла бы с холодным кэшем.
+GOCACHE="$(go env GOCACHE)" && GOMODCACHE="$(go env GOMODCACHE)" && GOPATH="$(go env GOPATH)" ||
+    void "go env не назвал кэши"
+export GOCACHE GOMODCACHE GOPATH
+export HOME="$work/home" XDG_CONFIG_HOME="$work/home/.config"
+mkdir -p "$HOME" "$XDG_CONFIG_HOME"
+cat > "$HOME/.gitconfig" <<'CFG'
 [user]
 	name = probe
 	email = probe@example.invalid
@@ -101,7 +117,8 @@ cat > "$work/gitconfig" <<'CFG'
 [advice]
 	detachedHead = false
 CFG
-export GIT_CONFIG_GLOBAL="$work/gitconfig" GIT_CONFIG_NOSYSTEM=1
+unset GIT_CONFIG_GLOBAL
+export GIT_CONFIG_NOSYSTEM=1
 export GOWORK=off GOFLAGS=
 
 pass=0
@@ -298,6 +315,7 @@ B="$work/b"
 mkdir -p "$B/scripts/hooks" "$B/.github/scripts"
 cp "$HOOK" "$B/scripts/hooks/pre-push"
 cp "$INSTALL" "$B/scripts/hooks/install.sh"
+cp "$here/git-rule.sh" "$here/git-rule-push.sh" "$B/scripts/hooks/"
 cp "$VERDICT" "$B/.github/scripts/go-test-verdict.py"
 chmod +x "$B/scripts/hooks/pre-push"
 printf 'module example.invalid/probe\n\ngo 1.21\n' > "$B/go.mod"
@@ -356,7 +374,7 @@ printf '%s' "$deep_go" > "$B/inner/deep/deep.go"
 # Конфиг линтера — там, где его называет ci.yml: проба судит, что хук читает ТОТ.
 mkdir -p "$B/$(dirname "$ci_cfg")"
 printf 'version: "2"\n' > "$B/$ci_cfg"
-git -C "$B" init -q && git -C "$B" add -A && git -C "$B" commit -qm fixture || void "фикстура хука не собрана"
+git -C "$B" init -q && git -C "$B" add -A && git -C "$B" commit -qm "#21 фикстура хука отправки" || void "фикстура хука не собрана"
 git init -q --bare "$work/b.git" && git -C "$B" remote add origin "$work/b.git" || void "удалённый фикстуры хука не заведён"
 bgit="$(git -C "$B" rev-parse --absolute-git-dir)"
 # Что обязан осмотреть охват `./...`: файлы Go индекса и их каталоги (пакеты).
@@ -495,7 +513,7 @@ pathdir() {
 }
 # bare — PATH без go, gofmt, python3 и линтера: только то, что нужно самому хуку
 # и провязке, которую он спрашивает.
-basic=(bash git grep head wc sort mkdir cat sed)
+basic=(bash git grep head wc sort mkdir cat sed tr date)
 bare="$work/bare"
 pathdir "$bare" "${basic[@]}"
 # nogrep — bare без одного инструмента самого хука: близнец bare ровно в один факт.
@@ -548,7 +566,7 @@ defect() {
     local name="$1" file="$2" body="$3"
     shift 3
     printf '%s' "$body" > "$B/$file"
-    git -C "$B" add -- "$file" && git -C "$B" commit -qm "defect: $name" || { bad "фикстура дефекта «$name» не собрана"; return; }
+    git -C "$B" add -- "$file" && git -C "$B" commit -qm "#21 дефект охвата" || { bad "фикстура дефекта «$name» не собрана"; return; }
     runin "$(line 21 "$(git -C "$B" rev-parse HEAD)")" hk
     expect "$name" 1 "$@"
     git -C "$B" reset -q --hard "$h0"
@@ -641,14 +659,14 @@ runs_twice hk_as "$work/pre-push.nocount"
 if [ "$nruns" -lt 2 ]; then ok "контроль: хук без -count=1 — TestInner исполнена $nruns раз из 2, прогон взят из кеша"
 else bad "контроль: хук без -count=1, а TestInner исполнена $nruns раз из 2 — журнал не отличает кешированный прогон от свежего"; fi
 
-git -C "$B" rm -q .github/scripts/go-test-verdict.py && git -C "$B" commit -qm no-verdict
+git -C "$B" rm -q .github/scripts/go-test-verdict.py && git -C "$B" commit -qm "#21 без прогонщика вердикта"
 runin "$(line 21 "$(git -C "$B" rev-parse HEAD)")" hk
 expect "прогонщика вердикта нет в дереве — красное, а не «без условия»" 1 \
     "красные — go test -short" "прогонщика вердикта нет"
 git -C "$B" reset -q --hard "$h0"
 
 printf 'package probe\n\nconst second = 1\n' > "$B/doc.go"
-git -C "$B" add doc.go && git -C "$B" commit -qm second
+git -C "$B" add doc.go && git -C "$B" commit -qm "#21 второй коммит"
 h2="$(git -C "$B" rev-parse HEAD)"
 runin "$(line 21 "$h0")" hk
 expect "уезжает не HEAD — отказ: вердикт был бы о другом дереве" 1 "проверки судили бы другое дерево"
@@ -667,10 +685,28 @@ git -C "$B" checkout -q -- doc.go
 
 git -C "$B" checkout -q -b wip/probe
 printf 'package probe\n\nfunc Probe() {\n\tvar x int = "s"\n\t_ = x\n}\n' > "$B/probe.go"
-git -C "$B" commit -qam draft
+git -C "$B" commit -qam "#22 черновик с дефектом сборки"
+# Пропуска по имени `wip/*` нет, и новая ветка не-номер отправкой не открывается
+# вовсе: её останавливает правило git — до проверок дерева.
 runin "$(line wip/probe "$(git -C "$B" rev-parse HEAD)")" hk
-expect "имя ветки wip/* проверок не снимает" 1 "красные — сборка"
+expect "имя ветки wip/* пути мимо проверок не открывает: правило git — отказ до проверок" 1 \
+    "ветка «wip/probe»" "правило git нарушено" "исполнено проверок: 0"
 git -C "$B" checkout -q main
+
+# Правило git — до проверок дерева и до обхода: коммит без «#<N> » в отправке.
+git -C "$B" commit -q --allow-empty -m "без номера задачи"
+runin "$(line 21 "$(git -C "$B" rev-parse HEAD)")" hk
+expect "правило git: коммит без «#<N> » — отказ до проверок дерева" 1 \
+    "не начинается с «#<N> »" "правило git нарушено" "исполнено проверок: 0"
+runin "$(line 21 "$(git -C "$B" rev-parse HEAD)")" with CORELIB_SKIP_PREPUSH=1 hk
+expect "правило git: обход CORELIB_SKIP_PREPUSH=1 правила не снимает" 1 "правило git нарушено"
+fact "правило git: под обходом строки «пропущен» нет — обход не состоялся" \
+    not grep -qF "пропущен по CORELIB_SKIP_PREPUSH" <<<"$out"
+mv "$B/scripts/hooks/git-rule-push.sh" "$work/grp.aside"
+runin "$(line 21 "$(git -C "$B" rev-parse HEAD)")" hk
+expect "стража правила git нет рядом с хуком — отказ, а не молчаливый пропуск" 1 "git-rule-push.sh: правило git судить нечем"
+mv "$work/grp.aside" "$B/scripts/hooks/git-rule-push.sh"
+git -C "$B" reset -q --hard "$h2"
 
 # Сквозь git push: переходник → хук → код отправки.
 runc env PATH="$shim:$PATH" git -C "$B" push -q origin HEAD:refs/heads/21
@@ -685,37 +721,37 @@ git -C "$B" checkout -q main
 # Переходник v1 в клоне зовёт хук, раз адресат есть, — и хук отказывает: иначе v1
 # пережил бы эту отправку и следующую, дерева без хука, выпустил бы молча.
 cp "$work/stub-v1" "$B/.git/hooks/pre-push"
-runc env PATH="$shim:$PATH" git -C "$B" push -q origin HEAD:refs/heads/stale
+runc env PATH="$shim:$PATH" git -C "$B" push -q origin HEAD:refs/heads/23
 expect "сквозь git push: клон с переходником v1 — отказ с причиной и командой" nz \
     "ОТКАЗ — провязка клона" "прежней редакции: pre-push(v1)" "make install-hooks"
-fact "сквозь git push: через переходник v1 ссылка НЕ доехала" no_ref "$B" stale
+fact "сквозь git push: через переходник v1 ссылка НЕ доехала" no_ref "$B" 23
 (cd "$B" && bash scripts/hooks/install.sh install) >/dev/null 2>&1 || bad "повторный install в фикстуре хука"
-runc env PATH="$shim:$PATH" git -C "$B" push -q origin HEAD:refs/heads/fresh
+runc env PATH="$shim:$PATH" git -C "$B" push -q origin HEAD:refs/heads/24
 expect "близнец: переходник перепровязан — отправка идёт" 0 "исполнено 5 из 5"
-fact "близнец: после перепровязки ссылка доехала" has_ref "$B" fresh
+fact "близнец: после перепровязки ссылка доехала" has_ref "$B" 24
 
 # Пустой обход проб — не зелёное: «отказов 0» при нуле исполненных проб значит
 # «спросить было не у кого». Два дефекта и близнец, каждый сквозь git push;
 # «все пропущены» и близнец различаются ровно одной исполняемой пробой.
 # push_tree <ссылка> — отправка текущей вершины сквозь переходник.
 push_tree() { runc env PATH="$shim:$PATH" git -C "$B" push -q origin "HEAD:refs/heads/$1"; }
-git -C "$B" rm -q probe_test.go inner/inner_test.go && git -C "$B" commit -qm no-probes
-push_tree no-probes
+git -C "$B" rm -q probe_test.go inner/inner_test.go && git -C "$B" commit -qm "#31 проб в дереве нет"
+push_tree 31
 expect "пустой обход: в дереве ни одной пробы — отказ, а не зелёное" nz \
     "проб исполнено    : 0" "КРАСНОЕ: go test -short"
-fact "пустой обход: ссылка НЕ доехала" no_ref "$B" no-probes
+fact "пустой обход: ссылка НЕ доехала" no_ref "$B" 31
 printf 'package probe\n\nimport "testing"\n%s\n' "$probe_test_long" > "$B/probe_test.go"
-git -C "$B" add probe_test.go && git -C "$B" commit -qm all-skipped
-push_tree all-skipped
+git -C "$B" add probe_test.go && git -C "$B" commit -qm "#32 все пробы пропущены"
+push_tree 32
 expect "пустой обход: все пробы пропущены под -short — отказ, а не зелёное" nz \
     "проб исполнено    : 0" "ПРОПУЩЕНО         : 1" "КРАСНОЕ: go test -short"
-fact "пустой обход: при всех пропущенных ссылка НЕ доехала" no_ref "$B" all-skipped
+fact "пустой обход: при всех пропущенных ссылка НЕ доехала" no_ref "$B" 32
 printf 'package probe\n\nimport "testing"\n%s\n%s\n' "$probe_test_one" "$probe_test_long" > "$B/probe_test.go"
-git -C "$B" commit -qam one-probe
-push_tree one-probe
+git -C "$B" commit -qam "#33 одна исполненная проба"
+push_tree 33
 expect "близнец пустого обхода: одна исполненная проба — отправка идёт" 0 \
     "проб исполнено    : 1" "исполнено 5 из 5, красных 0"
-fact "близнец пустого обхода: ссылка доехала" has_ref "$B" one-probe
+fact "близнец пустого обхода: ссылка доехала" has_ref "$B" 33
 git -C "$B" reset -q --hard "$h0"
 
 echo ""
