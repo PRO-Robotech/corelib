@@ -215,12 +215,12 @@ func (b *storageBridge) CreateAuthorizeCodeSession(ctx context.Context, code str
 
 // GetAuthorizeCodeSession отдаёт грант по подписи кода.
 //
-// Погашенный код — ПОВТОР (RFC 6749 §4.1.2): грант его семейства
-// записывается в ведомость ДО сборки запроса, и отзыв исполняет церемония по
-// завершении операции — как на полосе токена обновления. Движок, увидев
-// часовой, отзывает и сам, но его исход после отзыва огрубляется: отказ его
-// отзыва был бы неотличим от успеха. Погашенный код без гранта — нарушение
-// контракта порта: отзывать нечего.
+// Погашенный код — ПОВТОР (RFC 6749 §4.1.2): грант его семейства и случай
+// повтора записываются в ведомость ДО сборки запроса (см. replayedCode), и
+// отзыв исполняет церемония по завершении операции — как на полосе токена
+// обновления. Движок, увидев часовой, отзывает и сам, но его исход после
+// отзыва огрубляется: отказ его отзыва был бы неотличим от успеха. Погашенный
+// код без гранта — нарушение контракта порта: отзывать нечего.
 //
 // Код, погашенный ЭТОЙ ЖЕ операцией, повтором не является: движок выбирает
 // код второй раз перед выдачей, уже после того, как церемония погасила его при
@@ -261,14 +261,17 @@ func (b *storageBridge) GetAuthorizeCodeSession(ctx context.Context, code string
 }
 
 // replayedCode — ответ на выборку кода, погашенного не этой операцией: повтор.
+//
+// Грант семейства и случай повтора ведомость получает раньше сборки запроса
+// (markReplayedFamily). Сборка может отказать: клиента сняли, запись сеанса не
+// принимает hydrateSession. Тогда движок получает отказ сборки, а церемония
+// отзывает семейство по записанному гранту и отвечает повтором — первым
+// случаем ведомости, а не отказом сборки.
 func (b *storageBridge) replayedCode(ctx context.Context, op string, rec AuthorizationCodeRecord, session engine.Session) (engine.Requester, error) {
 	ours := codeReplayed(op)
 	notesFrom(ctx).markReplayedFamily(rec.Grant.GrantID, rec.Grant.ClientID, ours, RevocationCodeReplay)
 	requester, buildErr := requesterFromGrant(ctx, b.ports.Clients.LookupClient, rec.Grant, session)
 	if buildErr != nil {
-		// Как у токена обновления: движок получит отказ сборки, а церемония
-		// ответит повтором и отзовёт семейство по записанному гранту.
-		notesFrom(ctx).record(ours)
 		return nil, buildErr
 	}
 	return requester, pairEngine(ctx, ours, engine.ErrInvalidatedAuthorizeCode)
@@ -408,9 +411,11 @@ func (b *storageBridge) CreateRefreshTokenSession(ctx context.Context, signature
 // Обёрнутый токен — ПОВТОР, и он отдаётся движку ВМЕСТЕ с грантом и часовым
 // «токен неактивен»: по этому часовому движок на пути обмена отзывает
 // артефакты гранта (`flow_refresh.go`, handleRefreshTokenReuse), а для отзыва
-// ему нужен идентификатор гранта. Грант семейства записывается в ведомость
-// ДО сборки запроса: если сборка откажет (клиента успели снять), отзыв всё
-// равно состоится — его исполнит церемония.
+// ему нужен идентификатор гранта. Грант семейства и случай повтора
+// записываются в ведомость ДО сборки запроса (markReplayedFamily). Если сборка
+// откажет (клиента успели снять, запись сеанса не принимает hydrateSession),
+// отзыв всё равно состоится — его исполнит церемония, — а ответом операции
+// останется повтор, а не отказ сборки.
 func (b *storageBridge) GetRefreshTokenSession(ctx context.Context, signature string, session engine.Session) (engine.Requester, error) {
 	ctx, cancel := b.deadline(ctx)
 	defer cancel()
@@ -431,10 +436,6 @@ func (b *storageBridge) GetRefreshTokenSession(ctx context.Context, signature st
 		notesFrom(ctx).markReplayedFamily(rec.GrantID, rec.ClientID, ours, RevocationRefreshReplay)
 		requester, buildErr := requesterFromGrant(ctx, b.ports.Clients.LookupClient, rec, session)
 		if buildErr != nil {
-			// Случай повтора записывается и тогда, когда запрос собрать не
-			// удалось: движок получит отказ сборки, а церемония ответит
-			// повтором и отзовёт семейство по записанному гранту.
-			notesFrom(ctx).record(ours)
 			return nil, buildErr
 		}
 		return requester, pairEngine(ctx, ours, engine.ErrInactiveToken)

@@ -64,7 +64,7 @@ func requireRefusedAsMisuse(t *testing.T, store *memoryPorts, result oauthceremo
 }
 
 func grantOfScopes(scopes ...string) oauthceremony.AuthorizationGrant {
-	return oauthceremony.AuthorizationGrant{Subject: testSubject, GrantedScopes: scopes}
+	return loggedIn(oauthceremony.AuthorizationGrant{Subject: testSubject, GrantedScopes: scopes})
 }
 
 // TestGrantedScopeBeyondTheRequestIsRefused — запрошено openid и offline,

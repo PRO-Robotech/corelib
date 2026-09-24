@@ -210,10 +210,10 @@ func TestGrantIDHookIsCalledOncePerGrant(t *testing.T) {
 	if got := hook.callCount(); got != 0 {
 		t.Fatalf("разбор запроса позвал крючок %d раз — гранта он не рождает", got)
 	}
-	result, err := ceremony.CompleteAuthorization(ctx, intent, oauthceremony.AuthorizationGrant{
+	result, err := ceremony.CompleteAuthorization(ctx, intent, loggedIn(oauthceremony.AuthorizationGrant{
 		Subject:       testSubject,
 		GrantedScopes: []string{"openid", "offline"},
-	})
+	}))
 	if err != nil {
 		t.Fatalf("CompleteAuthorization отказал: %v", err)
 	}
@@ -293,10 +293,10 @@ func TestGrantIDHookRefusalRefusesTheGrantAndStoresNothing(t *testing.T) {
 			if err != nil {
 				t.Fatalf("Authorize отказал: %v", err)
 			}
-			result, err := ceremony.CompleteAuthorization(ctx, intent, oauthceremony.AuthorizationGrant{
+			result, err := ceremony.CompleteAuthorization(ctx, intent, loggedIn(oauthceremony.AuthorizationGrant{
 				Subject:       testSubject,
 				GrantedScopes: []string{"openid"},
-			})
+			}))
 			if got := tc.hook.callCount(); got != 1 {
 				t.Fatalf("выдача кода позвала крючок %d раз, ожидался ровно один", got)
 			}

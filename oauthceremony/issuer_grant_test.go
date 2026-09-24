@@ -204,10 +204,10 @@ func TestIssuerTellsConsentedScopesFromRequested(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Authorize отказал: %v", err)
 	}
-	result, err := ceremony.CompleteAuthorization(context.Background(), intent, oauthceremony.AuthorizationGrant{
+	result, err := ceremony.CompleteAuthorization(context.Background(), intent, loggedIn(oauthceremony.AuthorizationGrant{
 		Subject:       testSubject,
 		GrantedScopes: []string{"openid", "offline"},
-	})
+	}))
 	if err != nil {
 		t.Fatalf("CompleteAuthorization отказал: %v", err)
 	}
