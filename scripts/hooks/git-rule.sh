@@ -171,6 +171,25 @@ git_rule_form() {
     fi
 }
 
+# git_rule_howto <класс> <ветка> [<строка атрибуции>] — «как правильно» для
+# класса нарушения, строкой; отказ печатает строки только своих классов, чтобы
+# памятка не заслоняла причину. Классы: form (первая строка и тело), merge
+# (форма слияния; номер — <ветки>, когда она номер), attribution, ident
+# (подпись), branch, editor, date (дата автора до T0).
+git_rule_howto() {
+    local class="$1" branch="$2" attr="${3:-}" b="<N>"
+    git_rule_is_number "$branch" && b="$branch"
+    case "$class" in
+        form) printf '%s\n' "сообщение: git commit -m \"#<N> <одно утверждение>\" -m \"<тело>\" — первая строка начинается с «#<N> » (<N> — номер задачи этого репозитория), не длиннее $GIT_RULE_SUBJECT_MAX символов, без «;» и без точки в конце; тело — после пустой строки, не длиннее $GIT_RULE_BODY_MAX строк" ;;
+        merge) printf '%s\n' "слияние: git merge --no-ff <ветка> -m \"#$b merge #<M>: <что влито>\" либо -m \"#$b merge main: <что влито>\" — номер слияния — номер этой ветки; первая строка не длиннее $GIT_RULE_SUBJECT_MAX символов, тело — не длиннее $GIT_RULE_BODY_MAX строк" ;;
+        attribution) printf '%s\n' "атрибуция: удалите строку «$attr» — трейлеры Co-Authored-By с Claude/anthropic, Claude-Session:, «Generated with Claude Code» и ссылки claude.ai/code в сообщение не пишутся; соавтор-человек законен" ;;
+        ident) printf '%s\n' "подпись: коммит без --author, -c user.*/author.*/committer.*, GIT_COMMITTER_* и GIT_CONFIG_GLOBAL; настройку подписи уровня local/worktree снимите (git config --local --unset <ключ>); подпись задаётся один раз — git config --global user.name / user.email" ;;
+        branch) printf '%s\n' "ветка: git branch -m <N> — ветка называется номером задачи этого репозитория (^[0-9]+\$), исключение одно — main" ;;
+        editor) printf '%s\n' "сообщение — через -m или -F, без редактора: git commit -m \"#<N> …\" — строку «#…» git вырезает как комментарий" ;;
+        date) printf '%s\n' "дата автора — текущая: коммит без --date и GIT_AUTHOR_DATE в прошлом" ;;
+    esac
+}
+
 # git_rule_attribution <текст> — печатает первую строку атрибуции; 1 — её нет.
 # Регистр не различается. Трейлер — строка, НАЧАТАЯ его именем: то же имя в
 # середине строки — упоминание (так пишут, снимая шаблон), а не трейлер.

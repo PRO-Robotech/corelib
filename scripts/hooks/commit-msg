@@ -5,7 +5,9 @@
 # Хук коммита: правило git в МОМЕНТ коммита. Предикат — scripts/hooks/git-rule.sh
 # (правило и решения — в его шапке); провязка — scripts/hooks/install.sh, проба —
 # scripts/hooks/git-rule-inject.sh. Исходы: 0 — нарушений нет; 1 — отказ, каждое
-# нарушение названо; коммит не записывается.
+# нарушение названо, а под ним — «как правильно» для КАЖДОГО класса нарушений
+# (git_rule_howto), и только для них; коммит не записывается. Законный коммит
+# хук пропускает молча.
 #
 # СУДИТСЯ ТО, ЧТО GIT ЗАПИШЕТ, а не черновик в файле. В редакторе (GIT_EDITOR не
 # «:» — git выставляет «:» хуку, когда редактора не было) и при commit.cleanup=
@@ -52,6 +54,9 @@ fi
 
 file="${1:?commit-msg: git не передал файл сообщения}"
 fail=()
+# Классы нарушений по порядку первого появления — строки «как правильно».
+how=()
+need() { [[ " ${how[*]} " == *" $1 "* ]] || how+=("$1"); }
 git_dir="$(git rev-parse --git-dir)"
 
 # ── T0: история обоих родителей ──────────────────────────────────────────────
@@ -78,18 +83,21 @@ fi
 if [ -z "$strip" ]; then
     msg="$(git stripspace <"$file")"
 elif [ "$comment" = auto ]; then
+    need editor
     fail+=("$strip при core.commentChar=auto: знак комментария git выбирает сам, по черновику до редактора, и строку «#<N> …» может вырезать — коммитьте -m/-F без редактора либо задайте знак явно")
     msg="$(git stripspace <"$file")"
 else
     msg="$(git stripspace --strip-comments <"$file")"
     first_raw="$(git stripspace <"$file" | sed -n 1p)"
     case "$first_raw" in
-        "$comment"*) fail+=("$strip: строка «$first_raw» начата знаком комментария «$comment» и будет вырезана — коммитьте -m/-F без редактора") ;;
+        "$comment"*) need editor; fail+=("$strip: строка «$first_raw» начата знаком комментария «$comment» и будет вырезана — коммитьте -m/-F без редактора") ;;
     esac
 fi
 
 # ── АТРИБУЦИЯ — у любого коммита ─────────────────────────────────────────────
+attr=""
 if attr="$(git_rule_attribution "$msg")"; then
+    need attribution
     fail+=("атрибуция в сообщении: «$attr»")
 fi
 
@@ -102,46 +110,55 @@ if [ "$GIT_RULE_T0_KNOWN" = 1 ] && [ "$at" -lt "$GIT_RULE_T0" ]; then
     if [ "$(git log -1 --format='%an <%ae> %at' HEAD 2>/dev/null)" = "$author $at" ]; then
         history=1
     else
+        need date
         fail+=("дата автора $(date -u -d "@$at" '+%F %T' 2>/dev/null || echo "@$at") раньше T0 у нового коммита — дата в прошлом правило не обходит")
     fi
 fi
 
 # ── ФОРМА И ВЕТКА — у нового коммита; у переписываемой истории они прежние ───
+branch="$(git symbolic-ref -q --short HEAD 2>/dev/null || true)"
 if [ "$history" = 0 ]; then
-    branch="$(git symbolic-ref -q --short HEAD 2>/dev/null || true)"
     while IFS= read -r f; do
-        [ -z "$f" ] || fail+=("$f")
+        [ -z "$f" ] && continue
+        if [ "$merging" = 1 ]; then need merge; else need form; fi
+        fail+=("$f")
     done < <(git_rule_form "$msg" "$merging" "$branch")
     if [ -n "$branch" ] && [ "$branch" != main ] && ! git_rule_is_number "$branch" &&
         ! git_rule_before_rule HEAD; then
+        need branch
         fail+=("ветка «$branch»: ветка называется номером задачи (^[0-9]+\$), исключение одно — main; ветка до правила несёт свой коммит с датой автора до T0")
     fi
 fi
 
 # ── ПОДПИСЬ — корневая учётная запись ────────────────────────────────────────
+ident_fail() { need ident; fail+=("$1"); }
 [ -z "${GIT_CONFIG_GLOBAL+x}" ] ||
-    fail+=("корень перенаправлен окружением GIT_CONFIG_GLOBAL — подпись берётся из ~/.gitconfig")
+    ident_fail "корень перенаправлен окружением GIT_CONFIG_GLOBAL — подпись берётся из ~/.gitconfig"
 if root="$(git_rule_root_ident)"; then
     committer="$(git var GIT_COMMITTER_IDENT)"
     committer="${committer% * *}"
     [ "$history" = 1 ] || [ "$author" = "$root" ] ||
-        fail+=("автор «$author» — не корневая учётная запись «$root»")
+        ident_fail "автор «$author» — не корневая учётная запись «$root»"
     [ "$committer" = "$root" ] ||
-        fail+=("коммиттер «$committer» — не корневая учётная запись «$root»")
+        ident_fail "коммиттер «$committer» — не корневая учётная запись «$root»"
 else
-    fail+=("корневая учётная запись не задана (git config --global user.name / user.email) — подпись сверять не с чем")
+    ident_fail "корневая учётная запись не задана (git config --global user.name / user.email) — подпись сверять не с чем"
 fi
 over="$(git_rule_ident_overrides)"
 [ -z "$over" ] ||
-    fail+=("подпись переопределена поверх корня (уровень:ключ): ${over//$'\n'/, } — снять настройку")
+    ident_fail "подпись переопределена поверх корня (уровень:ключ): ${over//$'\n'/, } — снять настройку"
 for v in GIT_COMMITTER_NAME GIT_COMMITTER_EMAIL; do
-    [ -z "${!v+x}" ] || fail+=("подпись переопределена окружением: $v")
+    [ -z "${!v+x}" ] || ident_fail "подпись переопределена окружением: $v"
 done
 
 if [ "${#fail[@]}" -gt 0 ]; then
     {
         echo "commit-msg ОТКАЗ — правило git (scripts/hooks/git-rule.sh; T0 $(git_rule_t0_text)):"
         printf '  · %s\n' "${fail[@]}"
+        echo "как правильно:"
+        for c in "${how[@]}"; do
+            printf '  → %s\n' "$(git_rule_howto "$c" "$branch" "$attr")"
+        done
     } >&2
     exit 1
 fi
