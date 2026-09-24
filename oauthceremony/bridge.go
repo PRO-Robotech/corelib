@@ -79,25 +79,36 @@ const (
 	textPortContractHint = "Fix the port implementation; this is not a protocol failure."
 )
 
+// portDebug приписывает к подробности отказа имя вызова. Пустая подробность —
+// часовой пакета её не несёт, а чужая ошибка вправе иметь пустой текст — даёт
+// ровно имя вызова: склейка дала бы `"<вызов>: "`, разделитель без продолжения,
+// и у одного отказа в журнале было бы два написания.
+func portDebug(op, detail string) string {
+	if detail == "" {
+		return op
+	}
+	return op + ": " + detail
+}
+
 // fromPort переводит отказ порта в наш отказ, приписывая имя вызова.
 func fromPort(op string, err error) *ProtocolError {
 	var ours *ProtocolError
 	if errors.As(err, &ours) {
-		return failf(ours.Code, err, ours.Description, ours.Hint, op+": "+ours.Debug)
+		return failf(ours.Code, err, ours.Description, ours.Hint, portDebug(op, ours.Debug))
 	}
 	switch {
 	case errors.Is(err, context.DeadlineExceeded):
-		return failf(CodePortDeadline, err, textPortDeadline, "", op+": "+err.Error())
+		return failf(CodePortDeadline, err, textPortDeadline, "", portDebug(op, err.Error()))
 	case errors.Is(err, context.Canceled):
-		return failf(CodePortCanceled, err, textPortCanceled, "", op+": "+err.Error())
+		return failf(CodePortCanceled, err, textPortCanceled, "", portDebug(op, err.Error()))
 	}
-	return failf(CodeServerError, err, textPortFailed, "", op+": "+err.Error())
+	return failf(CodeServerError, err, textPortFailed, "", portDebug(op, err.Error()))
 }
 
 // contractBreach — порт нарушил контракт. Отдельный конструктор, чтобы
 // нарушение контракта нельзя было перепутать с отказом порта.
 func contractBreach(op, why string) *ProtocolError {
-	return failf(CodePortContract, nil, textPortContract, textPortContractHint, op+": "+why)
+	return failf(CodePortContract, nil, textPortContract, textPortContractHint, portDebug(op, why))
 }
 
 // closedPortFailure переводит отказ порта доказательства клиента — сверки
@@ -126,11 +137,11 @@ func closedPortFailure(op string, err error) *ProtocolError {
 	}
 	switch {
 	case errors.Is(err, context.DeadlineExceeded):
-		return failf(CodePortDeadline, err, textPortDeadline, "", op+": "+err.Error())
+		return failf(CodePortDeadline, err, textPortDeadline, "", portDebug(op, err.Error()))
 	case errors.Is(err, context.Canceled):
-		return failf(CodePortCanceled, err, textPortCanceled, "", op+": "+err.Error())
+		return failf(CodePortCanceled, err, textPortCanceled, "", portDebug(op, err.Error()))
 	}
-	return failf(CodeServerError, err, textPortFailed, "", op+": "+err.Error())
+	return failf(CodeServerError, err, textPortFailed, "", portDebug(op, err.Error()))
 }
 
 // checkDeclared — общая часть всех разборов: отказ порта и незаполненный
