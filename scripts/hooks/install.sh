@@ -41,8 +41,11 @@ marker_family="corelib-hook-stub v"
 stub_version=2
 
 # stub_for — ЕДИНСТВЕННЫЙ производитель текста переходника: проба берёт его
-# режимом `stub`, а не своей копией.
+# режимом `stub`, а не своей копией. Обход, который отказ называет, — команда
+# ТОГО действия, которое хук остановил: у хука коммита это не отправка.
 stub_for() {
+    local bypass="отправка без проверок — сказать это явно: git push --no-verify."
+    [ "$1" != commit-msg ] || bypass="коммит без проверок — сказать это явно: git commit --no-verify."
     cat <<STUB
 #!/usr/bin/env bash
 # СГЕНЕРИРОВАН \`bash scripts/hooks/install.sh install\` — правится НЕ здесь, а в scripts/hooks/$1.
@@ -58,7 +61,7 @@ if [ ! -x "\$real" ]; then
         echo "  адресат: \$real"
         echo "  исходы: перейти на ревизию, где scripts/hooks/$1 есть и исполним;"
         echo "          хук снят намеренно — снять и переходник: rm \"\$(git rev-parse --git-common-dir)/hooks/$1\";"
-        echo "          отправка без проверок — сказать это явно: git push --no-verify."
+        echo "          $bypass"
     } >&2
     exit 1
 fi
