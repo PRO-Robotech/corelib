@@ -14,6 +14,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"slices"
 	"strconv"
 	"testing"
 
@@ -51,18 +52,36 @@ func rightProof() clientProof {
 //
 // refusal — случай, которым операция отказывает недоказанному клиенту: точки
 // токена и отзыва отвечают `invalid_client`, интроспекция — своим случаем
-// движка. headerOnly — операция принимает доказательство только заголовком
-// Authorization (RFC 7662 §2.1).
+// движка. accepts — способы доказательства, которые операция принимает; пусто
+// — каждый способ словаря. Способ вне accepts операция отвергает по имени до
+// движка (CodeCeremonyMisuse), не спросив ни справочника, ни порта сверки:
+// так интроспекция отвечает всему, кроме заголовка Authorization
+// (RFC 7662 §2.1, IntrospectionAuthMethods).
 //
 // gone отвечает, снят ли предмет после исполненной операции, — у той, что его
 // снимает (отзыв); пусто — операция предмета не снимает.
 type authenticatedOperation struct {
-	name       string
-	refusal    oauthceremony.FailureCode
-	headerOnly bool
-	prepare    func(t *testing.T, ceremony *oauthceremony.Ceremony) string
-	perform    func(ceremony *oauthceremony.Ceremony, subject string, proof clientProof) (bool, error)
-	gone       func(t *testing.T, ceremony *oauthceremony.Ceremony, subject string) bool
+	name    string
+	refusal oauthceremony.FailureCode
+	accepts []oauthceremony.ClientAuthMethod
+	prepare func(t *testing.T, ceremony *oauthceremony.Ceremony) string
+	perform func(ceremony *oauthceremony.Ceremony, subject string, proof clientProof) (bool, error)
+	gone    func(t *testing.T, ceremony *oauthceremony.Ceremony, subject string) bool
+}
+
+// accepted отвечает, принимает ли операция способ доказательства.
+func (op authenticatedOperation) accepted(method oauthceremony.ClientAuthMethod) bool {
+	return op.accepts == nil || slices.Contains(op.accepts, method)
+}
+
+// refusalOf — случай, которым операция отказывает недоказанному клиенту с
+// доказательством proof: способ, которого операция не принимает, отвергается
+// до движка как ошибка вызывающего.
+func (op authenticatedOperation) refusalOf(proof clientProof) oauthceremony.FailureCode {
+	if !op.accepted(proof.method) {
+		return oauthceremony.CodeCeremonyMisuse
+	}
+	return op.refusal
 }
 
 func authenticatedOperations() []authenticatedOperation {
@@ -82,9 +101,9 @@ func authenticatedOperations() []authenticatedOperation {
 			},
 		},
 		{
-			name:       "интроспекция",
-			refusal:    oauthceremony.CodeRequestUnauthorized,
-			headerOnly: true,
+			name:    "интроспекция",
+			refusal: oauthceremony.CodeRequestUnauthorized,
+			accepts: oauthceremony.IntrospectionAuthMethods(),
 			prepare: func(t *testing.T, ceremony *oauthceremony.Ceremony) string {
 				return exchangeCode(t, ceremony).AccessToken
 			},
@@ -239,8 +258,8 @@ func TestUnknownClientIsRefusedExactlyLikeAWrongSecret(t *testing.T) {
 
 				unknown, known := refusals["неизвестный"], refusals["известный"]
 				for side, err := range refusals {
-					if got := oauthceremony.CodeOf(err); got != op.refusal {
-						t.Errorf("%s клиент отвергнут случаем %v, ожидался %v: %v", side, got, op.refusal, err)
+					if want := op.refusalOf(pair.known); oauthceremony.CodeOf(err) != want {
+						t.Errorf("%s клиент отвергнут случаем %v, ожидался %v: %v", side, oauthceremony.CodeOf(err), want, err)
 					}
 				}
 				if u, k := wireForm(t, unknown), wireForm(t, known); string(u) != string(k) {

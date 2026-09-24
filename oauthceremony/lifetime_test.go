@@ -157,13 +157,9 @@ func TestGrantBoundHoldsTheAuthorizationCode(t *testing.T) {
 	if len(store.codes) != 1 {
 		t.Fatalf("НЕ ВЫПОЛНИЛОСЬ: кодов в хранилище %d шт, ожидался 1", len(store.codes))
 	}
-	declared := map[oauthceremony.TokenKind]bool{
-		oauthceremony.TokenKindAccess: true, oauthceremony.TokenKindRefresh: true,
-		oauthceremony.TokenKindAuthorizationCode: true, oauthceremony.TokenKindIdentity: true,
-	}
 	for _, row := range store.codes {
 		for kind := range row.grant.Session.ExpiresAt {
-			if !declared[kind] {
+			if !kind.Declared() {
 				t.Errorf("запись сроков называет необъявленный вид %q: %v", kind, row.grant.Session.ExpiresAt)
 			}
 		}
@@ -270,12 +266,10 @@ func requireZeroBoundRefused(t *testing.T, store *memoryPorts, kind oauthceremon
 }
 
 // TestZeroBoundOfEveryKindIsRefusedByName — нулевое время границы не граница
-// ни у одного объявленного вида: отказ называет поле и вид.
+// ни у одного объявленного вида: отказ называет поле и вид. Виды — словарь
+// TokenKinds, а не выписанный перечень.
 func TestZeroBoundOfEveryKindIsRefusedByName(t *testing.T) {
-	for _, kind := range []oauthceremony.TokenKind{
-		oauthceremony.TokenKindAccess, oauthceremony.TokenKindRefresh,
-		oauthceremony.TokenKindAuthorizationCode, oauthceremony.TokenKindIdentity,
-	} {
+	for _, kind := range oauthceremony.TokenKinds() {
 		t.Run(string(kind), func(t *testing.T) {
 			store := newMemoryPorts()
 			registerTestClient(t, store)
