@@ -3,9 +3,14 @@
 # SPDX-License-Identifier: Apache-2.0
 #
 # ПРАВИЛО GIT — единственный источник предиката (решения владельца 2026-09-22,
-# PRO-Robotech/kacho-workspace#770). Сам не исполняется: его читает хук коммита
-# scripts/hooks/commit-msg, и своей копии предиката у потребителя нет. Экземпляр
-# свой, не копия (ban20): форма взята у стража kacho, байты не перенесены.
+# PRO-Robotech/kacho-workspace#770). Сам не исполняется: его читают три
+# потребителя, и своей копии предиката нет ни у одного:
+#
+#   scripts/hooks/commit-msg           сообщение и подпись в МОМЕНТ коммита;
+#   scripts/hooks/git-rule-push.sh     имя ветки и ЗАПИСАННЫЕ коммиты отправки (зовёт pre-push);
+#   .github/scripts/pr-rule-check.sh   заголовок, голова, тело и коммиты ЗАПРОСА.
+#
+# Экземпляр свой, не копия (ban20): форма взята у стража kacho, байты не перенесены.
 #
 # Правило:
 #   · ветка — номер задачи ЭТОГО репозитория, `^[0-9]+$`; исключение одно —
@@ -13,52 +18,60 @@
 #   · первая строка — `#<N> …`, не длиннее 72 СИМВОЛОВ (не байт), одно
 #     утверждение; слияние — `#<N> merge #<M>: …` либо `#<N> merge main: …`;
 #   · тело — не длиннее 12 строк;
-#   · подпись — корневая учётная запись (`~/.gitconfig`); -c user.*,
-#     --local/--worktree user.*, GIT_COMMITTER_*, GIT_CONFIG_GLOBAL её не
-#     переопределяют — отказ при любом значении;
-#   · атрибуции нет: трейлер Co-Authored-By с Claude/anthropic, строка
+#   · подпись — корневая учётная запись (`~/.gitconfig`) у автора и коммиттера.
+#     Переопределение — отказ при любом значении: user.* уровней local,
+#     worktree, command (-c); author.* и committer.* любого уровня, кроме
+#     корня (у git они старше user.* и на уровне system); GIT_COMMITTER_*;
+#     GIT_CONFIG_GLOBAL;
+#   · атрибуции нет: трейлер Co-Authored-By с Claude/anthropic, трейлер
 #     Claude-Session:, «Generated with [Claude Code]», ссылка claude.ai/code.
 #
-# НОМЕР ОБЫЧНОГО КОММИТА С ИМЕНЕМ ВЕТКИ НЕ СВЕРЯЕТСЯ (решение corelib#25,
-# 2026-09-24). Форма пачки владельца: ветка пачки — номер её первой задачи,
-# коммит на задачу — `#<N> …` своей задачи, то есть `#58 …` на ветке `25`
-# законен. Сверка «N = ветка» отвергла бы пачку на втором же коммите. Что N —
-# задача этого репозитория, хук не знает: сети у него нет; это предмет проверки
-# запроса. Номер ветки сверяется у СЛИЯНИЯ: слияние — акт самой ветки.
+# НОМЕР ОБЫЧНОГО КОММИТА С ИМЕНЕМ ВЕТКИ НЕ СВЕРЯЕТСЯ — решение T1, записано в
+# PRO-Robotech/corelib#25 (комментарий «Решение T1», 2026-09-24). Форма пачки
+# владельца: ветка пачки — номер её первой задачи, коммит на задачу — `#<N> …`
+# своей задачи, то есть `#58 …` на ветке `25` законен; сверка «N = ветка»
+# отвергла бы пачку на втором коммите. Номер ветки сверяется у актов САМОЙ
+# ветки: у слияния на её первой родительской цепочке и у заголовка запроса.
+# Что N — задача этого репозитория, хукам не узнать (сети у них нет): это
+# сверяет проверка запроса по API трекера.
 #
-# T0 — граница истории: время автора коммита, заведшего scripts/hooks/commit-msg
-# в историю ревизии. Выводится, а не выписывается: литерал пришлось бы вписать
-# до коммита, момент которого он называет. Коммит с датой автора до T0 по форме
-# и автору не судится; атрибуция и коммиттер судятся у любого. Коммита правила в
-# истории нет (он сам сейчас и создаётся) либо он на границе мелкого клона — T0
-# не выведен, судится всё, и отказ говорит это вслух.
+# T0 — граница истории: НАИМЕНЬШЕЕ время автора среди коммитов, заводивших
+# scripts/hooks/commit-msg в историю названных ревизий (у слияния — обоих
+# родителей). Наименьшее, а не последнее выведенное: снятый и заведённый
+# снова хук правила не отменяет, и порядок вывода `git log` (он по дате
+# коммиттера) здесь ничего не решает. Выводится, а не выписывается: литерал
+# пришлось бы вписать до коммита, момент которого он называет. Коммит с датой
+# автора до T0 по форме и автору не судится; атрибуция судится у любого, а
+# коммиттер — у записанного после T0. Коммита правила в истории нет (он сам
+# сейчас и создаётся) либо клон мелкий — T0 не выведен, судится всё, и
+# потребитель говорит это вслух. Мелкий клон не выводит T0 НИКОГДА: история за
+# границей не видна, и первое добавление может лежать за ней, даже когда
+# граница файла не несёт (хук снят до границы и заведён после — T0 вышел бы
+# повторным добавлением, позже настоящего).
 GIT_RULE_T0_PATH=scripts/hooks/commit-msg
 GIT_RULE_T0=0
 GIT_RULE_T0_KNOWN=0
-# shellcheck disable=SC2034  # пределы читает потребитель (commit-msg)
 GIT_RULE_SUBJECT_MAX=72
-# shellcheck disable=SC2034  # то же
 GIT_RULE_BODY_MAX=12
 
-# git_rule_t0 [ревизия] — печатает T0 эпохой; 1 — не выведен.
-# `tail`: git log пишет новое первым, а правило вступило самым старым добавлением.
-# Граница мелкого клона показывает ВСЕ свои файлы добавленными: найденный на ней
-# «коммит правила» — время границы, а не правила.
+# git_rule_t0 [ревизия…] — печатает T0 эпохой; 1 — не выведен.
 git_rule_t0() {
-    local rec h shallow
-    rec="$(git log --no-color --diff-filter=A --format='%H %at' "${1:-HEAD}" -- "$GIT_RULE_T0_PATH" 2>/dev/null | tail -1)"
-    [ -n "$rec" ] || return 1
-    h="${rec%% *}"
-    shallow="$(git rev-parse --git-path shallow 2>/dev/null)"
-    if [ -n "$shallow" ] && [ -f "$shallow" ] && grep -qx "$h" "$shallow"; then
-        return 1
-    fi
-    printf '%s' "${rec##* }"
+    local recs h at min=""
+    [ "$#" -gt 0 ] || set -- HEAD
+    [ "$(git rev-parse --is-shallow-repository 2>/dev/null)" != true ] || return 1
+    recs="$(git log --no-color --diff-filter=A --format='%H %at' "$@" -- "$GIT_RULE_T0_PATH" 2>/dev/null)" || return 1
+    [ -n "$recs" ] || return 1
+    while read -r h at; do
+        [ -n "$h" ] || continue
+        if [ -z "$min" ] || [ "$at" -lt "$min" ]; then min="$at"; fi
+    done <<<"$recs"
+    [ -n "$min" ] || return 1
+    printf '%s' "$min"
 }
 
-# git_rule_load_t0 [ревизия] — выставляет GIT_RULE_T0 и GIT_RULE_T0_KNOWN.
+# git_rule_load_t0 [ревизия…] — выставляет GIT_RULE_T0 и GIT_RULE_T0_KNOWN.
 git_rule_load_t0() {
-    if GIT_RULE_T0="$(git_rule_t0 "${1:-HEAD}")"; then
+    if GIT_RULE_T0="$(git_rule_t0 "$@")"; then
         GIT_RULE_T0_KNOWN=1
     else
         GIT_RULE_T0=0
@@ -70,7 +83,7 @@ git_rule_t0_text() {
     if [ "$GIT_RULE_T0_KNOWN" = 1 ]; then
         date -u -d "@$GIT_RULE_T0" '+%Y-%m-%dT%H:%M:%SZ' 2>/dev/null || printf '@%s' "$GIT_RULE_T0"
     else
-        printf 'не выведен — коммита, заведшего %s, в истории нет либо он на границе мелкого клона: судится всё' "$GIT_RULE_T0_PATH"
+        printf 'не выведен — коммита, заведшего %s, в истории нет либо клон мелкий: судится всё' "$GIT_RULE_T0_PATH"
     fi
 }
 
@@ -84,6 +97,15 @@ git_rule_subject_task() {
 
 # git_rule_merge_form <первая строка> — `#<N> merge #<M>: …` либо `#<N> merge main: …`.
 git_rule_merge_form() { [[ "$1" =~ ^#[0-9]+\ merge\ (#[0-9]+|main):\ [^[:space:]] ]]; }
+
+# git_rule_subject_numbers <первая строка> — номера задач, которые первая строка
+# называет: N из `#<N> …` и M из `… merge #<M>: …`, по строке на номер.
+git_rule_subject_numbers() {
+    local n
+    n="$(git_rule_subject_task "$1")" || return 0
+    printf '%s\n' "$n"
+    if [[ "$1" =~ ^#[0-9]+\ merge\ #([0-9]+):\  ]]; then printf '%s\n' "${BASH_REMATCH[1]}"; fi
+}
 
 # git_rule_chars <строка> — число СИМВОЛОВ UTF-8 при любой локали: считаются
 # байты, кроме байтов продолжения (10xxxxxx). ${#…} в bash под LC_ALL=C считает
@@ -113,9 +135,46 @@ git_rule_second_statement() {
     return 1
 }
 
+# git_rule_form <сообщение> <слияние: 0|1> <ветка> — нарушения ФОРМЫ сообщения
+# (уже после git stripspace), по строке на каждое; пусто — форма соблюдена.
+# Номер слияния сверяется с <веткой>, только когда она — номер; пусто — нет.
+# Единица счёта тела — строка после git stripspace, СЧИТАЯ пустые между
+# абзацами: так тело видит читатель `git log`.
+git_rule_form() {
+    local msg="$1" merge="$2" branch="$3" subj rest n len why lines
+    subj="${msg%%$'\n'*}"
+    rest=""
+    [ "$subj" = "$msg" ] || rest="${msg#*$'\n'}"
+    if ! n="$(git_rule_subject_task "$subj")"; then
+        printf '%s\n' "первая строка не начинается с «#<N> »: «$subj»"
+    elif [ "$merge" = 1 ]; then
+        git_rule_merge_form "$subj" ||
+            printf '%s\n' "слияние — «#<N> merge #<M>: …» либо «#<N> merge main: …», а не «$subj»"
+        if git_rule_is_number "$branch" && [ "$n" != "$branch" ]; then
+            printf '%s\n' "слияние «#$n» на ветке «$branch»: слияние — акт ветки, и номер у него её"
+        fi
+    fi
+    len="$(git_rule_chars "$subj")"
+    [ "$len" -le "$GIT_RULE_SUBJECT_MAX" ] ||
+        printf '%s\n' "первая строка — $len символов, предел $GIT_RULE_SUBJECT_MAX"
+    if why="$(git_rule_second_statement "$subj")"; then
+        printf '%s\n' "первая строка — одно утверждение, а здесь $why: «$subj»"
+    fi
+    if [ -n "$rest" ]; then
+        if [ -n "${rest%%$'\n'*}" ]; then
+            printf '%s\n' "после первой строки нет пустой строки — git склеит следующую строку с первой в заголовок"
+        else
+            lines="$(printf '%s\n' "${rest#*$'\n'}" | wc -l | tr -d ' ')"
+            [ "$lines" -le "$GIT_RULE_BODY_MAX" ] ||
+                printf '%s\n' "тело — $lines строк после git stripspace (пустые между абзацами в счёте), предел $GIT_RULE_BODY_MAX"
+        fi
+    fi
+}
+
 # git_rule_attribution <текст> — печатает первую строку атрибуции; 1 — её нет.
-# Регистр не различается. Co-Authored-By без Claude/anthropic — законный соавтор;
-# имя трейлера в середине строки — упоминание, а не трейлер.
+# Регистр не различается. Трейлер — строка, НАЧАТАЯ его именем: то же имя в
+# середине строки — упоминание (так пишут, снимая шаблон), а не трейлер.
+# Co-Authored-By без Claude/anthropic — законный соавтор.
 git_rule_attribution() {
     local line found=1 restore
     restore="$(shopt -p nocasematch)"
@@ -143,13 +202,19 @@ git_rule_root_ident() {
     printf '%s <%s>' "$n" "$e"
 }
 
-# git_rule_ident_overrides — печатает уровни, на которых user.* задан ПОВЕРХ
-# корня (local, worktree, command — это -c и GIT_CONFIG_COUNT); пусто — нет.
-# Уровень system ниже корня и его не переопределяет.
+# git_rule_ident_overrides — печатает уровни, на которых подпись задана ПОВЕРХ
+# корня, `уровень:ключ`; пусто — нет. user.* уровня system ниже корня и его не
+# переопределяет; author.* и committer.* у git старше user.* на ЛЮБОМ уровне
+# (замер: committer.email уровня system даёт коммиттера при корневом
+# user.email), поэтому они — переопределение везде, кроме самого корня.
 git_rule_ident_overrides() {
-    git config --show-scope --get-regexp '^user\.(name|email)$' 2>/dev/null |
+    git config --show-scope --get-regexp '^(user|author|committer)\.(name|email)$' 2>/dev/null |
         while read -r scope key _; do
-            case "$scope" in global|system) ;; *) printf '%s:%s\n' "$scope" "$key" ;; esac
+            case "$scope:$key" in
+                global:*) ;;
+                system:user.*) ;;
+                *) printf '%s:%s\n' "$scope" "$key" ;;
+            esac
         done | sort -u
 }
 
@@ -172,4 +237,66 @@ git_rule_before_rule() {
         [ "$d" -lt "$GIT_RULE_T0" ] && return 0
     done < <(git log --no-color --format=%at "$1" "${excl[@]}" 2>/dev/null)
     return 1
+}
+
+# git_rule_judge_range <ветка> <подпись> <аргументы rev-list…>
+#
+# Судит каждый ЗАПИСАННЫЙ коммит диапазона — у отправки и у запроса. Сообщение
+# чистится git stripspace, как у хука коммита: единица счёта тела одна.
+#   · атрибуция — у любого коммита;
+#   · дата автора не раньше T0 — форма (git_rule_form): слияние — по числу
+#     родителей, номер ветки — у слияний ПЕРВОЙ РОДИТЕЛЬСКОЙ цепочки <ветки>;
+#     номера первой строки копятся в GIT_RULE_NUMBERS;
+#   · <подпись> «имя <адрес>» — автор у коммита с датой автора после T0,
+#     коммиттер у коммита, ЗАПИСАННОГО после T0 (дата коммиттера): перепись
+#     старого коммита записывает нового коммиттера; «-» — подпись не судится.
+# Находки — в GIT_RULE_FINDINGS с коротким sha; счёт — GIT_RULE_SEEN,
+# GIT_RULE_AFTER_T0. Код 1 — диапазон не читается git.
+GIT_RULE_FINDINGS=()
+GIT_RULE_NUMBERS=()
+GIT_RULE_SEEN=0
+GIT_RULE_AFTER_T0=0
+git_rule_judge_range() {
+    local branch="$1" ident="$2" owned log rec h at ct parents author committer raw msg merge on f attr
+    shift 2
+    owned="$(git rev-list --first-parent "$@" 2>/dev/null)" || {
+        GIT_RULE_FINDINGS+=("диапазон «$*» не читается git rev-list — судить нечем")
+        return 1
+    }
+    log="$(git -c log.showSignature=false log --no-color --encoding=UTF-8 \
+        --format='%H%x1f%at%x1f%ct%x1f%P%x1f%an <%ae>%x1f%cn <%ce>%x1f%B%x1e' "$@" 2>/dev/null)" || {
+        GIT_RULE_FINDINGS+=("диапазон «$*» не читается git log — судить нечем")
+        return 1
+    }
+    # Запись завершается \x1e, git дописывает перевод строки после каждой.
+    while IFS= read -r -d $'\x1e' rec; do
+        rec="${rec#$'\n'}"
+        [ -n "$rec" ] || continue
+        IFS=$'\x1f' read -r -d '' h at ct parents author committer raw <<<"$rec"
+        [ -n "${h:-}" ] || continue
+        GIT_RULE_SEEN=$((GIT_RULE_SEEN + 1))
+        msg="$(printf '%s' "$raw" | git stripspace)"
+        if attr="$(git_rule_attribution "$msg")"; then
+            GIT_RULE_FINDINGS+=("${h:0:10} атрибуция в сообщении: «$attr»")
+        fi
+        if [ "$ident" != - ] && [ "$ct" -ge "$GIT_RULE_T0" ] && [ "$committer" != "$ident" ]; then
+            GIT_RULE_FINDINGS+=("${h:0:10} коммиттер «$committer» — не корневая учётная запись «$ident»")
+        fi
+        [ "$at" -ge "$GIT_RULE_T0" ] || continue
+        GIT_RULE_AFTER_T0=$((GIT_RULE_AFTER_T0 + 1))
+        merge=0
+        [ "$(wc -w <<<"$parents")" -lt 2 ] || merge=1
+        on=""
+        [[ $'\n'"$owned"$'\n' != *$'\n'"$h"$'\n'* ]] || on="$branch"
+        while IFS= read -r f; do
+            [ -z "$f" ] || GIT_RULE_FINDINGS+=("${h:0:10} $f")
+        done < <(git_rule_form "$msg" "$merge" "$on")
+        while IFS= read -r f; do
+            [ -z "$f" ] || GIT_RULE_NUMBERS+=("$f")
+        done < <(git_rule_subject_numbers "${msg%%$'\n'*}")
+        if [ "$ident" != - ] && [ "$author" != "$ident" ]; then
+            GIT_RULE_FINDINGS+=("${h:0:10} автор «$author» — не корневая учётная запись «$ident»")
+        fi
+    done <<<"$log"
+    return 0
 }

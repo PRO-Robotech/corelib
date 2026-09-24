@@ -45,18 +45,24 @@
 # (нет инструмента, версия линтера не равна пину) — третья категория: названа
 # поимённо, в «исполнено» не входит, отправку одна не останавливает.
 #
-# ОБХОД ОДИН: `CORELIB_SKIP_PREPUSH=1` — печатает строку и перечень
-# непроверенного. Обхода по имени ветки нет: ветка — номер задачи (правило
-# 2026-09-22), а пропуск `wip/*`/`tmp/*` вёз дерево непроверенным и не был
-# объявлен обходом. `git push --no-verify` обходит хук средствами git до его
-# запуска и сказать о себе отсюда не может.
+# ПРАВИЛО GIT — ПЕРВЫМ, до провязки, проверок и обхода: имя новой ветки и
+# ЗАПИСАННЫЕ коммиты отправки судит scripts/hooks/git-rule-push.sh (предикат —
+# scripts/hooks/git-rule.sh, общий с хуком коммита и проверкой запроса). Нет
+# стража рядом с хуком — отказ: хук без него выпускал бы нарушение молча.
+#
+# ОБХОД ОДИН: `CORELIB_SKIP_PREPUSH=1` — снимает ПРОВЕРКИ дерева, а не правило
+# git, и печатает строку и перечень непроверенного. Обхода по имени ветки нет:
+# ветка — номер задачи (правило 2026-09-22), а пропуск `wip/*`/`tmp/*` вёз
+# дерево непроверенным и не был объявлен обходом. `git push --no-verify` обходит
+# хук средствами git до его запуска и сказать о себе отсюда не может.
 #
 # КЭШ ЛИНТЕРА — в каталоге git ЭТОЙ рабочей копии: общий на машину отдаёт
 # полосе чужой вердикт, а в дереве он стал бы неотслеживаемым файлом и сам
 # сделал бы копию «грязной».
 #
 # Установка: `make install-hooks`; провязку проверяет `make check-hooks`.
-# Проба этого файла и провязки — scripts/hooks/inject.sh (`make probe-hooks`).
+# Проба этого файла и провязки — scripts/hooks/inject.sh, стража правила git —
+# scripts/hooks/git-rule-inject.sh (обе — `make probe-hooks`).
 set -uo pipefail
 exec 1>&2
 
@@ -77,14 +83,10 @@ finish() {
     exit "$code"
 }
 
-if [ "${CORELIB_SKIP_PREPUSH:-0}" = "1" ]; then
-    finish 0 "pre-push: пропущен по CORELIB_SKIP_PREPUSH=1 — локальные проверки НЕ выполнялись"
-fi
-
 # Инструменты САМОГО хука и провязки, которую он спрашивает (не проверок: их
 # отсутствие — «без условия» у своей проверки). Без любого из них разбор
 # отправки и копии дал бы пустую строку, и отказ назвал бы ложную причину.
-for t in git grep sed sort wc head mkdir; do
+for t in git grep sed sort wc head mkdir tr date cat; do
     command -v "$t" >/dev/null 2>&1 ||
         finish 2 "pre-push: ОТКАЗ — нет $t в PATH: это инструмент самого хука, без него не прочесть ни отправку, ни копию"
 done
@@ -101,17 +103,35 @@ unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_OBJECT_DIRECTORY \
 cd "$ROOT" || finish 2 "pre-push: ОТКАЗ — в корень рабочей копии не перейти: $ROOT"
 
 # ── ЧТО УЕЗЖАЕТ: строки `<local_ref> <local_sha> <remote_ref> <remote_sha>` ──
+# Вход читается один раз: его судят и страж правила, и проверки ниже.
+push_input=""
+[ -t 0 ] || push_input="$(cat)"
 refs=0
 tips=()
-if [ ! -t 0 ]; then
-    while read -r _lref lsha _rref _rsha; do
-        [ -n "${lsha:-}" ] || continue
-        refs=$((refs + 1))
-        case "$lsha" in *[!0]*) ;; *) continue ;; esac   # одни нули — снятие ссылки
-        c="$(git rev-parse --verify --quiet "$lsha^{commit}")" ||
-            finish 1 "pre-push: ОТКАЗ — отправляемый объект $lsha не сводится к коммиту: судить нечего"
-        tips+=("$c")
-    done
+while read -r _lref lsha _rref _rsha; do
+    [ -n "${lsha:-}" ] || continue
+    refs=$((refs + 1))
+    case "$lsha" in *[!0]*) ;; *) continue ;; esac   # одни нули — снятие ссылки
+    c="$(git rev-parse --verify --quiet "$lsha^{commit}")" ||
+        finish 1 "pre-push: ОТКАЗ — отправляемый объект $lsha не сводится к коммиту: судить нечего"
+    tips+=("$c")
+done <<<"$push_input"
+
+# ── ПРАВИЛО GIT: имя ветки и записанные коммиты — до всего остального ──────
+rule_guard="$ROOT/scripts/hooks/git-rule-push.sh"
+[ -f "$rule_guard" ] ||
+    finish 1 "pre-push: ОТКАЗ — нет $rule_guard: правило git судить нечем"
+rule_out="$(bash "$rule_guard" "${1:-origin}" <<<"$push_input" 2>&1)"
+rule_rc=$?
+printf '%s\n' "$rule_out"
+case "$rule_rc" in
+    0) ;;
+    2) finish 1 "pre-push: ОТКАЗ — правило git судить не с чем (код 2): отправка остановлена" ;;
+    *) finish 1 "pre-push: ОТКАЗ — правило git нарушено (код $rule_rc): отправка остановлена" ;;
+esac
+
+if [ "${CORELIB_SKIP_PREPUSH:-0}" = "1" ]; then
+    finish 0 "pre-push: пропущен по CORELIB_SKIP_PREPUSH=1 — правило git судилось, локальные проверки НЕ выполнялись"
 fi
 
 # ── ПРОВЯЗКА КЛОНА: предпосылка вердикта о СЛЕДУЮЩЕЙ отправке ──────────────

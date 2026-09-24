@@ -9,25 +9,37 @@
 #
 # СУДИТСЯ ТО, ЧТО GIT ЗАПИШЕТ, а не черновик в файле. В редакторе (GIT_EDITOR не
 # «:» — git выставляет «:» хуку, когда редактора не было) и при commit.cleanup=
-# strip git вырезает строки с `#` как комментарий уже ПОСЛЕ хука: первая строка
-# `#<N> ` исчезла бы. Поэтому сообщение чистится здесь тем же способом, а строка
-# `#…`, которую git вырежет, — отказ: коммит только `-m`/`-F`.
+# strip git вырезает строки, начатые знаком комментария, уже ПОСЛЕ хука: первая
+# строка `#<N> ` исчезла бы. Знак — тот, что возьмёт git: core.commentChar и
+# core.commentString задают одно, и действует ПОСЛЕДНЕЕ прочитанное значение
+# (замер). Сообщение чистится здесь тем же знаком, а первая строка, которую git
+# вырежет, — отказ. `auto` — отказ при любой первой строке: знак git выбирает
+# сам, по черновику ДО редактора, и хуку он не виден.
 #
 # ПОДПИСЬ сверяется итогом: автора git выставляет хуку сам (с --author, -c
 # user.*, локальной настройкой), `git var` отдаёт то, что будет записано.
 # Переопределение корня отказывает отдельно, со своей причиной, даже когда
-# значение совпадает с корнем: -c/--local/--worktree user.*, GIT_COMMITTER_*,
-# GIT_CONFIG_GLOBAL. Корень — `~/.gitconfig` того HOME, под которым идёт коммит.
+# значение совпадает с корнем (уровни и ключи — git_rule_ident_overrides),
+# так же GIT_COMMITTER_* и GIT_CONFIG_GLOBAL. Корень — `~/.gitconfig` того HOME,
+# под которым идёт коммит.
+#
+# T0 берётся у истории ОБОИХ родителей: у слияния, вносящего правило в ветку,
+# открытую до правила, в истории HEAD правила нет, а в истории MERGE_HEAD — есть.
 #
 # СЛЕПЫЕ ЗОНЫ. Хук клиентский. Пробой измерено, что его минуют --no-verify
-# (коммит и слияние), cherry-pick, revert, rebase без -i, am, commit-tree и
+# (коммит и слияние), cherry-pick, revert, rebase без -i, am, commit-tree,
 # --cleanup=strip в командной строке (хук видит `#<N> …`, git записывает
-# следующую строку). По построению, вне пробы: непровязанный клон, правка через
-# веб, слияние на сервере (его сообщение задаётся после проверок). Одинаковые с
-# корнем GIT_AUTHOR_* неотличимы от выставленных самим git; ветка, ответвлённая от
+# следующую строку) и НОВЫЙ коммит, скопировавший автора и дату вершины с датой
+# до T0 (`-C HEAD`, `--author` с `--date`): окружение хука у него и у `--amend`
+# этой вершины одно (замер), и он судится как перепись — без формы и автора.
+# По построению, вне пробы: непровязанный клон, правка через веб, слияние на
+# сервере (его сообщение задаётся после проверок). Одинаковые с корнем
+# GIT_AUTHOR_* неотличимы от выставленных самим git; ветка, ответвлённая от
 # ветки до правила, читается как ветка до правила; что `#<N>` — задача этого
-# репозитория, хук не знает. Эти пути держит только суждение по записанным
-# коммитам — отправки и запроса; в этом дереве его нет (corelib#25).
+# репозитория, хук не знает. Записанные коммиты судят ещё два держателя: страж
+# отправки (scripts/hooks/git-rule-push.sh — тоже клиентский) и проверка
+# запроса в конвейере (.github/scripts/pr-rule-check.sh — её клиентом не обойти,
+# но подписи она не судит).
 set -uo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -37,34 +49,44 @@ if [ ! -f "$here/git-rule.sh" ]; then
 fi
 # shellcheck source=scripts/hooks/git-rule.sh
 . "$here/git-rule.sh"
-git_rule_load_t0 HEAD
 
 file="${1:?commit-msg: git не передал файл сообщения}"
 fail=()
+git_dir="$(git rev-parse --git-dir)"
+
+# ── T0: история обоих родителей ──────────────────────────────────────────────
+parents=()
+git rev-parse -q --verify HEAD >/dev/null 2>&1 && parents+=(HEAD)
+merging=0
+if [ -f "$git_dir/MERGE_HEAD" ]; then
+    merging=1
+    while read -r m; do [ -z "$m" ] || parents+=("$m"); done <"$git_dir/MERGE_HEAD"
+fi
+if [ "${#parents[@]}" -gt 0 ]; then git_rule_load_t0 "${parents[@]}"; else git_rule_load_t0 HEAD; fi
 
 # ── ЧТО GIT ЗАПИШЕТ ──────────────────────────────────────────────────────────
-comment="$(git config --get core.commentString 2>/dev/null || git config --get core.commentChar 2>/dev/null || printf '#')"
+comment="$(git config --get-regexp '^core\.comment(char|string)$' 2>/dev/null | tail -1)"
+comment="${comment#* }"
+[ -n "$comment" ] || comment="#"
 cleanup="$(git config --get commit.cleanup 2>/dev/null || true)"
 strip=""
-if [ "$comment" = "#" ]; then
-    if [ "${GIT_EDITOR:-}" != ":" ]; then
-        strip="коммит через редактор"
-    elif [ "$cleanup" = strip ]; then
-        strip="commit.cleanup=strip"
-    fi
+if [ "${GIT_EDITOR:-}" != ":" ]; then
+    strip="коммит через редактор"
+elif [ "$cleanup" = strip ]; then
+    strip="commit.cleanup=strip"
 fi
-if [ -n "$strip" ]; then
+if [ -z "$strip" ]; then
+    msg="$(git stripspace <"$file")"
+elif [ "$comment" = auto ]; then
+    fail+=("$strip при core.commentChar=auto: знак комментария git выбирает сам, по черновику до редактора, и строку «#<N> …» может вырезать — коммитьте -m/-F без редактора либо задайте знак явно")
+    msg="$(git stripspace <"$file")"
+else
     msg="$(git stripspace --strip-comments <"$file")"
     first_raw="$(git stripspace <"$file" | sed -n 1p)"
-    if [ "${first_raw:0:1}" = "#" ]; then
-        fail+=("$strip: строка «$first_raw» будет вырезана как комментарий — коммитьте -m/-F без редактора")
-    fi
-else
-    msg="$(git stripspace <"$file")"
+    case "$first_raw" in
+        "$comment"*) fail+=("$strip: строка «$first_raw» начата знаком комментария «$comment» и будет вырезана — коммитьте -m/-F без редактора") ;;
+    esac
 fi
-subj="${msg%%$'\n'*}"
-rest=""
-[ "$subj" = "$msg" ] || rest="${msg#*$'\n'}"
 
 # ── АТРИБУЦИЯ — у любого коммита ─────────────────────────────────────────────
 if attr="$(git_rule_attribution "$msg")"; then
@@ -87,32 +109,9 @@ fi
 # ── ФОРМА И ВЕТКА — у нового коммита; у переписываемой истории они прежние ───
 if [ "$history" = 0 ]; then
     branch="$(git symbolic-ref -q --short HEAD 2>/dev/null || true)"
-    git_dir="$(git rev-parse --git-dir)"
-    if ! n="$(git_rule_subject_task "$subj")"; then
-        fail+=("первая строка не начинается с «#<N> »: «$subj»")
-    elif [ -f "$git_dir/MERGE_HEAD" ]; then
-        git_rule_merge_form "$subj" ||
-            fail+=("слияние — «#<N> merge #<M>: …» либо «#<N> merge main: …», а не «$subj»")
-        if git_rule_is_number "$branch" && [ "$n" != "$branch" ]; then
-            fail+=("слияние «#$n» на ветке «$branch»: слияние — акт ветки, и номер у него её")
-        fi
-    fi
-    len="$(git_rule_chars "$subj")"
-    [ "$len" -le "$GIT_RULE_SUBJECT_MAX" ] ||
-        fail+=("первая строка — $len символов, предел $GIT_RULE_SUBJECT_MAX")
-    if why="$(git_rule_second_statement "$subj")"; then
-        fail+=("первая строка — одно утверждение, а здесь $why: «$subj»")
-    fi
-    if [ -n "$rest" ]; then
-        if [ -n "${rest%%$'\n'*}" ]; then
-            fail+=("после первой строки нет пустой строки — git склеит следующую строку с первой в заголовок")
-        else
-            body="${rest#*$'\n'}"
-            lines="$(printf '%s\n' "$body" | wc -l | tr -d ' ')"
-            [ "$lines" -le "$GIT_RULE_BODY_MAX" ] ||
-                fail+=("тело — $lines строк после git stripspace (пустые между абзацами в счёте), предел $GIT_RULE_BODY_MAX")
-        fi
-    fi
+    while IFS= read -r f; do
+        [ -z "$f" ] || fail+=("$f")
+    done < <(git_rule_form "$msg" "$merging" "$branch")
     if [ -n "$branch" ] && [ "$branch" != main ] && ! git_rule_is_number "$branch" &&
         ! git_rule_before_rule HEAD; then
         fail+=("ветка «$branch»: ветка называется номером задачи (^[0-9]+\$), исключение одно — main; ветка до правила несёт свой коммит с датой автора до T0")
