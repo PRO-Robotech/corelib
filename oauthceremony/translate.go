@@ -219,11 +219,16 @@ type clientView struct {
 	reg ClientRegistration
 }
 
-func (c *clientView) GetID() string              { return c.reg.ClientID }
-func (c *clientView) GetHashedSecret() []byte    { return c.reg.HashedSecret }
-func (c *clientView) GetRotatedHashes() [][]byte { return c.reg.RotatedHashedSecrets }
-func (c *clientView) GetRedirectURIs() []string  { return c.reg.RedirectURIs }
-func (c *clientView) IsPublic() bool             { return c.reg.Public }
+func (c *clientView) GetID() string             { return c.reg.ClientID }
+func (c *clientView) GetRedirectURIs() []string { return c.reg.RedirectURIs }
+func (c *clientView) IsPublic() bool            { return c.reg.Public }
+
+// GetHashedSecret — проверочного значения секрета у церемонии нет: его держит и
+// сверяет служба (Ports.ClientSecrets), а хешер настроек движка — порт
+// (clientSecretHasher). Прежних значений на время оборота нет тоже:
+// представление не реализует интерфейса оборота секретов движка, и сверка на
+// клиента одна.
+func (*clientView) GetHashedSecret() []byte { return nil }
 func (c *clientView) GetAudience() engine.Arguments {
 	return engine.Arguments(c.reg.Audiences)
 }
@@ -265,6 +270,30 @@ func (c *clientView) GetResponseModes() []engine.ResponseModeType {
 func clientViewOf(reg ClientRegistration) engine.Client {
 	return &clientView{reg: reg}
 }
+
+// unregisteredClient — клиент, которого справочник не знает, в операции, где
+// клиент доказывает себя (см. storageBridge.GetClient).
+//
+// У него нет НИЧЕГО, кроме названного идентификатора: ни адресов возврата, ни
+// видов гранта, ни областей, ни получателей. Он не публичный — движок ведёт
+// его к сверке секрета, как конфиденциального, — и выйти из сверки доказанным
+// не может: «совпал» о нём порт сказать не вправе, и такой вердикт —
+// нарушение контракта, а не доказательство (verifyClientSecret).
+type unregisteredClient struct {
+	id string
+}
+
+// unregisteredClientOf собирает представление неизвестного клиента.
+func unregisteredClientOf(id string) engine.Client { return unregisteredClient{id: id} }
+
+func (c unregisteredClient) GetID() string                    { return c.id }
+func (unregisteredClient) GetHashedSecret() []byte            { return nil }
+func (unregisteredClient) GetRedirectURIs() []string          { return nil }
+func (unregisteredClient) GetGrantTypes() engine.Arguments    { return nil }
+func (unregisteredClient) GetResponseTypes() engine.Arguments { return nil }
+func (unregisteredClient) GetScopes() engine.Arguments        { return nil }
+func (unregisteredClient) IsPublic() bool                     { return false }
+func (unregisteredClient) GetAudience() engine.Arguments      { return nil }
 
 // ── Перевод гранта ──────────────────────────────────────────────────────────
 

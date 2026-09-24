@@ -1037,11 +1037,17 @@ const injectedFields = "\n\t// InjectedMap — поле-карта копии д
 // СИНТЕТИЧЕСКОЙ записью глубины 1 в поле-карту копии. Это положительный
 // контроль разбора: он не зависит от того, остались ли в живом дереве ленивые
 // геттеры, — их снятие цель, и контроль на ней не краснеет.
+//
+// Тот же файл объявляет injectedHasher — значение, которое инъекции кладут в
+// поле хешера настроек и достают из него: хешер движка церемония больше не
+// называет (секрет клиента сверяет порт службы), и инъекция, привязанная к
+// нему, судила бы тип, которого у церемонии нет.
 const (
 	controlMethod = "InjectedControlWrite"
 	controlFile   = "injected_control.go"
 	controlSrc    = "\n// InjectedControlWrite — синтетическая запись глубины 1 копии: положительный контроль разбора.\n" +
-		"func (c *Config) " + controlMethod + "() { c.InjectedMap = nil }\n"
+		"func (c *Config) " + controlMethod + "() { c.InjectedMap = nil }\n" +
+		"\n// injectedHasher — хешер копии для инъекций.\ntype injectedHasher struct{ Config *Config }\n"
 )
 
 // controlWrite — запись контроля в единице переписи.
@@ -1213,7 +1219,7 @@ func (c *Config) TuneHTTPClient(_ context.Context) {
 			// и инъекция не должна истекать вместе с ней.
 			file: "config_default.go", anchor: "func (c *Config) GetSecretsHasher(ctx context.Context) Hasher {\n",
 			src: "func (c *Config) GetSecretsHasher(ctx context.Context) Hasher {\n" +
-				"\tc.ClientSecretsHasher.(*BCrypt).Config = &Config{HashCost: 4} " + marker + "\n"}, formAssign, 2},
+				"\tc.ClientSecretsHasher.(*injectedHasher).Config = &Config{HashCost: 4} " + marker + "\n"}, formAssign, 2},
 		{injection{name: "элемент среза, названного в New, — в существующем геттере",
 			file: "config_default.go", anchor: "\treturn c.SanitationWhiteList\n",
 			src: "\tc.SanitationWhiteList[0] = \"injected\" " + marker + "\n\treturn c.SanitationWhiteList\n"}, formAssign, 2},
@@ -1287,7 +1293,7 @@ func (c *Config) ViaVar() {
 `)}, formAssign, 2},
 		{injection{name: "псевдоним через утверждение типа", file: "injected.go", src: newMethod("", `
 func (c *Config) Rehash() {
-	if b, ok := c.ClientSecretsHasher.(*BCrypt); ok {
+	if b, ok := c.ClientSecretsHasher.(*injectedHasher); ok {
 		b.Config = c `+marker+`
 	}
 }
@@ -1295,7 +1301,7 @@ func (c *Config) Rehash() {
 		{injection{name: "псевдоним переключателем типа", file: "injected.go", src: newMethod("", `
 func (c *Config) Retype() {
 	switch b := c.ClientSecretsHasher.(type) {
-	case *BCrypt:
+	case *injectedHasher:
 		b.Config = c `+marker+`
 	}
 }
@@ -1560,7 +1566,7 @@ func (c *Config) LiteralRead() string {
 `)}, false, false},
 		{injection{name: "свежий литерал под & кладётся в поле", file: "injected.go", src: newMethod("", `
 func (c *Config) FreshHasher() {
-	c.ClientSecretsHasher = &BCrypt{Config: c} `+marker+`
+	c.ClientSecretsHasher = &injectedHasher{Config: c} `+marker+`
 }
 `)}, true, false},
 		{injection{name: "литерал копий полей-значений аргументом", file: "injected.go", src: newMethod("", `

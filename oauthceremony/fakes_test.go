@@ -16,6 +16,7 @@ package oauthceremony_test
 import (
 	"context"
 	"crypto/rand"
+	"crypto/subtle"
 	"encoding/hex"
 	"errors"
 	"sync"
@@ -50,6 +51,16 @@ type memoryPorts struct {
 	codes   map[string]*codeRow
 	access  map[string]oauthceremony.GrantRecord
 	refresh map[string]*refreshRow
+
+	// secrets — проверочные значения секретов клиентов, как их держит служба:
+	// клиент → секрет. У службы здесь лежит значение хеш-функции, у подставки —
+	// сам секрет; сверка — постоянного времени и у той, и у другой.
+	secrets map[string]string
+	// verifications — каждый вызов порта сверки секрета в порядке прихода: так
+	// проба считает вызовы и видит, что порт получил.
+	verifications []verifierCall
+	// verifyOverride подменяет вердикт сверки. Пусто — сверка как есть.
+	verifyOverride func(clientID string) (oauthceremony.SecretVerdict, error)
 
 	// revoked — гранты, чьё семейство отозвано. Ведётся подставкой, чтобы
 	// проба утверждала СОСТОЯНИЕ гранта после отказа, а не только текст
@@ -86,6 +97,22 @@ type memoryPorts struct {
 	// хранилищем и подписантом, здесь — рядом с подставкой хранилища.
 	issuer *recordingIssuer
 }
+
+// verifierCall — один вызов порта сверки секрета так, как его увидела служба:
+// о ком спросили, что предъявлено и какой срок пришёл с контекстом вызова.
+// limited — у контекста был срок; remaining — сколько от него оставалось в миг
+// вызова.
+type verifierCall struct {
+	clientID  string
+	presented string
+	limited   bool
+	remaining time.Duration
+}
+
+// decoySecret — приманка подставки: против неё сверяется секрет клиента,
+// которого у службы нет, чтобы отказ стоил столько же, сколько отказ неверному
+// секрету. Исход этой сверки выбрасывается.
+const decoySecret = "decoy-verifier-of-the-declared-class"
 
 // revocationCall — один вызов порта отзыва так, как его увидела служба.
 type revocationCall struct {
@@ -399,6 +426,7 @@ func (m *memoryPorts) recordsUnder(signature string) int {
 func newMemoryPorts() *memoryPorts {
 	return &memoryPorts{
 		clients: map[string]oauthceremony.ClientRegistration{},
+		secrets: map[string]string{},
 		codes:   map[string]*codeRow{},
 		access:  map[string]oauthceremony.GrantRecord{},
 		refresh: map[string]*refreshRow{},
@@ -415,6 +443,7 @@ func (m *memoryPorts) ports() oauthceremony.Ports {
 		RefreshTokens:      m,
 		Grants:             m,
 		AccessTokenIssuer:  m.issuer,
+		ClientSecrets:      m,
 	}
 }
 
@@ -436,6 +465,49 @@ func (m *memoryPorts) LookupClient(ctx context.Context, clientID string) (oauthc
 		return oauthceremony.ClientRegistration{}, oauthceremony.ErrGrantNotFound
 	}
 	return reg, nil
+}
+
+// ── ClientSecretVerifier ────────────────────────────────────────────────────
+
+// VerifyClientSecret сверяет секрет так, как сверяет служба: постоянным
+// временем, а для клиента без проверочного значения — против приманки, чей
+// исход выбрасывается. Каждый вызов записывается вместе со сроком контекста.
+func (m *memoryPorts) VerifyClientSecret(ctx context.Context, clientID string, presented oauthceremony.PresentedSecret) (oauthceremony.SecretVerdict, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	call := verifierCall{clientID: clientID, presented: presented.Reveal()}
+	if deadline, limited := ctx.Deadline(); limited {
+		call.limited, call.remaining = true, time.Until(deadline)
+	}
+	m.verifications = append(m.verifications, call)
+	if m.verifyOverride != nil {
+		return m.verifyOverride(clientID)
+	}
+	want, found := m.secrets[clientID]
+	if !found {
+		want = decoySecret
+	}
+	matched := subtle.ConstantTimeCompare([]byte(want), []byte(presented.Reveal())) == 1
+	if !found || !matched {
+		return oauthceremony.SecretMismatched, nil
+	}
+	return oauthceremony.SecretMatched, nil
+}
+
+// verificationLog отдаёт копию журнала вызовов порта сверки.
+func (m *memoryPorts) verificationLog() []verifierCall {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return append([]verifierCall(nil), m.verifications...)
+}
+
+// setVerifyOverride меняет вердикт сверки под замком: проба ставит его между
+// подготовкой предмета и операцией.
+func (m *memoryPorts) setVerifyOverride(verdict func(clientID string) (oauthceremony.SecretVerdict, error)) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.verifyOverride = verdict
 }
 
 // ── AuthorizationCodeVault ──────────────────────────────────────────────────
@@ -696,6 +768,7 @@ var (
 	_ oauthceremony.RefreshTokenVault      = (*memoryPorts)(nil)
 	_ oauthceremony.GrantRevoker           = (*memoryPorts)(nil)
 	_ oauthceremony.AccessTokenIssuer      = (*recordingIssuer)(nil)
+	_ oauthceremony.ClientSecretVerifier   = (*memoryPorts)(nil)
 )
 
 // ── Единица работы ──────────────────────────────────────────────────────────

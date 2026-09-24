@@ -100,6 +100,39 @@ func contractBreach(op, why string) *ProtocolError {
 	return failf(CodePortContract, nil, textPortContract, textPortContractHint, op+": "+why)
 }
 
+// closedPortFailure переводит отказ порта доказательства клиента — сверки
+// секрета и справочника клиентов — в наш отказ ЗАКРЫТЫМ перечнем: срок,
+// отмена, нарушение контракта, отказ сервера.
+//
+// # Почему не fromPort
+//
+// fromPort сохраняет случай нашего отказа, которым ответил порт: у портов
+// хранения это сигналы контракта («записи нет», «код погашен»). У портов
+// доказательства таких сигналов нет — у сверки ни одного, у справочника один,
+// «клиента нет», и его вызывающий разбирает раньше. Отказ этих портов
+// становится ответом операции (ведомость), а отзыв и интроспекция часть
+// случаев читают исходом протокола: «нечего снимать», «токен негоден».
+// Сохрани мы случай порта, несостоявшаяся сверка стала бы вердиктом — отзыв
+// ответил бы успехом, не сняв токена.
+//
+// Поэтому наш случай из такого порта — нарушение контракта, а сам отказ порта
+// в цепочку не кладётся: errors.Is по случаю порта не должен находить ничего.
+// Его текст не уезжает и на провод — только имя случая в Debug.
+func closedPortFailure(op string, err error) *ProtocolError {
+	var ours *ProtocolError
+	if errors.As(err, &ours) {
+		return contractBreach(op, "the port failed with case "+ours.Code.String()+
+			" of this package; its contract declares no such failure")
+	}
+	switch {
+	case errors.Is(err, context.DeadlineExceeded):
+		return failf(CodePortDeadline, err, textPortDeadline, "", op+": "+err.Error())
+	case errors.Is(err, context.Canceled):
+		return failf(CodePortCanceled, err, textPortCanceled, "", op+": "+err.Error())
+	}
+	return failf(CodeServerError, err, textPortFailed, "", op+": "+err.Error())
+}
+
 // checkDeclared — общая часть всех разборов: отказ порта и незаполненный
 // исход.
 func checkDeclared(op string, out StoreOutcome, err error) *ProtocolError {
@@ -152,19 +185,174 @@ func pairEngine(ctx context.Context, ours *ProtocolError, engineSentinel error) 
 
 // ── Справочник клиентов ─────────────────────────────────────────────────────
 
+// GetClient отдаёт движку запись клиента.
+//
+// # Клиент, которого справочник не знает, в доказательстве клиента
+//
+// В операции, где клиент доказывает себя (обмен, интроспекция, отзыв —
+// operationNotes.provesClient), движок спрашивает справочник ради
+// доказательства и на «клиента нет» отказывает СРАЗУ, не сверяя секрета.
+// Отказ неизвестному клиенту стоил бы тогда меньше отказа неверному секрету, а
+// на интроспекции ещё и назывался бы другими словами: время и текст ответа
+// стали бы прибором для перебора зарегистрированных клиентов.
+//
+// Поэтому неизвестному клиенту здесь отдаётся представление без единого права
+// (unregisteredClient), и движок идёт тем же путём, что с известным: к сверке
+// секрета портом службы (clientSecretHasher) — ровно один раз, — и отказ
+// приходит оттуда же и теми же словами. Доказать себя такое представление не
+// может: «совпал» о нём — нарушение контракта порта (verifyClientSecret).
+//
+// Вне доказательства клиента (точка авторизации) «клиента нет» — отказ, как
+// прежде: секрета там не предъявляют.
+//
+// Клиент, о котором спросили, записывается в ведомость операции: по ней хешер
+// церемонии узнаёт, чей секрет сверять.
+//
+// # Отказ справочника — отказ операции
+//
+// Справочник, который не ответил, — не «клиента нет» и не «клиент не доказан».
+// Движок оборачивает отказ этого вызова в свой отказ доказательства на обоих
+// путях — у точки токена и отзыва и у интроспекции, — но fromEngine поднимает
+// из цепочки наш случай только из перечня coarsenable, а отказа сервера в нём
+// нет. Без записи сбой хранилища стал бы отказом доказательства и выглядел бы
+// потоком неверных секретов. Поэтому отказ пишется в ведомость операции любым
+// случаем, и операция отвечает им, как отказом порта сверки
+// (verifyClientSecret).
+//
+// Случай отказа — из закрытого перечня (closedPortFailure): единственный
+// случай пакета, который контракт справочника объявляет, — «клиента нет», и он
+// разобран выше; любой другой наш случай — нарушение контракта, а не исход
+// протокола.
 func (b *storageBridge) GetClient(ctx context.Context, id string) (engine.Client, error) {
+	const op = "ClientDirectory.LookupClient"
 	ctx, cancel := b.deadline(ctx)
 	defer cancel()
 
+	notes := notesFrom(ctx)
 	reg, err := b.ports.Clients.LookupClient(ctx, id)
 	if err != nil {
-		ours := fromPort("ClientDirectory.LookupClient", err)
-		if ours.Code == CodeGrantNotFound {
-			return nil, pairEngine(ctx, ours, engine.ErrNotFound)
+		switch {
+		case CodeOf(err) == CodeGrantNotFound && notes.provesClient():
+			notes.noteClientClaim(id, false)
+			return unregisteredClientOf(id), nil
+		case CodeOf(err) == CodeGrantNotFound:
+			return nil, pairEngine(ctx, fromPort(op, err), engine.ErrNotFound)
+		default:
+			failure := closedPortFailure(op, err)
+			notes.record(failure)
+			return nil, failure
 		}
-		return nil, note(ctx, ours)
 	}
+	notes.noteClientClaim(id, true)
 	return clientViewOf(reg), nil
+}
+
+// grantClient — запись клиента, которому выдан грант: её спрашивает сборка
+// запроса движка по записи кода или токена (requesterFromGrant).
+//
+// «Клиента нет» отдаётся как есть: клиента, которому выдан грант, могли
+// снять, и что это значит для операции, решает движок. Любой другой отказ
+// справочника — отказ операции тем же закрытым перечнем, что в GetClient, и
+// он пишется в ведомость: движок сжимает отказ сборки сам — у интроспекции в
+// «токен негоден», у отзыва во «временно недоступно», — и без записи сбой
+// справочника стал бы ответом «негоден» о годном токене.
+func (b *storageBridge) grantClient(ctx context.Context, id string) (ClientRegistration, error) {
+	reg, err := b.ports.Clients.LookupClient(ctx, id)
+	if err == nil || CodeOf(err) == CodeGrantNotFound {
+		return reg, err
+	}
+	failure := closedPortFailure("ClientDirectory.LookupClient", err)
+	notesFrom(ctx).record(failure)
+	return ClientRegistration{}, failure
+}
+
+// ── Сверка секрета клиента ──────────────────────────────────────────────────
+
+// clientSecretHasher — хешер секретов в настройках движка, который сверяет
+// портом службы (Ports.ClientSecrets).
+//
+// Движок сверяет секрет клиента на двух путях — доказательство точек токена и
+// отзыва и своё у интроспекции, — и оба зовут хешер настроек ровно один раз на
+// клиента: прежних проверочных значений у представлений клиента нет (оборот
+// секретов — забота службы), и других сверок движок не делает. Хешер движка
+// по умолчанию на этих путях не участвует: функцию, цену и сравнение выбирает
+// служба.
+//
+// Хешировать хешер церемонии не умеет: проверочное значение чеканит служба.
+type clientSecretHasher struct {
+	bridge *storageBridge
+}
+
+// Compare сверяет предъявленный секрет портом службы. Проверочного значения,
+// которое передаёт движок, у церемонии нет — представления клиента отдают его
+// пустым; клиента хешер берёт из ведомости операции.
+func (h clientSecretHasher) Compare(ctx context.Context, _, presented []byte) error {
+	return h.bridge.verifyClientSecret(ctx, presented)
+}
+
+// Hash отказывает: проверочное значение секрета чеканит служба, а не
+// церемония (см. clientSecretHasher).
+func (clientSecretHasher) Hash(context.Context, []byte) ([]byte, error) {
+	return nil, misuse("the ceremony mints no client secret hash; the verification value belongs to the service")
+}
+
+var _ engine.Hasher = clientSecretHasher{}
+
+// verifyClientSecret — одна сверка секрета клиента, которого операция
+// доказывает.
+//
+// Исход порта становится ответом движку так:
+//   - «совпал» о зарегистрированном клиенте — клиент доказан;
+//   - «не совпал» — отказ clientSecretRefused, на который движок отвечает своим
+//     отказом доказательства: одним и тем же для неизвестного клиента и для
+//     неверного секрета;
+//   - отказ порта, вердикт вне словаря, «совпал» о клиенте, которого справочник
+//     не знает, и сверка вне доказательства клиента — отказ ОПЕРАЦИИ. Он
+//     пишется в ведомость любым случаем: на интроспекции движок отказа хешера
+//     не оборачивает, а на точке токена оборачивает в «клиент не доказан», и
+//     без записи несостоявшаяся сверка стала бы вердиктом «не совпал».
+//     Случай отказа порта — из закрытого перечня (closedPortFailure): в
+//     контракте сверки нет ни одного отказа со случаем пакета, и такой отказ —
+//     нарушение контракта, а не исход протокола.
+func (b *storageBridge) verifyClientSecret(ctx context.Context, presented []byte) error {
+	const op = "ClientSecretVerifier.VerifyClientSecret"
+	notes := notesFrom(ctx)
+	fail := func(failure *ProtocolError) error {
+		notes.record(failure)
+		return failure
+	}
+
+	claim, named := notes.claimedClient()
+	if !named {
+		return fail(failf(CodeCeremonyMisuse, nil,
+			"The authorization server was asked to verify a client secret outside a client authentication.", "",
+			op+": the operation looked up no client for authentication; the port was not called"))
+	}
+
+	ctx, cancel := b.deadline(ctx)
+	defer cancel()
+
+	verdict, err := b.ports.ClientSecrets.VerifyClientSecret(ctx, claim.clientID, NewPresentedSecret(string(presented)))
+	switch {
+	case err != nil:
+		return fail(closedPortFailure(op, err))
+	case !verdict.Declared():
+		return fail(contractBreach(op, "the verdict is neither SecretMatched nor SecretMismatched"))
+	case verdict == SecretMatched && !claim.registered:
+		return fail(contractBreach(op, "the verifier matched the secret of a client the directory does not know"))
+	case verdict == SecretMatched:
+		return nil
+	default:
+		return clientSecretRefused()
+	}
+}
+
+// clientSecretRefused — «секрет не совпал». Один конструктор и один текст на
+// оба случая, которые обязаны быть неотличимы: неизвестный клиент и неверный
+// секрет.
+func clientSecretRefused() *ProtocolError {
+	return failf(CodeInvalidClient, nil, "The client could not be authenticated.", "",
+		"ClientSecretVerifier.VerifyClientSecret: the presented secret did not match")
 }
 
 // ClientAssertionJWTValid и SetClientAssertionJWT — часть контракта
@@ -257,7 +445,7 @@ func (b *storageBridge) GetAuthorizeCodeSession(ctx context.Context, code string
 		return nil, note(ctx, contractBreach(op, "a live authorization code came back without an S256 proof-key binding: "+defect))
 	}
 	notesFrom(ctx).notePresentedCode(presentedCode{signature: code, record: rec})
-	return requesterFromCode(ctx, b.ports.Clients.LookupClient, rec, session)
+	return requesterFromCode(ctx, b.grantClient, rec, session)
 }
 
 // replayedCode — ответ на выборку кода, погашенного не этой операцией: повтор.
@@ -270,7 +458,12 @@ func (b *storageBridge) GetAuthorizeCodeSession(ctx context.Context, code string
 func (b *storageBridge) replayedCode(ctx context.Context, op string, rec AuthorizationCodeRecord, session engine.Session) (engine.Requester, error) {
 	ours := codeReplayed(op)
 	notesFrom(ctx).markReplayedFamily(rec.Grant.GrantID, rec.Grant.ClientID, ours, RevocationCodeReplay)
-	requester, buildErr := requesterFromGrant(ctx, b.ports.Clients.LookupClient, rec.Grant, session)
+	// Как у токена обновления: повтор записывается ДО сборки запроса. Если
+	// сборка откажет — клиента сняли либо справочник не ответил, — движок
+	// получит отказ сборки, а церемония ответит повтором, а не его следствием, и
+	// отзовёт семейство по записанному гранту.
+	notesFrom(ctx).record(ours)
+	requester, buildErr := requesterFromGrant(ctx, b.grantClient, rec.Grant, session)
 	if buildErr != nil {
 		return nil, buildErr
 	}
@@ -379,7 +572,7 @@ func (b *storageBridge) GetAccessTokenSession(ctx context.Context, signature str
 	if err != nil {
 		return nil, notFoundAware(ctx, "AccessTokenVault.FetchAccessToken", err)
 	}
-	return requesterFromGrant(ctx, b.ports.Clients.LookupClient, rec, session)
+	return requesterFromGrant(ctx, b.grantClient, rec, session)
 }
 
 func (b *storageBridge) DeleteAccessTokenSession(ctx context.Context, signature string) error {
@@ -423,7 +616,7 @@ func (b *storageBridge) GetRefreshTokenSession(ctx context.Context, signature st
 	const op = "RefreshTokenVault.FetchRefreshToken"
 	rec, err := b.ports.RefreshTokens.FetchRefreshToken(ctx, signature)
 	if err == nil {
-		return requesterFromGrant(ctx, b.ports.Clients.LookupClient, rec, session)
+		return requesterFromGrant(ctx, b.grantClient, rec, session)
 	}
 	ours := fromPort(op, err)
 	switch ours.Code {
@@ -434,7 +627,12 @@ func (b *storageBridge) GetRefreshTokenSession(ctx context.Context, signature st
 		}
 		ours = refreshReplayed(op)
 		notesFrom(ctx).markReplayedFamily(rec.GrantID, rec.ClientID, ours, RevocationRefreshReplay)
-		requester, buildErr := requesterFromGrant(ctx, b.ports.Clients.LookupClient, rec, session)
+		// Случай повтора записывается ДО сборки запроса: если собрать его не
+		// удастся — клиента сняли либо справочник не ответил, — движок получит
+		// отказ сборки, а церемония ответит повтором, а не его следствием, и
+		// отзовёт семейство по записанному гранту.
+		notesFrom(ctx).record(ours)
+		requester, buildErr := requesterFromGrant(ctx, b.grantClient, rec, session)
 		if buildErr != nil {
 			return nil, buildErr
 		}
@@ -589,7 +787,7 @@ func (b *storageBridge) GetPKCERequestSession(ctx context.Context, signature str
 	ctx, cancel := b.deadline(ctx)
 	defer cancel()
 
-	return requesterFromCode(ctx, b.ports.Clients.LookupClient, presented.record, session)
+	return requesterFromCode(ctx, b.grantClient, presented.record, session)
 }
 
 // DeletePKCERequestSession — привязку снимают вместе с кодом: при
