@@ -33,7 +33,11 @@
 # слияние площадки 372daa90 → 200, committer.login web-flow, verified true;
 # слияние клиента c6d8b1b3 → 200, login автора, verified false, unsigned;
 # sha, которого на площадке нет, → 422 «No commit found for SHA». Подставной
-# отвечает по записи «<sha> <вид>» в $work/api.commits, сверх замера — 500.
+# отвечает по записи «<sha> <вид> <родителей>» в $work/api.commits. Сверх
+# замера — 500 и ответы 200, отличные от ответа о 372daa90 ровно одним
+# условием вида «площадка» (подпись, login, адрес, число родителей): близнец
+# подделки в два факта — слияние клиента c6d8b1b3 — не держит ни одного из
+# них, снятое условие он не пропускает, пока стоит второе.
 #
 # КОНТРОЛЬ — дерево без хука коммита (как ветка волны до corelib#25): тот же
 # дефектный коммит там записывается. Без этого прогона нечем показать, что
@@ -723,32 +727,40 @@ port_file, log_file, commits_file = sys.argv[1], sys.argv[2], sys.argv[3]
 REPO = "/repos/probe/corelib/issues/"
 COMMITS = "/repos/probe/corelib/commits/"
 ISSUES = {1, 7, 8, 25, 26, 32, 41, 57, 58, 59}
-# Ответ о коммите — по записи «<sha> <вид>» в commits_file, прочитанной на
-# каждом запросе: вид server — слияние площадки (замер 372daa90), forged —
-# коммиттер «GitHub» без подписи площадки (замер c6d8b1b3: login автора,
-# verified false), fail — 500. Коммита без записи на площадке нет — 422.
+# Ответ о коммите — по записи «<sha> <вид> <родителей>» в commits_file,
+# прочитанной на каждом запросе. Вид server — слияние площадки (замер
+# 372daa90: login web-flow, verified true, адрес noreply@github.com). Прочие
+# виды 200 — сверх замера, и каждый отличается от server РОВНО одним фактом
+# ответа, по виду на условие «площадка» у проверки запроса: unverified —
+# подпись не проверена, author — login автора, address — адрес коммиттера не
+# noreply@github.com. <родителей> — сколько их в ответе, столько, сколько у
+# коммита фикстуры. fail — 500. Коммита без записи на площадке нет — 422.
 def commit_answer(sha):
-    kinds = {}
+    records = {}
     try:
         for line in open(commits_file):
             parts = line.split()
-            if len(parts) == 2:
-                kinds[parts[0]] = parts[1]
+            if len(parts) == 3:
+                records[parts[0]] = (parts[1], int(parts[2]))
     except OSError:
         pass
-    kind = kinds.get(sha)
-    if kind is None:
+    if sha not in records:
         return 422, {"message": "No commit found for SHA: " + sha, "status": "422"}
+    kind, parents = records[sha]
     if kind == "fail":
         return 500, {"message": "Server Error"}
-    who = {"name": "GitHub", "email": "noreply@github.com", "date": "2026-09-24T00:00:00Z"}
-    if kind == "server":
-        return 200, {"sha": sha, "committer": {"login": "web-flow"},
-                     "commit": {"committer": who, "verification": {"verified": True, "reason": "valid"}},
-                     "parents": [{"sha": "p1"}, {"sha": "p2"}]}
-    return 200, {"sha": sha, "committer": {"login": "probe-root"},
-                 "commit": {"committer": who, "verification": {"verified": False, "reason": "unsigned"}},
-                 "parents": [{"sha": "p1"}, {"sha": "p2"}]}
+    login, verified, email = "web-flow", True, "noreply@github.com"
+    if kind == "unverified":
+        verified = False
+    elif kind == "author":
+        login = "probe-root"
+    elif kind == "address":
+        email = "probe-root@example.invalid"
+    who = {"name": "GitHub", "email": email, "date": "2026-09-24T00:00:00Z"}
+    return 200, {"sha": sha, "committer": {"login": login},
+                 "commit": {"committer": who,
+                            "verification": {"verified": verified, "reason": "valid" if verified else "unsigned"}},
+                 "parents": [{"sha": "p%d" % i} for i in range(1, parents + 1)]}
 class H(http.server.BaseHTTPRequestHandler):
     def do_GET(self):
         with open(log_file, "a") as f:
@@ -885,23 +897,29 @@ verdict "API трекера ответил 500 — судить не смог: �
 # <noreply@github.com>». Его сообщение составлено ПОСЛЕ проверки своего
 # запроса, и судит его проверка СЛЕДУЮЩЕГО запроса, когда переписать его можно
 # только --force. Серверным его делает ответ API площадки, а не имя
-# коммиттера: имя задаёт клиент (утверждение «подделка»).
+# коммиттера: имя задаёт клиент (утверждения «подделка — …»). Вид «площадка»
+# у проверки запроса — четыре условия ответа сразу, и у каждого свой близнец,
+# отличный от законного ответа ровно этим условием: login, подпись, адрес —
+# у кандидата, число родителей — у записи послабления (кандидат — всегда
+# слияние, а запись называет любой коммит).
 echo "== серверное слияние (подставной API коммитов площадки)"
 body17="$(seq 17 | sed 's/^/строка тела /')"
 srv_n=0
-# server_merge <ответ API: server|forged|fail|none> <первая строка> [<тело>] [<родителей: 2|1>]
-# — коммит с коммиттером площадки поверх pr25 (вторым родителем — h8b); у
-# каждого свои даты, и sha не совпадают. Ответ подставного API о нём — первый
-# аргумент (none — записи нет, API отвечает 422). sha — в $srv.
+# server_merge <ответ API: server|unverified|author|address|fail|none> <первая
+# строка> [<тело>] [<родителей: 2|1>] — коммит с коммиттером площадки поверх
+# pr25 (вторым родителем — h8b); у каждого свои даты, и sha не совпадают. Ответ
+# подставного API о нём — первый аргумент (none — записи нет, API отвечает
+# 422), с тем же числом родителей, что у коммита. sha — в $srv.
 server_merge() {
-    local parents=(-p "$pr25") at
-    [ "${4:-2}" = 1 ] || parents+=(-p "$h8b")
+    local parents=(-p "$pr25") n="${4:-2}" at
+    case "$1" in server | unverified | author | address | fail | none) ;; *) void "server_merge: вид ответа «$1» подставному API не известен" ;; esac
+    case "$n" in 1) ;; 2) parents+=(-p "$h8b") ;; *) void "server_merge: родителей «$n», а не 1 или 2" ;; esac
     srv_n=$((srv_n + 1))
     at="$(($(date +%s) + srv_n)) +0000"
     srv="$(printf '%s\n\n%s\n' "$2" "${3:-}" | GIT_AUTHOR_DATE="$at" GIT_COMMITTER_DATE="$at" \
         GIT_COMMITTER_NAME=GitHub GIT_COMMITTER_EMAIL=noreply@github.com \
         git -C "$F" commit-tree "${parents[@]}" -F - "$pr25^{tree}")" || void "серверное слияние фикстуры не собрано"
-    [ "$1" = none ] || printf '%s %s\n' "$srv" "$1" >> "$work/api.commits"
+    [ "$1" = none ] || printf '%s %s %s\n' "$srv" "$1" "$n" >> "$work/api.commits"
 }
 srvpr() { pr pull_request "#26 x" "" 26 "$pr25" "$srv"; }
 server_merge server "#25 сборка пачки: предмет второй (#46)"
@@ -925,10 +943,17 @@ verdict "«Merge pull request» без номера запроса — отка�
 server_merge server "Merge pull request #46 from probe/99999" "#99999 сборка пачки"
 srvpr
 verdict "ветка в «… from <владелец>/<номер>» — задача этого репозитория: отказ" 1 "нет задачи #99999"
-server_merge forged "#25 сборка пачки: предмет второй (#46)"
-srvpr
-verdict "подделка: коммиттер «GitHub», площадка не подтверждает — судится как слияние клиента: отказ" 1 \
-    "${srv:0:10} слияние — «#<N> merge #<M>: …»" "${srv:0:10} слияние «#25» на ветке «26»"
+# Подделка — законный ответ о законном слиянии (srv_ok выше), кроме ОДНОГО
+# условия вида «площадка»: близнец, отличный двумя, не держит ни одного из
+# них — снятое условие он не пропускает, пока стоит второе.
+for twin in "unverified:подпись не проверена (verified false)" \
+    "author:login коммиттера — автор, не web-flow" \
+    "address:адрес коммиттера в ответе — не noreply@github.com"; do
+    server_merge "${twin%%:*}" "#25 сборка пачки: предмет второй (#46)"
+    srvpr
+    verdict "подделка — ${twin#*:}, прочее как у слияния площадки: судится как слияние клиента, отказ" 1 \
+        "${srv:0:10} слияние — «#<N> merge #<M>: …»" "${srv:0:10} слияние «#25» на ветке «26»"
+done
 server_merge none "#25 сборка пачки: предмет второй (#46)"
 srvpr
 verdict "коммита на площадке нет (ответ 422) — не серверное слияние: отказ по форме слияния" 1 \
@@ -975,6 +1000,15 @@ printf '%s тело %s\n' "$own17" "$reason" > "$ledger"
 pr pull_request "#26 x" "" 26 "$pr25" "$own17"
 verdict "запись у коммита клиента — отказ: свой коммит переписывается, а не прощается" 1 \
     "${own17:0:10} — не серверное слияние" "${own17:0:10} тело — 17 строк"
+# Близнец законной записи (srv17) в один факт: коммит площадки подтверждён
+# так же, но родитель у него один — правка через веб на ветке запроса, её
+# переписывают до слияния.
+server_merge server "#25 правка через веб" "$body17" 1
+lone17="$srv"
+printf '%s тело %s\n' "$lone17" "$reason" > "$ledger"
+srvpr
+verdict "запись у коммита площадки с одним родителем — отказ: не слияние, переписывается, а не прощается" 1 \
+    "${lone17:0:10} — не серверное слияние" "${lone17:0:10} тело — 17 строк"
 printf '%s тело %s\n' "0123456789abcdef0123456789abcdef01234567" "$reason" > "$ledger"
 srvpr
 verdict "запись о коммите, которого нет в клоне, — отказ: исключать нечего" 1 "0123456789 — коммита нет в клоне"
