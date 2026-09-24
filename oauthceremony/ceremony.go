@@ -433,8 +433,15 @@ func validateEndpoint(field, value string) error {
 	// адрес в том написании, какое даёт обратная запись разобранного. Строка,
 	// которая с ним не совпадает, — второе написание адреса: служба
 	// опубликовала бы одно, а запросы уходили бы на другое.
+	//
+	// Правила у частей адреса разные, и отказ называет правило каждой: схему
+	// разбор понижает в регистре; хост не-ASCII обратная запись экранирует, а
+	// клиентам он публикуется A-меткой; путь обратная запись экранирует, но
+	// регистра его не трогает, и путь к регистру чувствителен.
 	if endpoint.String() != value {
-		return misuse(field + " is not written the way it is served: parsing and re-serialising it changes it (whitespace, a non-ASCII character or an upper-case scheme); write the address percent-encoded and in lower case")
+		return misuse(field + " is not written the way it is served: parsing and re-serialising it changes it; " +
+			"write the scheme in lower case, a non-ASCII host as its A-label (the xn-- form), " +
+			"and whitespace and non-ASCII characters of the path percent-encoded, keeping the letter case of the path")
 	}
 	return nil
 }
