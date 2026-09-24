@@ -40,43 +40,92 @@
 # родителей). Наименьшее, а не последнее выведенное: снятый и заведённый
 # снова хук правила не отменяет, и порядок вывода `git log` (он по дате
 # коммиттера) здесь ничего не решает. Выводится, а не выписывается: литерал
-# пришлось бы вписать до коммита, момент которого он называет. Коммит с датой
-# автора до T0 по форме и автору не судится; атрибуция судится у любого, а
-# коммиттер — у записанного после T0. Коммита правила в истории нет (он сам
-# сейчас и создаётся) либо клон мелкий — T0 не выведен, судится всё, и
-# потребитель говорит это вслух. Мелкий клон не выводит T0 НИКОГДА: история за
-# границей не видна, и первое добавление может лежать за ней, даже когда
-# граница файла не несёт (хук снят до границы и заведён после — T0 вышел бы
-# повторным добавлением, позже настоящего).
+# пришлось бы вписать до коммита, момент которого он называет. Коммита правила
+# в истории нет (он сам сейчас и создаётся) либо клон мелкий — T0 не выведен,
+# судится всё, и потребитель говорит это вслух. Мелкий клон не выводит T0
+# НИКОГДА: история за границей не видна, и первое добавление может лежать за
+# ней, даже когда граница файла не несёт (хук снят до границы и заведён после —
+# T0 вышел бы повторным добавлением, позже настоящего).
+#
+# КОММИТ ДО ПРАВИЛА — тот, что ЗАПИСАН до правила (дата коммиттера до T0, и в
+# его истории нет добавления правила: ни один коммит, заводивший
+# scripts/hooks/commit-msg, ему не предок и не он сам), с датой автора до T0.
+# Его форма и автор не судятся, коммиттер не судится у записанного до правила;
+# атрибуция судится у любого. Даты задаёт клиент (GIT_AUTHOR_DATE,
+# GIT_COMMITTER_DATE, commit-tree), историю — нет: коммит, чья история несёт
+# добавление правила, записан после него, какие бы даты он ни нёс. Дата
+# коммиттера нужна сверх истории: коммит, записанный после T0, — новый коммит,
+# даже когда автор и дата автора у него старые (перенос старой работы; rebase
+# правило владельца запрещает).
+#
+# ГРАНИЦА (измерена пробой, утверждения «граница:»): коммит, записанный после
+# правила МИМО хука коммита на основании СТАРШЕ правила с обеими датами до T0,
+# от работы до правила не отличим ничем из данных git — основание и обе даты
+# выбирает клиент. Его форму, автора и имя его ветки не судят ни страж
+# отправки, ни проверка запроса. Через хук коммита такой коммит не записать: в
+# дереве с хуком история несёт добавление правила, и дата автора до T0 — отказ.
 GIT_RULE_T0_PATH=scripts/hooks/commit-msg
 GIT_RULE_T0=0
 GIT_RULE_T0_KNOWN=0
+GIT_RULE_T0_ADDS=()
 GIT_RULE_SUBJECT_MAX=72
 GIT_RULE_BODY_MAX=12
 
-# git_rule_t0 [ревизия…] — печатает T0 эпохой; 1 — не выведен.
-git_rule_t0() {
-    local recs h at min=""
+# git_rule_load_t0 [ревизия…] — выставляет GIT_RULE_T0 (эпохой),
+# GIT_RULE_T0_KNOWN и GIT_RULE_T0_ADDS — коммиты, заводившие путь правила в
+# историю ревизий. Не выведен — T0 0, KNOWN 0, добавлений нет: судится всё.
+git_rule_load_t0() {
+    local recs h at min="" adds=()
+    GIT_RULE_T0=0
+    GIT_RULE_T0_KNOWN=0
+    GIT_RULE_T0_ADDS=()
     [ "$#" -gt 0 ] || set -- HEAD
-    [ "$(git rev-parse --is-shallow-repository 2>/dev/null)" != true ] || return 1
-    recs="$(git log --no-color --diff-filter=A --format='%H %at' "$@" -- "$GIT_RULE_T0_PATH" 2>/dev/null)" || return 1
-    [ -n "$recs" ] || return 1
+    [ "$(git rev-parse --is-shallow-repository 2>/dev/null)" != true ] || return 0
+    recs="$(git log --no-color --diff-filter=A --format='%H %at' "$@" -- "$GIT_RULE_T0_PATH" 2>/dev/null)" || return 0
     while read -r h at; do
         [ -n "$h" ] || continue
+        adds+=("$h")
         if [ -z "$min" ] || [ "$at" -lt "$min" ]; then min="$at"; fi
     done <<<"$recs"
-    [ -n "$min" ] || return 1
-    printf '%s' "$min"
+    [ -n "$min" ] || return 0
+    GIT_RULE_T0="$min"
+    GIT_RULE_T0_KNOWN=1
+    GIT_RULE_T0_ADDS=("${adds[@]}")
 }
 
-# git_rule_load_t0 [ревизия…] — выставляет GIT_RULE_T0 и GIT_RULE_T0_KNOWN.
-git_rule_load_t0() {
-    if GIT_RULE_T0="$(git_rule_t0 "$@")"; then
-        GIT_RULE_T0_KNOWN=1
-    else
-        GIT_RULE_T0=0
-        GIT_RULE_T0_KNOWN=0
-    fi
+# git_rule_after_add <коммит> — в истории коммита есть добавление правила (оно
+# ему предок либо он сам). Ответ git, отличный от «да» и «нет», читается «да»:
+# недоказанное «до правила» не освобождает от суждения.
+git_rule_after_add() {
+    local a rc
+    for a in "${GIT_RULE_T0_ADDS[@]}"; do
+        git merge-base --is-ancestor "$a" "$1" 2>/dev/null
+        rc=$?
+        [ "$rc" = 1 ] || return 0
+    done
+    return 1
+}
+
+# git_rule_recorded_before <коммит> <дата коммиттера> — коммит записан до
+# правила: дата коммиттера до T0 и в истории нет добавления правила.
+git_rule_recorded_before() {
+    [ "$2" -lt "$GIT_RULE_T0" ] && ! git_rule_after_add "$1"
+}
+
+# git_rule_pre_rule <коммит> <дата автора> <дата коммиттера> — коммит до
+# правила: записан до правила и дата автора до T0. T0 не выведен — ни один.
+git_rule_pre_rule() {
+    [ "$2" -lt "$GIT_RULE_T0" ] && git_rule_recorded_before "$1" "$3"
+}
+
+# git_rule_range_pre_rule <аргументы rev-list…> — в диапазоне есть коммит до правила.
+git_rule_range_pre_rule() {
+    local h at ct
+    while read -r h at ct; do
+        [ -n "$h" ] || continue
+        git_rule_pre_rule "$h" "$at" "$ct" && return 0
+    done < <(git log --no-color --format='%H %at %ct' "$@" 2>/dev/null)
+    return 1
 }
 
 git_rule_t0_text() {
@@ -186,7 +235,7 @@ git_rule_howto() {
         ident) printf '%s\n' "подпись: коммит без --author, -c user.*/author.*/committer.*, GIT_COMMITTER_* и GIT_CONFIG_GLOBAL; настройку подписи уровня local/worktree снимите (git config --local --unset <ключ>); подпись задаётся один раз — git config --global user.name / user.email" ;;
         branch) printf '%s\n' "ветка: git branch -m <N> — ветка называется номером задачи этого репозитория (^[0-9]+\$), исключение одно — main" ;;
         editor) printf '%s\n' "сообщение — через -m или -F, без редактора: git commit -m \"#<N> …\" — строку «#…» git вырезает как комментарий" ;;
-        date) printf '%s\n' "дата автора — текущая: коммит без --date и GIT_AUTHOR_DATE в прошлом" ;;
+        date) printf '%s\n' "дата автора — текущая: коммит без --date и GIT_AUTHOR_DATE в прошлом; у --amend и -C вершины с датой до T0 — с --reset-author" ;;
     esac
 }
 
@@ -239,9 +288,9 @@ git_rule_ident_overrides() {
 
 # git_rule_before_rule <ревизия> — ветка открыта до правила: среди её
 # СОБСТВЕННЫХ коммитов (не достижимых ни с `main`, ни с веток-номеров —
-# локальных и удалённых) есть коммит с датой автора до T0.
+# локальных и удалённых) есть коммит до правила (git_rule_pre_rule).
 git_rule_before_rule() {
-    local ref short excl=() d
+    local ref short excl=()
     while IFS= read -r ref; do
         case "$ref" in
             refs/heads/*) short="${ref#refs/heads/}" ;;
@@ -251,11 +300,7 @@ git_rule_before_rule() {
         esac
         if [ "$short" = main ] || git_rule_is_number "$short"; then excl+=("^$ref"); fi
     done < <(git for-each-ref --format='%(refname)' refs/heads refs/remotes)
-    while IFS= read -r d; do
-        [ -n "$d" ] || continue
-        [ "$d" -lt "$GIT_RULE_T0" ] && return 0
-    done < <(git log --no-color --format=%at "$1" "${excl[@]}" 2>/dev/null)
-    return 1
+    git_rule_range_pre_rule "$1" "${excl[@]}"
 }
 
 # git_rule_judge_range <ветка> <подпись> <аргументы rev-list…>
@@ -263,20 +308,20 @@ git_rule_before_rule() {
 # Судит каждый ЗАПИСАННЫЙ коммит диапазона — у отправки и у запроса. Сообщение
 # чистится git stripspace, как у хука коммита: единица счёта тела одна.
 #   · атрибуция — у любого коммита;
-#   · дата автора не раньше T0 — форма (git_rule_form): слияние — по числу
-#     родителей, номер ветки — у слияний ПЕРВОЙ РОДИТЕЛЬСКОЙ цепочки <ветки>;
-#     номера первой строки копятся в GIT_RULE_NUMBERS;
-#   · <подпись> «имя <адрес>» — автор у коммита с датой автора после T0,
-#     коммиттер у коммита, ЗАПИСАННОГО после T0 (дата коммиттера): перепись
+#   · коммит не до правила (git_rule_pre_rule) — форма (git_rule_form): слияние
+#     — по числу родителей, номер ветки — у слияний ПЕРВОЙ РОДИТЕЛЬСКОЙ цепочки
+#     <ветки>; номера первой строки копятся в GIT_RULE_NUMBERS;
+#   · <подпись> «имя <адрес>» — автор у коммита не до правила, коммиттер у
+#     коммита, не ЗАПИСАННОГО до правила (git_rule_recorded_before): перепись
 #     старого коммита записывает нового коммиттера; «-» — подпись не судится.
-# Находки — в GIT_RULE_FINDINGS с коротким sha; счёт — GIT_RULE_SEEN,
-# GIT_RULE_AFTER_T0. Код 1 — диапазон не читается git.
+# Находки — в GIT_RULE_FINDINGS с коротким sha; счёт — GIT_RULE_SEEN и
+# GIT_RULE_AFTER_RULE (судимых формой). Код 1 — диапазон не читается git.
 GIT_RULE_FINDINGS=()
 GIT_RULE_NUMBERS=()
 GIT_RULE_SEEN=0
-GIT_RULE_AFTER_T0=0
+GIT_RULE_AFTER_RULE=0
 git_rule_judge_range() {
-    local branch="$1" ident="$2" owned log rec h at ct parents author committer raw msg merge on f attr
+    local branch="$1" ident="$2" owned log rec h at ct parents author committer raw msg merge on f attr before
     shift 2
     owned="$(git rev-list --first-parent "$@" 2>/dev/null)" || {
         GIT_RULE_FINDINGS+=("диапазон «$*» не читается git rev-list — судить нечем")
@@ -298,11 +343,15 @@ git_rule_judge_range() {
         if attr="$(git_rule_attribution "$msg")"; then
             GIT_RULE_FINDINGS+=("${h:0:10} атрибуция в сообщении: «$attr»")
         fi
-        if [ "$ident" != - ] && [ "$ct" -ge "$GIT_RULE_T0" ] && [ "$committer" != "$ident" ]; then
+        # before — записан до правила; коммит до правила (git_rule_pre_rule) —
+        # записан до правила и с датой автора до T0: before уже посчитан.
+        before=0
+        git_rule_recorded_before "$h" "$ct" && before=1
+        if [ "$ident" != - ] && [ "$before" = 0 ] && [ "$committer" != "$ident" ]; then
             GIT_RULE_FINDINGS+=("${h:0:10} коммиттер «$committer» — не корневая учётная запись «$ident»")
         fi
-        [ "$at" -ge "$GIT_RULE_T0" ] || continue
-        GIT_RULE_AFTER_T0=$((GIT_RULE_AFTER_T0 + 1))
+        [ "$before" = 0 ] || [ "$at" -ge "$GIT_RULE_T0" ] || continue
+        GIT_RULE_AFTER_RULE=$((GIT_RULE_AFTER_RULE + 1))
         merge=0
         [ "$(wc -w <<<"$parents")" -lt 2 ] || merge=1
         on=""

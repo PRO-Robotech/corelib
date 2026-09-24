@@ -36,9 +36,12 @@
 #
 # ГРАНИЦЫ ИЗМЕРЕНЫ, А НЕ ОБЪЯВЛЕНЫ. Пути, которыми коммит минует commit-msg
 # (--no-verify, cherry-pick, rebase, am, revert, commit-tree, --cleanup=strip в
-# командной строке, новый коммит с автором и датой вершины до T0), проба
-# исполняет и утверждает, что дефектный коммит записан: шапка хука называет их
-# слепыми зонами, и это утверждение держится замером git этой машины.
+# командной строке), проба исполняет и утверждает, что дефектный коммит записан:
+# шапка хука называет их слепыми зонами, и это утверждение держится замером git
+# этой машины. Так же измерена граница стража отправки и проверки запроса
+# (утверждения «граница:»): коммит, записанный на основании СТАРШЕ правила с
+# обеими датами до T0, доезжает и проходит запрос, как работа до правила; тот же
+# коммит поверх правила — отказ, какие бы даты он ни нёс.
 #
 # ИСХОДЫ: 0 — все утверждения сошлись; 1 — хоть одно разошлось;
 #         2 — не выполнилось (нет файла под пробой, нет git/make/python3/curl,
@@ -191,6 +194,17 @@ on() {
     E=()
 }
 commit() { attempt git commit -q --allow-empty "$@"; }
+# drop <ветка…> — снимает ветки фикстуры. Вершина сперва отсоединяется: ветку, на
+# которой стоит рабочая копия, git не снимает, а молча оставшаяся ветка-номер
+# меняет, чьи коммиты «свои» (ветка до правила читалась бы веткой после него).
+drop() {
+    local b
+    git -C "$F" checkout -q --detach 2>/dev/null
+    git -C "$F" branch -q -D "$@" >/dev/null 2>&1
+    for b in "$@"; do
+        ! git -C "$F" rev-parse -q --verify "refs/heads/$b" >/dev/null || void "ветка фикстуры $b не снята"
+    done
+}
 # tree_without <вершина> <путь> — дерево вершины без пути (собрано на своём индексе).
 tree_without() {
     (cd "$F" && GIT_INDEX_FILE="$work/tw.idx" git read-tree "$1" &&
@@ -407,15 +421,36 @@ on issue-7; commit -m "#7 x"
 refused "ветка «issue-7», открытая после правила, — отказ" "ветка «issue-7»" "номером задачи"
 on lane/oauth2-engine; commit -m "#7 x"
 refused "ветка «lane/oauth2-engine» после правила — отказ" "ветка «lane/oauth2-engine»"
-# Ветка до правила: её собственный коммит (не достижимый ни со ствола, ни с
-# веток-номеров) датирован до T0. Собран commit-tree — хук на нём не исполняется.
-old_c="$(GIT_AUTHOR_DATE=2025-06-01T00:00:00Z GIT_COMMITTER_DATE=2025-06-01T00:00:00Z \
-    git -C "$F" commit-tree -p "$h1" -m "lane: работа до правила" "$h1^{tree}")" || void "коммит ветки до правила не собран"
-on batch-quota-fate "$old_c"; commit -m "#7 x"
-accepted "близнец: ветка до правила (свой коммит датирован до T0) — не переименовывается" "#7 x"
-on 7 "$old_c"; on issue-8 "$old_c"; commit -m "#8 x"
+# Ветка до правила — такой, какой она бывает на деле: её собственный коммит (не
+# достижимый ни со ствола, ни с веток-номеров) записан на основании СТАРШЕ
+# правила, обе даты — до T0, а правило внесено в ветку слиянием (иначе хука в её
+# дереве нет, R8 ниже). Собраны commit-tree — хук на них не исполняется.
+pre_c="$(GIT_AUTHOR_DATE=2025-06-01T00:00:00Z GIT_COMMITTER_DATE=2025-06-01T00:00:00Z \
+    git -C "$F" commit-tree -p "$h0" -m "lane: работа до правила" "$h0^{tree}")" || void "коммит до правила не собран"
+pre_m="$(git -C "$F" commit-tree -p "$pre_c" -p "$h1" -m "#57 merge main: правило git в ветке до правила" "$h1^{tree}")" ||
+    void "слияние правила в ветку до правила не собрано"
+on batch-quota-fate "$pre_m"; commit -m "#7 x"
+accepted "близнец: ветка до правила (свой коммит до T0 на основании старше правила) — не переименовывается" "#7 x"
+# Подделка той же формы: даты те же, слияние то же, основание — коммит правила.
+# Даты задаёт клиент, историю — нет: коммит, чья история несёт добавление
+# правила, записан после правила, какие бы даты он ни нёс.
+fake_c="$(GIT_AUTHOR_DATE=2025-06-01T00:00:00Z GIT_COMMITTER_DATE=2025-06-01T00:00:00Z \
+    git -C "$F" commit-tree -p "$h1" -m "lane: работа до правила" "$h1^{tree}")" || void "подделка коммита до правила не собрана"
+fake_m="$(git -C "$F" commit-tree -p "$fake_c" -p "$h1" -m "#57 merge main: правило git в ветке до правила" "$h1^{tree}")" ||
+    void "слияние подделки не собрано"
+on batch-quota-fate "$fake_m"; commit -m "#7 x"
+refused "подделка: обе даты до T0 поверх коммита правила — ветка не «до правила», отказ по имени" "ветка «batch-quota-fate»"
+# Основание старше правила, но коммит ЗАПИСАН после T0 (дата коммиттера — сейчас;
+# так записывает перенос старой работы): это новый коммит, не работа до правила.
+late_c="$(GIT_AUTHOR_DATE=2025-06-01T00:00:00Z \
+    git -C "$F" commit-tree -p "$h0" -m "lane: работа до правила" "$h0^{tree}")" || void "поздняя запись старой работы не собрана"
+late_m="$(git -C "$F" commit-tree -p "$late_c" -p "$h1" -m "#57 merge main: правило git в ветке до правила" "$h1^{tree}")" ||
+    void "слияние поздней записи не собрано"
+on batch-late "$late_m"; commit -m "#7 x"
+refused "дата автора до T0, записан после T0 на основании старше правила — не «до правила», отказ по имени" "ветка «batch-late»"
+on 7 "$pre_m"; on issue-8 "$pre_m"; commit -m "#8 x"
 refused "ветка «issue-8» от вершины, лежащей на ветке-номере, — отказ" "ветка «issue-8»"
-git -C "$F" branch -q -D 7 batch-quota-fate issue-7 issue-8 lane/oauth2-engine 2>/dev/null
+drop 7 batch-quota-fate batch-late issue-7 issue-8 lane/oauth2-engine
 
 # ── РЕВИЗИЯ СТАРШЕ ПРАВИЛА (R8): отказ без обхода, выход — слияние ───────────
 # Переходник провязан в общем каталоге клона и видит ВСЕ рабочие копии, а в
@@ -425,8 +460,6 @@ git -C "$F" branch -q -D 7 batch-quota-fate issue-7 issue-8 lane/oauth2-engine 2
 # берётся у обоих родителей — иначе ветка до правила на этом слиянии читалась бы
 # веткой после правила.
 echo "== ревизия старше правила"
-pre_c="$(GIT_AUTHOR_DATE=2025-06-01T00:00:00Z GIT_COMMITTER_DATE=2025-06-01T00:00:00Z \
-    git -C "$F" commit-tree -p "$h0" -m "lane: работа до правила" "$h0^{tree}")" || void "коммит до правила не собран"
 on batch-quota-fate "$pre_c"
 fact "фикстура: в рабочей копии ревизии до правила хука нет" test ! -e "$F/scripts/hooks/commit-msg"
 commit -m "#57 x"
@@ -440,23 +473,32 @@ on batch-quota-fate "$pre_c"; merge "$h1" -m "hooks: merge"
 refused "R8: слияние с дефектной первой строкой судит внесённый хук — отказ" "не начинается с «#<N> »"
 on 41 "$pre_c"; merge "$h1" -m "#41 merge main: правило git в ветке"
 accepted "R8: ветка-номер до правила — слияние по форме записано" "#41 merge main: правило git в ветке"
-git -C "$F" branch -q -D batch-quota-fate 41 2>/dev/null
+drop batch-quota-fate 41
 
 # ── T0: граница истории ──────────────────────────────────────────────────────
 echo "== T0 (наименьшее время автора коммита, заводившего scripts/hooks/commit-msg)"
 on 7; E=(GIT_AUTHOR_DATE=2020-06-01T00:00:00Z); commit -m "#7 x"
 refused "новый коммит с датой автора до T0 — отказ: дата в прошлом правило не обходит" "раньше T0"
-# Перепись сообщения коммита до T0: вершина — коммит с датой автора до T0 поверх
-# коммита правила (так приходит перенесённая старая работа); --amend сохраняет
-# автора и дату, форма и автор не судятся, атрибуция и коммиттер — судятся.
+# Вершина с датой автора до T0 в дереве с хуком лежит поверх добавления правила:
+# дерево несёт хук, значит, история — его добавление, и записана она после
+# правила. Ветку до правила хук не судит вовсе — хука в её дереве нет (R8).
+# Перепись такой вершины (--amend сохраняет автора и дату) и НОВЫЙ коммит,
+# скопировавший её автора и дату (-C HEAD, --author с --date), хук не различает
+# (окружение у них одно, замер) — и судит одинаково: дата до T0 — отказ, форма
+# и автор судятся. Прежде это была слепая зона хука O1.
 hist_c="$(GIT_AUTHOR_NAME=old GIT_AUTHOR_EMAIL=old@example.invalid GIT_AUTHOR_DATE=2025-01-01T00:00:00Z \
     git -C "$F" commit-tree -p "$h1" -m "lane: старая работа" "$h1^{tree}")" || void "коммит истории не собран"
 on 7 "$hist_c"; commit --amend -m "lane: старая работа, сообщение переписано"
-accepted "близнец: перепись сообщения коммита до T0 — форма и автор не судятся" "lane: старая работа, сообщение переписано"
+refused "перепись вершины с датой до T0 поверх правила — отказ: дата, форма и автор судятся" \
+    "раньше T0" "не начинается с «#<N> »" "автор «old <old@example.invalid>»"
 on 7 "$hist_c"; commit --amend -m "lane: старая работа" -m "Co-Authored-By: Claude <noreply@example.invalid>"
-refused "перепись до T0 с атрибуцией — отказ: атрибуция судится у любого" "атрибуция"
+refused "перепись вершины с датой до T0 с атрибуцией — отказ: атрибуция судится у любого" "атрибуция"
 on 7 "$hist_c"; E=(GIT_COMMITTER_NAME=bot GIT_COMMITTER_EMAIL=bot@example.invalid); commit --amend -m "lane: старая работа"
-refused "перепись до T0 чужим коммиттером — отказ" "GIT_COMMITTER_NAME"
+refused "перепись вершины с датой до T0 чужим коммиттером — отказ" "GIT_COMMITTER_NAME"
+on 7 "$hist_c"; commit -C HEAD
+refused "O1 закрыта: новый коммит -C HEAD поверх вершины с датой до T0 — отказ" "раньше T0" "не начинается с «#<N> »"
+on 7 "$hist_c"; commit --author="old <old@example.invalid>" --date=2025-01-01T00:00:00Z -m "anything goes. Here"
+refused "O1 закрыта: новый коммит с автором и датой вершины до T0 — отказ" "раньше T0" "второе предложение"
 # Два добавления: хук правила снят и заведён снова. T0 — первое добавление:
 # коммит с датой между ними — после правила, судится целиком и записан.
 rm_tree="$(tree_without "$h1" scripts/hooks/commit-msg)" || void "дерево без хука не собрано"
@@ -593,6 +635,13 @@ on 104; nv --author="Other <other@example.invalid>" -m "#104 x"; push 104
 stopped "чужой автор в отправляемом коммите — отказ" refs/heads/104 "автор «Other <other@example.invalid>»"
 on 105; E=(GIT_COMMITTER_NAME=bot GIT_COMMITTER_EMAIL=bot@example.invalid); nv -m "#105 x"; E=(); push 105
 stopped "чужой коммиттер в отправляемом коммите — отказ" refs/heads/105 "коммиттер «bot <bot@example.invalid>»"
+# Близнец 105, отличный в один факт: обе даты — до T0. Коммит поверх правила
+# записан после него, и его коммиттер судится, какую дату он ни назови.
+bc_c="$(GIT_COMMITTER_NAME=bot GIT_COMMITTER_EMAIL=bot@example.invalid GIT_AUTHOR_DATE=2020-06-01T00:00:00Z \
+    GIT_COMMITTER_DATE=2020-06-01T00:00:00Z git -C "$F" commit-tree -p "$h1" -m "#114 x" "$h1^{tree}")" ||
+    void "коммит чужого коммиттера с датами до T0 не собран"
+on 114 "$bc_c"; push 114
+stopped "чужой коммиттер, обе даты до T0 поверх правила — отказ по коммиттеру" refs/heads/114 "коммиттер «bot <bot@example.invalid>»"
 on issue-106; nv -m "#106 x"; push issue-106
 stopped "новая ветка «issue-106» — отказ по имени" refs/heads/issue-106 "ветка «issue-106»"
 on 25; commit -m "#58 гейт целевых веток"; push 25
@@ -601,8 +650,42 @@ on 107; attempt git merge -q --no-ff --no-verify "$h8" -m "#9 merge #8: пред
 stopped "слияние «#9» на ветке 107 — отказ: номер слияния — номер ветки" refs/heads/107 "«#9» на ветке «107»"
 on 108; merge "$h8" -m "#108 merge #8: предмет восьмой"; push 108
 delivered "близнец: слияние «#108 merge #8» на ветке 108 — влитый «#8 …» судится формой" refs/heads/108 "новых коммитов 2"
-on batch-quota-fate "$old_c"; commit -m "#57 x"; push batch-quota-fate
-delivered "новая ветка до правила (свой коммит до T0) — имя законно" refs/heads/batch-quota-fate
+on batch-quota-fate "$pre_m"; commit -m "#57 x"; push batch-quota-fate
+delivered "новая ветка до правила (свой коммит до T0 на основании старше правила) — имя законно, форма старого не судится" \
+    refs/heads/batch-quota-fate "новых коммитов 3" "нарушений нет"
+on batch-quota-fake "$fake_m"; commit -m "#57 x"; push batch-quota-fake
+stopped "подделка ветки до правила (обе даты до T0 поверх коммита правила) — отказ по имени и форме" \
+    refs/heads/batch-quota-fake "ветка «batch-quota-fake»" "не начинается с «#<N> »"
+on batch-late "$late_m"; push batch-late
+stopped "записан после T0 на основании старше правила — отказ по имени и форме" \
+    refs/heads/batch-late "ветка «batch-late»" "не начинается с «#<N> »"
+# Опыт ревью corelib#25 (сборка 68): коммит мимо хука — чужой автор, первая строка
+# без номера и со вторым предложением, дата автора до T0 — поверх вершины после
+# правила, на новой ветке. Близнец с датой автора «сейчас» отказан и до правки;
+# одна дата, выбранная клиентом, суждение не снимает. vy_c — то же с ОБЕИМИ
+# датами до T0: держит история, а не дата коммиттера.
+vx_c="$(GIT_AUTHOR_NAME=Foreign GIT_AUTHOR_EMAIL=foreign@example.invalid GIT_AUTHOR_DATE=2020-06-01T00:00:00Z \
+    git -C "$F" commit-tree -p "$h1" -m "hooks: forged, no number. Second sentence" "$h1^{tree}")" || void "коммит опыта не собран"
+vy_c="$(GIT_AUTHOR_NAME=Foreign GIT_AUTHOR_EMAIL=foreign@example.invalid GIT_AUTHOR_DATE=2020-06-01T00:00:00Z \
+    GIT_COMMITTER_DATE=2020-06-01T00:00:00Z \
+    git -C "$F" commit-tree -p "$h1" -m "hooks: forged, no number. Second sentence" "$h1^{tree}")" || void "коммит опыта (обе даты) не собран"
+on feature-x "$vx_c"; push feature-x
+stopped "дата автора до T0 поверх правила — страж судит целиком: имя, форма, автор" refs/heads/feature-x \
+    "ветка «feature-x»" "не начинается с «#<N> »" "второе предложение" "автор «Foreign <foreign@example.invalid>»"
+on feature-y "$vy_c"; push feature-y
+stopped "обе даты до T0 поверх правила — отказ: историю, в отличие от дат, клиент не выбирает" refs/heads/feature-y \
+    "ветка «feature-y»" "не начинается с «#<N> »" "автор «Foreign <foreign@example.invalid>»"
+# ГРАНИЦА стража и проверки запроса (измерена, шапки её называют): коммит,
+# записанный СЕЙЧАС на основании старше правила с обеими датами до T0, от работы
+# до правила не отличим ничем из данных git — обе даты задаёт клиент, основание
+# выбирает он же. Та же дефектная форма, что у опыта, доезжает.
+bx_c="$(GIT_AUTHOR_NAME=Foreign GIT_AUTHOR_EMAIL=foreign@example.invalid GIT_AUTHOR_DATE=2020-06-01T00:00:00Z \
+    GIT_COMMITTER_DATE=2020-06-01T00:00:00Z \
+    git -C "$F" commit-tree -p "$h0" -m "hooks: forged, no number. Second sentence" "$h0^{tree}")" || void "коммит границы не собран"
+bx_m="$(git -C "$F" commit-tree -p "$bx_c" -p "$h1" -m "#57 merge main: правило git" "$h1^{tree}")" || void "слияние границы не собрано"
+on feature-z "$bx_m"; push feature-z
+delivered "граница: обе даты до T0 на основании старше правила — доехало, как работа до правила" \
+    refs/heads/feature-z "нарушений нет"
 on 109; commit -m "#109 x"; P=(GIT_CONFIG_GLOBAL="$work/root.gitconfig"); push 109
 stopped "GIT_CONFIG_GLOBAL при отправке — корень перенаправлен: отказ" refs/heads/109 "GIT_CONFIG_GLOBAL"
 P=(HOME="$work/nohome" XDG_CONFIG_HOME="$work/nohome/.config"); push 109
@@ -707,10 +790,28 @@ pr pull_request "#25 хуки и гейты" "Тело."$'\n\n'"Co-Authored-By: 
 verdict "тело с трейлером атрибуции — отказ" 1 "тело: атрибуция"
 pr pull_request "#25 хуки и гейты" "" issue-25 "$h1" "$pr25"
 verdict "голова «issue-25» без коммита до T0 — отказ по имени" 1 "голова «issue-25»"
-on batch-quota-fate "$old_c"; commit -m "#57 x"
+on batch-quota-fate "$pre_m"; commit -m "#57 x"
 bq="$(git -C "$F" rev-parse HEAD)"
 pr pull_request "#57 работа до правила" "" batch-quota-fate "$h1" "$bq"
-verdict "голова до правила (коммит до T0 в запросе) — имя законно, форма старого не судится" 0 "нарушений нет"
+verdict "голова до правила (свой коммит до T0 на основании старше правила) — имя законно, форма старого не судится" 0 "нарушений нет"
+on batch-quota-fake "$fake_m"; commit -m "#57 x"
+pr pull_request "#57 работа до правила" "" batch-quota-fake "$h1" "$(git -C "$F" rev-parse HEAD)"
+verdict "подделка головы до правила (обе даты до T0 поверх коммита правила) — отказ по голове и форме" 1 \
+    "голова «batch-quota-fake»" "не начинается с «#<N> »"
+pr pull_request "#57 работа до правила" "" batch-late "$h1" "$late_m"
+verdict "записан после T0 на основании старше правила — отказ по голове и форме" 1 \
+    "голова «batch-late»" "не начинается с «#<N> »"
+# Опыт ревью corelib#25 (сборка 68) — у проверки запроса: головы feature-x и 7.
+pr pull_request "#7 x" "" feature-x "$h1" "$vx_c"
+verdict "дата автора до T0 поверх правила, голова feature-x — отказ по голове и форме" 1 \
+    "голова «feature-x»" "не начинается с «#<N> »" "второе предложение"
+pr pull_request "#7 x" "" 7 "$h1" "$vx_c"
+verdict "дата автора до T0 поверх правила, голова 7 — отказ по форме" 1 "не начинается с «#<N> »" "второе предложение"
+pr pull_request "#7 x" "" feature-y "$h1" "$vy_c"
+verdict "обе даты до T0 поверх правила — отказ: историю клиент не выбирает" 1 \
+    "голова «feature-y»" "не начинается с «#<N> »"
+pr pull_request "#7 x" "" feature-z "$h1" "$bx_m"
+verdict "граница: обе даты до T0 на основании старше правила — не отличимо от работы до правила" 0 "нарушений нет"
 on 26 "$pr25"; nv -m "hooks: x"
 pr pull_request "#26 x" "" 26 "$pr25" "$(git -C "$F" rev-parse HEAD)"
 verdict "коммит после T0 без «#<N> » в запросе — отказ с его sha" 1 "не начинается с «#<N> »" "$(git -C "$F" rev-parse --short=10 HEAD)"
@@ -807,16 +908,6 @@ on 7; commit --cleanup=strip -m "#7 x" -m "тело стало первой ст
 bypassed "--cleanup=strip в командной строке (хук видит «#7 x», git записывает тело)" "тело стало первой строкой"
 on 7; merge 8 --no-verify -m "hooks: merge"
 bypassed "git merge --no-verify" "hooks: merge"
-# O1: новый коммит, скопировавший автора и дату вершины до T0, хук от переписи
-# этой вершины не отличает — окружение хука у `--amend` и у `-C HEAD` одно
-# (замер: GIT_AUTHOR_*, GIT_EDITOR, GIT_INDEX_FILE совпадают). Записан без
-# суждения формы и автора; дата на день позже — уже отказ (выше, «раньше T0»).
-on 7 "$hist_c"; commit -C HEAD
-bypassed "новый коммит -C HEAD поверх вершины до T0 (O1)" "lane: старая работа"
-fact "граница O1: записан НОВЫЙ коммит (родитель — вершина до T0), а не перепись" \
-    test "$(git -C "$F" log -1 --format=%P)" = "$hist_c"
-on 7 "$hist_c"; commit --author="old <old@example.invalid>" --date=2025-01-01T00:00:00Z -m "anything goes. Here"
-bypassed "новый коммит с автором и датой вершины до T0 (O1)" "anything goes. Here"
 
 # ── ПРОВЯЗКА В МЕХАНИЗМЫ: Makefile и ci.yml зовут пробу и проверку запроса ───
 echo "== кто зовёт пробу и проверку запроса"
