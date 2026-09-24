@@ -277,6 +277,11 @@ type GrantRecord struct {
 	// RequestedScopes / GrantedScopes — что просили и что дали. Хранятся
 	// ОБА: отказ в области — это разница между ними, и она обязана быть
 	// восстановима из записи, а не вычисляема заново.
+	//
+	// Каждая выданная область — `scope-token` (RFC 6749 §3.3): иной
+	// церемония на хранение не отдаёт, и запись из хранилища с такой областью —
+	// нарушение контракта порта (ErrPortContract): по ней обмен и оборот
+	// выдали бы область заново.
 	RequestedScopes []string
 	GrantedScopes   []string
 
@@ -384,7 +389,9 @@ type AuthorizationRequest struct {
 	// ResponseKinds — `response_type`, разобранный по пробелу.
 	ResponseKinds []ResponseKind
 
-	// Scopes — `scope`, разобранный по пробелу.
+	// Scopes — `scope`, разобранный по пробелу. Область вне грамматики
+	// `scope-token` (RFC 6749 §3.3) Authorize отвергает случаем
+	// CodeInvalidScope и возвращает намерение, годное для DenyAuthorization.
 	Scopes []string
 
 	// Audiences — `audience`.
@@ -432,6 +439,11 @@ type AuthorizationGrant struct {
 	// сузить запрос, но не расширить: область, не покрытая запрошенными по
 	// правилу Config.ScopeMatching, отвергается ЦЕРЕМОНИЕЙ
 	// (ErrCeremonyMisuse) до выпуска кода. Движок выданное не сверяет.
+	//
+	// Каждая область — `scope-token` (RFC 6749 §3.3,
+	// `1*( %x21 / %x23-5B / %x5D-7E )`); иная отвергается так же — до выпуска
+	// кода и раньше сверки с запросом: образец `tenant.*` покрыл бы и
+	// `tenant.a b`, а клиент прочёл бы её двумя областями.
 	GrantedScopes []string
 
 	// GrantedAudiences — получатели, которых служба решила выдать. Тоже не

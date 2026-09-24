@@ -621,6 +621,9 @@ func (c *Ceremony) Authorize(ctx context.Context, req AuthorizationRequest) (Aut
 	if err := requireProofKey(requester); err != nil {
 		return intent, err
 	}
+	if err := requireScopeTokens(requester); err != nil {
+		return intent, err
+	}
 	return intent, nil
 }
 
@@ -663,6 +666,11 @@ func (c *Ceremony) CompleteAuthorization(ctx context.Context, intent Authorizati
 		return AuthorizationResult{}, err
 	}
 	if err := requireProofKey(intent.requester); err != nil {
+		return AuthorizationResult{}, err
+	}
+	// Намерение, чей отказ служба не доставила, кода не получает: запись кода
+	// несла бы запрошенную область вне грамматики.
+	if err := requireScopeTokens(intent.requester); err != nil {
 		return AuthorizationResult{}, err
 	}
 	if strings.TrimSpace(grant.Subject) == "" {
@@ -782,10 +790,19 @@ func (c *Ceremony) DenyAuthorization(ctx context.Context, intent AuthorizationIn
 // Область сверяется по правилу Config.ScopeMatching (запрошенное `tenant.*`
 // при правиле с образцом покрывает `tenant.read`); получатель — точным
 // совпадением с запрошенным: у получателя правила с образцом нет.
+//
+// Прежде покрытия область судится по форме: выданная область — `scope-token`
+// (scopeTokenDefect). Образец покрывает и `tenant.a b`, и клиент прочёл бы
+// такую область двумя.
 func (c *Ceremony) checkGrantWithinRequest(intent AuthorizationIntent, grant AuthorizationGrant) error {
 	requested := intent.RequestedScopes()
 	covers := scopeStrategyOf(c.cfg.ScopeMatching)
 	for _, scope := range grant.GrantedScopes {
+		if defect := scopeTokenDefect(scope); defect != "" {
+			return misuse("AuthorizationGrant.GrantedScopes carries " + strconv.Quote(scope) +
+				", which is not a scope-token (RFC 6749 §3.3): " + defect +
+				"; a scope is issued as granted, and the client would read it otherwise")
+		}
 		if !covers(requested, scope) {
 			return misuse("AuthorizationGrant.GrantedScopes carries " + strconv.Quote(scope) +
 				", which the authorization request did not ask for; a grant may narrow the request, never widen it")
