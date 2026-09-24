@@ -32,8 +32,10 @@
 # перечню, а не по прогону gofmt. У go test и линтера охват сверяется у близнеца
 # числами их СОБСТВЕННОГО прогона (пакеты и пробы — из потока JSON прогонщика,
 # пакеты линтера — из журнала подставного), и дефект у каждого один, во
-# вложенном пакете. Подставной линтер исполняет ту часть контракта настоящего,
-# от которой зависит вердикт, — какой конфиг прочитан, где кэш, какие пакеты
+# вложенном пакете. -count=1 судится журналом исполнений: проба фикстуры пишет
+# строку в файл мимо учёта входов go test, и прогон, взятый из кеша, строки не
+# добавляет. Подставной линтер исполняет ту часть контракта настоящего, от
+# которой зависит вердикт, — какой конфиг прочитан, где кэш, какие пакеты
 # осмотрены — и пишет её в журнал; проба сверяет журнал с деревом фикстуры и с
 # ci.yml. «Тот же, что в ci.yml» — пин линтера и конфиг — берётся из
 # исполняемых строк `run:` ci.yml, а не выписывается здесь второй раз.
@@ -312,7 +314,33 @@ printf 'package probe\n\nimport "testing"\n%s\n%s\n' "$probe_test_one" "$probe_t
 # пакет без проб законен, пока пробы исполнены где-то ещё.
 mkdir -p "$B/inner/deep"
 printf 'package inner\n\n// Inner — вложенный пакет фикстуры.\nfunc Inner() {}\n' > "$B/inner/inner.go"
-printf 'package inner\n\nimport "testing"\n\nfunc TestInner(t *testing.T) { Inner() }\n' > "$B/inner/inner_test.go"
+# TestInner ведёт журнал исполнений (PROBE_RUN_LOG): пишет через syscall, а не
+# через os, — учёт входов go test (testlog) такой записи не видит, и прогон,
+# взятый из кеша, строки не добавит. Без переменной журнал не ведётся.
+cat > "$B/inner/inner_test.go" <<'GO'
+package inner
+
+import (
+	"syscall"
+	"testing"
+)
+
+func TestInner(t *testing.T) {
+	Inner()
+	p, ok := syscall.Getenv("PROBE_RUN_LOG")
+	if !ok {
+		return
+	}
+	fd, err := syscall.Open(p, syscall.O_WRONLY|syscall.O_APPEND|syscall.O_CREAT, 0o644)
+	if err != nil {
+		t.Fatalf("журнал исполнений: %v", err)
+	}
+	defer func() { _ = syscall.Close(fd) }()
+	if _, err := syscall.Write(fd, []byte("TestInner\n")); err != nil {
+		t.Fatalf("журнал исполнений: %v", err)
+	}
+}
+GO
 deep_go='package deep
 
 // Deep — пакет без проб, второй уровень вложенности.
@@ -582,6 +610,30 @@ fact "инъекция «без -short» изменила копию хука" n
 runin "$(line 21 "$h0")" hk_as "$work/pre-push.noshort"
 expect "дефект: хук гонит пробы без -short — длинная проба исполнилась, отказ с её именем" 1 \
     "красные — go test -short" "TestLongIsSkippedUnderShort"
+
+# go test -count=1: без него второй прогон того же дерева go test берёт из
+# кеша, и вердикт становится функцией того, КОГДА его считали. Судится журналом
+# исполнений TestInner: два прогона хука на одной ревизии — две строки.
+# Контроль — копия хука без -count=1 (та же инъекция одного флага, что выше):
+# строк меньше двух. Без контроля журнал, дающий две строки при любом хуке,
+# держал бы -count=1 только на словах.
+# runs_twice <команда…> — два прогона с журналом исполнений; строк — в $nruns, коды — в $rcs.
+runs_twice() {
+    : > "$work/runs.log"
+    rcs=""
+    runin "$(line 21 "$h0")" with PROBE_RUN_LOG="$work/runs.log" "$@"; rcs="$rcs $rc"
+    runin "$(line 21 "$h0")" with PROBE_RUN_LOG="$work/runs.log" "$@"; rcs="$rcs $rc"
+    nruns="$(grep -c . "$work/runs.log")"
+}
+runs_twice hk
+if [ "$rcs" = " 0 0" ] && [ "$nruns" -eq 2 ]; then ok "-count=1: два прогона хука — TestInner исполнена дважды (коды$rcs)"
+elif [ "$nruns" -lt 2 ]; then bad "-count=1: два прогона хука (коды$rcs), а TestInner исполнена $nruns раз из 2 — вердикт взят из кеша"
+else bad "-count=1: два прогона хука (коды$rcs), TestInner исполнена $nruns раз из 2"; fi
+sed -E '/^[[:space:]]*go test /s/ -count=1( |$)/ /' "$HOOK" > "$work/pre-push.nocount"
+fact "инъекция «без -count=1» изменила копию хука" not_same "$HOOK" "$work/pre-push.nocount"
+runs_twice hk_as "$work/pre-push.nocount"
+if [ "$nruns" -lt 2 ]; then ok "контроль: хук без -count=1 — TestInner исполнена $nruns раз из 2, прогон взят из кеша"
+else bad "контроль: хук без -count=1, а TestInner исполнена $nruns раз из 2 — журнал не отличает кешированный прогон от свежего"; fi
 
 git -C "$B" rm -q .github/scripts/go-test-verdict.py && git -C "$B" commit -qm no-verdict
 runin "$(line 21 "$(git -C "$B" rev-parse HEAD)")" hk
