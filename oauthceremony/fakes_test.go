@@ -19,6 +19,7 @@ import (
 	"crypto/subtle"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"reflect"
 	"slices"
 	"sync"
@@ -101,14 +102,15 @@ type memoryPorts struct {
 }
 
 // verifierCall — один вызов порта сверки секрета так, как его увидела служба:
-// о ком спросили, что предъявлено и какой срок пришёл с контекстом вызова.
-// limited — у контекста был срок; remaining — сколько от него оставалось в миг
-// вызова.
+// о ком спросили, что предъявлено, какой срок пришёл с контекстом вызова и что
+// порт ответил. limited — у контекста был срок; remaining — сколько от него
+// оставалось в миг вызова; verdict — вердикт, который порт отдал церемонии.
 type verifierCall struct {
 	clientID  string
 	presented string
 	limited   bool
 	remaining time.Duration
+	verdict   oauthceremony.SecretVerdict
 }
 
 // decoySecret — приманка подставки: против неё сверяется секрет клиента,
@@ -447,14 +449,19 @@ func (m *memoryPorts) codeExpiresAt(t *testing.T, signature string) time.Time {
 // прошедшего времени. Истечение кода поэтому наблюдается без паузы на часах, и
 // исход пробы не зависит от того, сколько процессора досталось её шагам.
 //
-// Сдвигаются ВСЕ мгновения записи гранта (agedGrantInstants), а не один срок:
-// запись со сдвинутым сроком и прежним мигом выдачи — не прошедшее время, а
-// другая запись, и проверка, судящая срок от мига выдачи, её не узнала бы.
-// Записи нет, или у записи гранта появилось мгновение, которого подставка не
-// старит, — проба не создала своего условия.
+// Сдвигаются ВСЕ мгновения записи гранта, а не один срок: запись со сдвинутым
+// сроком и прежним мигом выдачи — не прошедшее время, а другая запись, и
+// проверка, судящая срок от мига выдачи, её не узнала бы. Перечня полей у
+// подставки нет: мгновения находит обход самой записи (agedCopy), и поле,
+// которое запись получит завтра, состарится вместе с прочими. Перечень,
+// выписанный рукой, однажды уже не узнал поля, пришедшего в запись позже него.
+//
+// Состаренность судится исходом, а не устройством сдвига: мгновения записи
+// снимаются до и после (instantsOf) и сверяются поштучно. Записи нет, мига
+// выдачи нет, форма записи сдвигу не поддаётся, или хоть одно мгновение не
+// сдвинулось ровно на by, — проба не создала своего условия.
 func (m *memoryPorts) ageCodeRecord(t *testing.T, signature string, by time.Duration) {
 	t.Helper()
-	requireGrantInstantsAged(t)
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -465,64 +472,206 @@ func (m *memoryPorts) ageCodeRecord(t *testing.T, signature string, by time.Dura
 	if row.grant.IssuedAt.IsZero() {
 		t.Fatalf("НЕ ВЫПОЛНИЛОСЬ: у записи кода под подписью %s нет мига выдачи — сдвигать не от чего", signature)
 	}
-	row.grant.IssuedAt = row.grant.IssuedAt.Add(-by)
-	row.grant.Session.ExpiresAt = shiftedInstants(row.grant.Session.ExpiresAt, -by)
-	row.grant.Session.NotAfter = shiftedInstants(row.grant.Session.NotAfter, -by)
+	aged, err := agedCopy(row.grant, -by)
+	if err != nil {
+		t.Fatalf("НЕ ВЫПОЛНИЛОСЬ: запись кода под подписью %s не состарить: %v", signature, err)
+	}
+	off, err := instantsNotShifted(row.grant, aged, -by)
+	switch {
+	case err != nil:
+		t.Fatalf("НЕ ВЫПОЛНИЛОСЬ: мгновения записи кода под подписью %s не снять: %v", signature, err)
+	case len(off) > 0:
+		t.Fatalf("НЕ ВЫПОЛНИЛОСЬ: мгновения %v записи кода не сдвинуты на %s: состаренная запись не была бы "+
+			"прошедшим временем", off, -by)
+	}
+	row.grant = aged
 }
 
-// shiftedInstants — копия карты мгновений, сдвинутых на by. Копия, а не
-// правка на месте: карта записи могла прийти из сеанса движка, и правка на
-// месте тронула бы его.
-func shiftedInstants(instants map[oauthceremony.TokenKind]time.Time, by time.Duration) map[oauthceremony.TokenKind]time.Time {
-	if instants == nil {
+// agedCopy — копия value, в которой каждое ненулевое мгновение (time.Time где
+// угодно по составу значения: само, под указателем и под `any`, в срезе, в
+// массиве, в значении карты, во вложенной структуре) сдвинуто на by.
+//
+// Копия, а не правка на месте: карты и срезы записи могли прийти из сеанса
+// движка, и правка на месте тронула бы его. Нулевое мгновение — «значения
+// нет», а не момент, и остаётся нулевым: состаренное отсутствие стало бы
+// значением. Две формы сдвигу не поддаются, и обе — отказ, а не пропуск:
+// неэкспортированное поле, чей тип несёт мгновение (его не записать), и ключ
+// карты, чей тип несёт мгновение (сдвиг ключа менял бы саму карту).
+func agedCopy[T any](value T, by time.Duration) (T, error) {
+	aged, err := agedValue(reflect.ValueOf(&value).Elem(), by, reflect.TypeFor[T]().Name())
+	if err != nil {
+		var zero T
+		return zero, err
+	}
+	return aged.Interface().(T), nil
+}
+
+func agedValue(v reflect.Value, by time.Duration, path string) (reflect.Value, error) {
+	if v.Type() == timeType {
+		at := v.Interface().(time.Time)
+		if at.IsZero() {
+			return v, nil
+		}
+		return reflect.ValueOf(at.Add(by)), nil
+	}
+	out := reflect.New(v.Type()).Elem()
+	switch v.Kind() {
+	case reflect.Pointer:
+		if v.IsNil() {
+			return v, nil
+		}
+		elem, err := agedValue(v.Elem(), by, path)
+		if err != nil {
+			return reflect.Value{}, err
+		}
+		out.Set(reflect.New(v.Type().Elem()))
+		out.Elem().Set(elem)
+	case reflect.Interface:
+		if v.IsNil() {
+			return v, nil
+		}
+		elem, err := agedValue(v.Elem(), by, path)
+		if err != nil {
+			return reflect.Value{}, err
+		}
+		out.Set(elem)
+	case reflect.Slice, reflect.Array:
+		if v.Kind() == reflect.Slice {
+			if v.IsNil() {
+				return v, nil
+			}
+			out = reflect.MakeSlice(v.Type(), v.Len(), v.Len())
+		}
+		for i := range v.Len() {
+			elem, err := agedValue(v.Index(i), by, fmt.Sprintf("%s[%d]", path, i))
+			if err != nil {
+				return reflect.Value{}, err
+			}
+			out.Index(i).Set(elem)
+		}
+	case reflect.Map:
+		if v.IsNil() {
+			return v, nil
+		}
+		if carriesInstant(v.Type().Key(), map[reflect.Type]bool{}) {
+			return reflect.Value{}, fmt.Errorf("ключ карты %s (%s) несёт мгновение: сдвиг ключа менял бы саму карту",
+				path, v.Type().Key())
+		}
+		out = reflect.MakeMapWithSize(v.Type(), v.Len())
+		for iter := v.MapRange(); iter.Next(); {
+			elem, err := agedValue(iter.Value(), by, fmt.Sprintf("%s[%v]", path, iter.Key()))
+			if err != nil {
+				return reflect.Value{}, err
+			}
+			out.SetMapIndex(iter.Key(), elem)
+		}
+	case reflect.Struct:
+		out.Set(v)
+		for i := range v.NumField() {
+			field := v.Type().Field(i)
+			fieldPath := path + "." + field.Name
+			if !field.IsExported() {
+				if carriesInstant(field.Type, map[reflect.Type]bool{}) {
+					return reflect.Value{}, fmt.Errorf("поле %s не экспортировано, а его тип несёт мгновение: "+
+						"записать сдвинутое нечем", fieldPath)
+				}
+				continue
+			}
+			elem, err := agedValue(v.Field(i), by, fieldPath)
+			if err != nil {
+				return reflect.Value{}, err
+			}
+			out.Field(i).Set(elem)
+		}
+	default:
+		return v, nil
+	}
+	return out, nil
+}
+
+// instantsOf снимает все ненулевые мгновения значения v по путям — поле через
+// точку, элемент среза и массива в [i], значение карты в [ключ] — в into.
+// Обход по составу тот же, что у agedValue, но код другой: сверка сдвига не
+// судит сдвиг им же самим. Отказ — те же формы, что не поддаются agedValue.
+func instantsOf(v reflect.Value, path string, into map[string]time.Time) error {
+	if v.Type() == timeType {
+		if at := v.Interface().(time.Time); !at.IsZero() {
+			into[path] = at
+		}
 		return nil
 	}
-	shifted := make(map[oauthceremony.TokenKind]time.Time, len(instants))
-	for kind, at := range instants {
-		shifted[kind] = at.Add(by)
-	}
-	return shifted
-}
-
-// agedGrantInstants — поля GrantRecord, несущие мгновения, которые старит
-// ageCodeRecord, в порядке объявления.
-var agedGrantInstants = []string{"IssuedAt", "Session.ExpiresAt", "Session.NotAfter"}
-
-// requireGrantInstantsAged — предпосылка ageCodeRecord: ageCodeRecord старит
-// ровно те поля, что несут мгновения. Перечень берётся обходом типа
-// GrantRecord, а не по памяти: поле, в чьём типе где угодно есть time.Time —
-// само, под указателем, в срезе, в ключе или значении карты, во вложенной
-// структуре, — несёт мгновение. Значения под `any` (Claims) статически не
-// видны; сроков по ним церемония не судит.
-func requireGrantInstantsAged(t *testing.T) {
-	t.Helper()
-	if carried := grantInstantFields(); !slices.Equal(carried, agedGrantInstants) {
-		t.Fatalf("НЕ ВЫПОЛНИЛОСЬ: мгновения GrantRecord — %v, ageCodeRecord старит %v: состаренная запись "+
-			"не была бы прошедшим временем", carried, agedGrantInstants)
-	}
-}
-
-func grantInstantFields() []string {
-	var carried []string
-	var walk func(typ reflect.Type, prefix string)
-	walk = func(typ reflect.Type, prefix string) {
-		for field := range typ.Fields() {
-			path := prefix + field.Name
-			switch {
-			case field.Type.Kind() == reflect.Struct && field.Type != timeType:
-				walk(field.Type, path+".")
+	switch v.Kind() {
+	case reflect.Pointer, reflect.Interface:
+		if !v.IsNil() {
+			return instantsOf(v.Elem(), path, into)
+		}
+	case reflect.Slice, reflect.Array:
+		for i := range v.Len() {
+			if err := instantsOf(v.Index(i), fmt.Sprintf("%s[%d]", path, i), into); err != nil {
+				return err
+			}
+		}
+	case reflect.Map:
+		if carriesInstant(v.Type().Key(), map[reflect.Type]bool{}) {
+			return fmt.Errorf("ключ карты %s (%s) несёт мгновение", path, v.Type().Key())
+		}
+		for iter := v.MapRange(); iter.Next(); {
+			if err := instantsOf(iter.Value(), fmt.Sprintf("%s[%v]", path, iter.Key()), into); err != nil {
+				return err
+			}
+		}
+	case reflect.Struct:
+		for i := range v.NumField() {
+			switch field := v.Type().Field(i); {
+			case field.IsExported():
+				if err := instantsOf(v.Field(i), path+"."+field.Name, into); err != nil {
+					return err
+				}
 			case carriesInstant(field.Type, map[reflect.Type]bool{}):
-				carried = append(carried, path)
+				return fmt.Errorf("поле %s.%s не экспортировано, а его тип несёт мгновение", path, field.Name)
 			}
 		}
 	}
-	walk(reflect.TypeFor[oauthceremony.GrantRecord](), "")
-	return carried
+	return nil
+}
+
+// instantsNotShifted сверяет before и after поштучно по мгновениям и называет
+// пути, где мгновение не сдвинуто ровно на by: у after его нет, оно иное, или
+// у after есть мгновение, которого не было у before. Пусто — сдвинуто всё.
+// Сверка, не нашедшая у before ни одного мгновения, — не «сдвинуто всё», а
+// «сверять нечего», и это отказ.
+func instantsNotShifted[T any](before, after T, by time.Duration) ([]string, error) {
+	name := reflect.TypeFor[T]().Name()
+	was, now := map[string]time.Time{}, map[string]time.Time{}
+	if err := instantsOf(reflect.ValueOf(before), name, was); err != nil {
+		return nil, err
+	}
+	if err := instantsOf(reflect.ValueOf(after), name, now); err != nil {
+		return nil, err
+	}
+	if len(was) == 0 {
+		return nil, fmt.Errorf("у %s нет ни одного мгновения — сверять нечего", name)
+	}
+	var off []string
+	for path, at := range was {
+		if got, found := now[path]; !found || !got.Equal(at.Add(by)) {
+			off = append(off, path)
+		}
+	}
+	for path := range now {
+		if _, found := was[path]; !found {
+			off = append(off, path)
+		}
+	}
+	slices.Sort(off)
+	return off, nil
 }
 
 var timeType = reflect.TypeFor[time.Time]()
 
 // carriesInstant — есть ли в типе typ time.Time где угодно по его составу.
+// Значения под `any` статически не видны; их мгновения agedValue и instantsOf
+// находят по самому значению.
 func carriesInstant(typ reflect.Type, seen map[reflect.Type]bool) bool {
 	if typ == timeType {
 		return true
@@ -622,7 +771,15 @@ func (m *memoryPorts) VerifyClientSecret(ctx context.Context, clientID string, p
 	if deadline, limited := ctx.Deadline(); limited {
 		call.limited, call.remaining = true, time.Until(deadline)
 	}
+	verdict, err := m.secretVerdict(clientID, presented)
+	call.verdict = verdict
 	m.verifications = append(m.verifications, call)
+	return verdict, err
+}
+
+// secretVerdict — вердикт сверки: подменённый пробой либо по проверочному
+// значению. Зовётся под замком m.mu.
+func (m *memoryPorts) secretVerdict(clientID string, presented oauthceremony.PresentedSecret) (oauthceremony.SecretVerdict, error) {
 	if m.verifyOverride != nil {
 		return m.verifyOverride(clientID)
 	}

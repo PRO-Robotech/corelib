@@ -178,13 +178,15 @@ func TestReplayWithABrokenSessionRecordIsStillAReplay(t *testing.T) {
 // повтором: ответ — «код погашен», семейство отзывается по гранту,
 // замеченному до сборки. Тот же случай на пути токена обновления держит
 // TestReplayOfATokenWhoseClientIsGoneStillRevokesTheFamily.
+//
+// Предъявитель — клиент, прошедший сверку секрета (requireAuthenticatedBy):
+// код видит только движок, опознавший клиента, и отказ сверки был бы ответом
+// на другой вопрос.
 func TestCodeReplayOfAClientThatIsGoneStillRevokesTheFamily(t *testing.T) {
 	store := newMemoryPorts()
 	registerTestClient(t, store)
 	const otherClientID = "svc-other"
-	other := store.clients[testClientID]
-	other.ClientID = otherClientID
-	store.clients[otherClientID] = other
+	registerClientLike(t, store, otherClientID)
 	ceremony := newTestCeremony(t, store.ports())
 
 	code, _ := issueCode(t, ceremony)
@@ -200,7 +202,9 @@ func TestCodeReplayOfAClientThatIsGoneStillRevokesTheFamily(t *testing.T) {
 
 	replay := codeExchange(code)
 	replay.ClientID = otherClientID
+	verified := len(store.verificationLog())
 	_, err = ceremony.Exchange(context.Background(), replay)
+	requireAuthenticatedBy(t, store.verificationLog()[verified:], otherClientID)
 	requireCodeReplayRefusal(t, err)
 	requireFamilyRevokedFor(t, store, grantID, oauthceremony.RevocationCodeReplay)
 }

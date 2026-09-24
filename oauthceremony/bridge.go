@@ -458,11 +458,6 @@ func (b *storageBridge) GetAuthorizeCodeSession(ctx context.Context, code string
 func (b *storageBridge) replayedCode(ctx context.Context, op string, rec AuthorizationCodeRecord, session engine.Session) (engine.Requester, error) {
 	ours := codeReplayed(op)
 	notesFrom(ctx).markReplayedFamily(rec.Grant.GrantID, rec.Grant.ClientID, ours, RevocationCodeReplay)
-	// Как у токена обновления: повтор записывается ДО сборки запроса. Если
-	// сборка откажет — клиента сняли либо справочник не ответил, — движок
-	// получит отказ сборки, а церемония ответит повтором, а не его следствием, и
-	// отзовёт семейство по записанному гранту.
-	notesFrom(ctx).record(ours)
 	requester, buildErr := requesterFromGrant(ctx, b.grantClient, rec.Grant, session)
 	if buildErr != nil {
 		return nil, buildErr
@@ -627,11 +622,6 @@ func (b *storageBridge) GetRefreshTokenSession(ctx context.Context, signature st
 		}
 		ours = refreshReplayed(op)
 		notesFrom(ctx).markReplayedFamily(rec.GrantID, rec.ClientID, ours, RevocationRefreshReplay)
-		// Случай повтора записывается ДО сборки запроса: если собрать его не
-		// удастся — клиента сняли либо справочник не ответил, — движок получит
-		// отказ сборки, а церемония ответит повтором, а не его следствием, и
-		// отзовёт семейство по записанному гранту.
-		notesFrom(ctx).record(ours)
 		requester, buildErr := requesterFromGrant(ctx, b.grantClient, rec, session)
 		if buildErr != nil {
 			return nil, buildErr
