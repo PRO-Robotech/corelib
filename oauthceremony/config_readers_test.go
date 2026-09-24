@@ -17,8 +17,9 @@
 //     типа Config или *Config — по объекту, к которому разбор привязал имя, так
 //     что затенённое имя параметром не считается;
 //   - поле структуры пакета типа Config или *Config (`c.cfg`) — если имя такого
-//     поля не объявлено ни в одной структуре пакета другим типом; иначе обход
-//     отказывает судить.
+//     поля не экспортировано и не объявлено ни в одной структуре пакета другим
+//     типом; иначе обход отказывает судить: выборку через него не отличить от
+//     чтения поля чужого типа с тем же именем.
 //
 // Чтение в иной форме — через локальную копию (`local := c.cfg`), через
 // результат вызова — разбор не видит, и поле с таким единственным читателем
@@ -28,10 +29,10 @@
 // # Предпосылки, без которых зелёный не вердикт
 //
 // validateConfig объявлена ровно одна, свободной функцией, с параметром типа
-// Config, и этот параметр она употребляет ТОЛЬКО выборкой поля: переданное
-// дальше целиком значение прочитал бы кто-то, кого разбор судил бы как читателя,
-// хотя он часть проверки. Поля Config по разбору совпадают с полями собранного
-// типа — иначе прочитан не тот пакет.
+// Config (или *Config), и этот параметр она употребляет ТОЛЬКО выборкой поля:
+// переданное дальше целиком значение прочитал бы кто-то, кого разбор судил бы
+// как читателя, хотя он часть проверки. Поля Config по разбору совпадают с
+// полями собранного типа — иначе прочитан не тот пакет.
 package oauthceremony_test
 
 import (
@@ -151,9 +152,9 @@ func scanConfigReaders(dir, typeName, validator string) configReaderCensus {
 		return census
 	}
 	for name := range carriers {
-		if otherTyped[name] {
-			census.refusal = fmt.Sprintf("поле-носитель %q объявлено и другим типом — "+
-				"выборку через него не отличить от чтения чужого поля", name)
+		if ast.IsExported(name) || otherTyped[name] {
+			census.refusal = fmt.Sprintf("поле-носитель %q экспортировано либо объявлено и другим "+
+				"типом — выборку через него не отличить от чтения чужого поля", name)
 			return census
 		}
 	}
@@ -357,13 +358,16 @@ func TestConfigFieldJudgedButNotReadIsFoundAndItsTwinIsSilent(t *testing.T) {
 	}
 }
 
-// TestConfigReaderInAFormTheScanDoesNotKnowIsRedNotSilent — чтение через
-// локальную копию и затенённое имя разбор читателем не признаёт: поле остаётся
+// TestConfigReaderInAFormTheScanDoesNotKnowIsRedNotSilent — читателем разбор не
+// признаёт ни чтения в форме вне двух названных (локальная копия, результат
+// вызова), ни выборки поля с тем же именем у затенившего параметр значения
+// другого типа — это не чтение настроек вовсе. В обоих случаях поле остаётся
 // находкой, а не проходит молча.
 func TestConfigReaderInAFormTheScanDoesNotKnowIsRedNotSilent(t *testing.T) {
 	forms := map[string]string{
-		"локальная копия": "\nfunc (c *Ceremony) spend() int { local := c.cfg; return local.Orphan }\n",
-		"затенённое имя":  "\ntype other struct{ Orphan int }\n\nfunc spend(cfg Config) int { { cfg := other{}; return cfg.Orphan } }\n",
+		"локальная копия":  "\nfunc (c *Ceremony) spend() int { local := c.cfg; return local.Orphan }\n",
+		"результат вызова": "\nfunc (c *Ceremony) conf() Config { return c.cfg }\n\nfunc (c *Ceremony) spend() int { return c.conf().Orphan }\n",
+		"затенённое имя":   "\ntype other struct{ Orphan int }\n\nfunc spend(cfg Config) int { { cfg := other{}; return cfg.Orphan } }\n",
 	}
 	for name, reader := range forms {
 		t.Run(name, func(t *testing.T) {
@@ -395,7 +399,11 @@ func TestConfigReaderScanRefusesWithoutItsPremises(t *testing.T) {
 		},
 		"имя поля-носителя занято другим типом": {
 			src:  syntheticConfigBase + "\ntype strategy struct{ cfg int }\n",
-			want: "объявлено и другим типом",
+			want: "объявлено и другим",
+		},
+		"имя поля-носителя экспортировано": {
+			src:  syntheticConfigBase + "\ntype holder struct{ Settings Config }\n",
+			want: "экспортировано",
 		},
 		"типа настроек нет": {
 			src:  strings.Replace(syntheticConfigBase, "type Config struct", "type Settings struct", 1),
