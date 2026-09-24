@@ -108,6 +108,26 @@ const (
 	ClientAuthPost ClientAuthMethod = "client_secret_post"
 )
 
+// ClientAuthMethods возвращает словарь способов целиком — тому, кто строит
+// метаданные сервера обнаружения (`token_endpoint_auth_methods_supported`,
+// RFC 8414 §2) или проверяет запись клиента. Точка токена и отзыв принимают
+// каждый способ словаря; интроспекция — только те, что называет
+// IntrospectionAuthMethods.
+func ClientAuthMethods() []ClientAuthMethod {
+	return []ClientAuthMethod{ClientAuthNone, ClientAuthBasic, ClientAuthPost}
+}
+
+// IntrospectionAuthMethods — способы, которыми спрашивающий доказывает себя
+// точке интроспекции (`introspection_endpoint_auth_methods_supported`,
+// RFC 8414 §2). Перечень уже словаря ClientAuthMethods: движок на этой точке
+// берёт доказательство только заголовком Authorization (RFC 7662 §2.1), и
+// ни секрета в теле запроса, ни запроса без доказательства не принимает.
+// Способ вне перечня Introspect отвергает по имени до движка
+// (ErrCeremonyMisuse).
+func IntrospectionAuthMethods() []ClientAuthMethod {
+	return []ClientAuthMethod{ClientAuthBasic}
+}
+
 // ScopeMatching — правило сопоставления запрошенной области с разрешённой.
 type ScopeMatching uint8
 
@@ -556,6 +576,15 @@ type IntrospectionRequest struct {
 
 	// ClientID / ClientSecret / AuthMethod — чем доказывает себя тот, кто
 	// спрашивает. Интроспекция без доказательства запрещена RFC 7662 §2.1.
+	//
+	// AuthMethod принимает ОДИН способ — ClientAuthBasic
+	// (IntrospectionAuthMethods): движок на этой точке берёт доказательство
+	// только заголовком Authorization. Пустое значение разрешается так же, как
+	// в TokenRequest: при непустом секрете — ClientAuthBasic, при пустом —
+	// ClientAuthNone. ClientAuthPost и ClientAuthNone, названные явно или
+	// полученные разрешением пустого, Introspect отвергает по имени до
+	// обращения к движку (ErrCeremonyMisuse): иначе они уезжали бы в движок и
+	// получали его отказ «заголовка Authorization нет», не называющий способа.
 	ClientID     string
 	ClientSecret string
 	AuthMethod   ClientAuthMethod

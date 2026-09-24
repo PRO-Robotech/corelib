@@ -960,6 +960,9 @@ func (c *Ceremony) Introspect(ctx context.Context, req IntrospectionRequest) (In
 	if strings.TrimSpace(req.Token) == "" {
 		return IntrospectionResult{}, misuse("IntrospectionRequest.Token is empty")
 	}
+	if err := requireIntrospectionMethod(req.AuthMethod, req.ClientSecret); err != nil {
+		return IntrospectionResult{}, err
+	}
 
 	form := url.Values{}
 	form.Set("token", req.Token)
@@ -989,6 +992,54 @@ func (c *Ceremony) Introspect(ctx context.Context, req IntrospectionRequest) (In
 		return IntrospectionResult{}, ours
 	}
 	return introspectionResultOf(responder), nil
+}
+
+// requireIntrospectionMethod отвергает по имени способ доказательства, которого
+// точка интроспекции не принимает (IntrospectionAuthMethods).
+//
+// # Почему до движка
+//
+// Движок на точке интроспекции берёт доказательство спрашивающего только
+// заголовком Authorization. Секрет телом и запрос без доказательства он
+// отвергает на разборе заголовка — «заголовка Authorization нет», — не называя
+// способа и раньше, чем спросит справочник. Такой отказ служба прочла бы как
+// недоказанного клиента, хотя недоказан не клиент, а выбор способа. Отказ
+// здесь называет поле и способ; способ судится после разрешения пустого
+// значения (resolveAuthMethod), и отказ называет, во что пустое разрешилось.
+//
+// Точка токена и отзыв сюда не ходят: там движок принимает каждый способ
+// словаря.
+func requireIntrospectionMethod(method ClientAuthMethod, clientSecret string) error {
+	resolved := resolveAuthMethod(method, clientSecret)
+	if slices.Contains(IntrospectionAuthMethods(), resolved) {
+		return nil
+	}
+	named := "IntrospectionRequest.AuthMethod " + strconv.Quote(string(resolved))
+	if method == "" {
+		named = "IntrospectionRequest.AuthMethod is empty and resolves to " + strconv.Quote(string(resolved)) +
+			" (no client secret); that method"
+	}
+	accepted := make([]string, 0, len(IntrospectionAuthMethods()))
+	for _, m := range IntrospectionAuthMethods() {
+		accepted = append(accepted, strconv.Quote(string(m)))
+	}
+	return misuse(named + " is not accepted at the introspection endpoint, which takes the proof of the " +
+		"introspecting party from the Authorization header only (RFC 7662 §2.1); accepted: " +
+		strings.Join(accepted, ", "))
+}
+
+// resolveAuthMethod разрешает пустой способ доказательства: ClientAuthNone при
+// пустом секрете, ClientAuthBasic при непустом. Названный способ — он сам.
+// Одно разрешение на все операции: иначе один и тот же запрос интроспекция и
+// точка токена читали бы разными способами.
+func resolveAuthMethod(method ClientAuthMethod, clientSecret string) ClientAuthMethod {
+	if method != "" {
+		return method
+	}
+	if clientSecret == "" {
+		return ClientAuthNone
+	}
+	return ClientAuthBasic
 }
 
 // ── Отзыв ───────────────────────────────────────────────────────────────────
@@ -1062,14 +1113,7 @@ func (c *Ceremony) Revoke(ctx context.Context, req RevocationRequest) error {
 func (c *Ceremony) postForm(ctx context.Context, form url.Values, clientID, clientSecret string, method ClientAuthMethod) (*http.Request, error) {
 	notesFrom(ctx).expectClientProof()
 
-	if method == "" {
-		if clientSecret == "" {
-			method = ClientAuthNone
-		} else {
-			method = ClientAuthBasic
-		}
-	}
-
+	method = resolveAuthMethod(method, clientSecret)
 	switch method {
 	case ClientAuthNone:
 		if clientSecret != "" {

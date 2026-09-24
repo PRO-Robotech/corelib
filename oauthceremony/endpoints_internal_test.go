@@ -181,10 +181,14 @@ func driveEverySynthesizedRequest(t *testing.T, c *Ceremony) {
 	}); err == nil {
 		t.Fatal("НЕ ВЫПОЛНИЛОСЬ: Exchange прошёл мимо записывающего поставщика")
 	}
+	// Интроспекция принимает доказательство только заголовком
+	// (IntrospectionAuthMethods), и запрос иным способом до движка не доходит;
+	// порты не зовутся и здесь — записывающий поставщик отказывает раньше.
 	if _, err := c.Introspect(ctx, IntrospectionRequest{
-		Token:      "probe-token",
-		ClientID:   "probe-client",
-		AuthMethod: ClientAuthNone,
+		Token:        "probe-token",
+		ClientID:     "probe-client",
+		ClientSecret: "probe-secret",
+		AuthMethod:   ClientAuthBasic,
 	}); err == nil {
 		t.Fatal("НЕ ВЫПОЛНИЛОСЬ: Introspect прошёл мимо записывающего поставщика")
 	}
