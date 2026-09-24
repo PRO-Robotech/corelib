@@ -59,7 +59,10 @@
 ЦЕПОЧКА needs ТОЖЕ ВЫЧИСЛЯЕТСЯ. `success()` задания истинно, только если ВСЕ
 его вышестоящие по цепочке `needs:` исполнились успешно, а пропуск
 вышестоящего распространяется «на все задания цепочки от точки пропуска»
-(документация хостинга, jobs.<id>.needs). Отчётное задание на зелёном пути
+(документация хостинга, jobs.<id>.needs). Так хостинг и судит — измерено живым
+запуском (corelib#59, 2026-09-24, три запуска на запросе в ветку-номер): задание
+без `if:` под двумя `always()`-звеньями под отчётным пропущено, с `always()` —
+исполнено; самопроба несёт этот процесс миром X2. Отчётное задание на зелёном пути
 пропущено — и гасит на зелёном пути каждое задание ниже себя, чьё условие при
 пропуске вышестоящего ложно: без `if:`, `success()`, `true`,
 `success() || failure()`; ниже `always()`-звена — тоже. Гейт строит граф
@@ -70,20 +73,28 @@
 чьё собственное условие ложно на зелёном и истинно на провале (`failure()`),
 само отчётное и считается отчётным.
 
+ПОВТОР КЛЮЧА — ИСХОД 2, А НЕ ВЫБОР ЗНАЧЕНИЯ. Разборщик YAML при повторе ключа
+в одном отображении молча берёт последнее значение, и гейт судил бы одно из
+двух (#58: второй `needs` у задания давал зелёный). До разбора обходятся узлы
+документа, и повтор — в любом отображении, блочном и потоковом, в том числе
+`on` рядом с `"on"` и `on` рядом с `On` — называется ключом, путём и строками.
+Ключ слияния `<<` — так же: явный ключ молча перекрывает влитый. Хостинг все
+эти процессы отвергает целиком (замер corelib#58: повтор `needs`, имени
+задания, ключа шага, ключа потокового отображения, `on` и `"on"`, ключ `<<`);
+якорь и ссылку без `<<` принимает, и гейт их читает.
+
 ИСХОДОВ ТРИ: 0 — свойство держится у всех; 1 — нарушение, названо файлом и
 веткой, типом события или заданием; 2 — проверка не состоялась (нет
-разборщика YAML, пустой обход, незнакомая форма, предпосылка).
+разборщика YAML, пустой обход, незнакомая форма, повтор ключа, предпосылка).
 
 ЧЕГО ГЕЙТ НЕ ДОКАЗЫВАЕТ: что хостинг читает шаблон так же — это доказывает
 только живой запрос (`gh pr view <N> --json statusCheckRollup` на запросе в
 ветку-номер); разборщик сверен с примерами шпаргалки фильтров (самопроверка).
 Что отчётное условие стоит у отчёта, а не у проверки: различие не
 синтаксическое, и такие условия перепись называет числом. Условия внутри
-действий, которые зовёт шаг (`uses:`). Что `success()` задания хостинг судит
-по всей цепочке, а не по прямым вышестоящим: так читается документация,
-живым запуском не измерено. Прочтение выбрано строгое: при прямом прочтении
-гейт краснел бы на задании ниже `always()`-звена, которое хостинг исполнил
-бы, — а зелёного без исполнения не дал бы.
+действий, которые зовёт шаг (`uses:`). Что хостинг и дальше судит `success()`
+по всей цепочке: замер corelib#59 — свойство хостинга на дату замера, и
+перемена прочтения видна только новым живым запуском, а не самопробой.
 
 Запуск:
   python3 .github/scripts/pr-target-branches.py --self-test
@@ -549,6 +560,72 @@ def _other_conditions(doc, census):
             census["unjudged"] += isinstance(step, dict) and "if" in step
 
 
+def _duplicate_keys(rel, text, yaml):
+    """Повтор ключа в одном отображении — Unknown с ключом, путём и строками.
+
+    Разборщик при повторе молча берёт ПОСЛЕДНЕЕ значение, и гейт судил бы одно
+    из двух, не сказав об этом; хостинг такой процесс отвергает целиком (замер
+    corelib#58). Ключи сравниваются в двух прочтениях, и повтор в любом — исход 2:
+      - значением разборщика (YAML 1.1): `on` и `On` — оба True, и одно из двух
+        значений гейт потерял бы молча;
+      - записью скаляра (так читает хостинг): `on` и `"on"` — один ключ, а гейт,
+        предпочитающий строку `"on"`, судил бы не тот.
+    Ключ слияния `<<` — тот же исход: разборщик сливает отображения, и явный
+    ключ молча перекрывает влитый, а хостинг такой процесс отвергает (замер
+    corelib#58; якорь и ссылка без `<<` хостингом приняты). Обход — по узлам
+    разбора, то есть и потоковые `{a: 1, a: 2}`, и отображения внутри списков;
+    ссылка на якорь проходится один раз.
+    """
+    try:
+        root = yaml.compose(text, Loader=yaml.SafeLoader)
+    except yaml.YAMLError as e:
+        raise Unknown("%s: не разбирается как YAML: %s" % (rel, e)) from e
+    constructor = yaml.constructor.SafeConstructor()
+    walked = set()
+
+    def label(node):
+        return node.value if isinstance(node, yaml.ScalarNode) else "<%s>" % node.tag
+
+    def walk(node, path):
+        if node is None or id(node) in walked:
+            return
+        walked.add(id(node))
+        if isinstance(node, yaml.SequenceNode):
+            for i, item in enumerate(node.value, 1):
+                walk(item, "%s[%d]" % (path, i))
+            return
+        if not isinstance(node, yaml.MappingNode):
+            return
+        by_value, by_text = {}, {}
+        for key, value in node.value:
+            if key.tag == "tag:yaml.org,2002:merge":
+                raise Unknown(
+                    "%s: %s: ключ слияния «%s» (строка %d) — разборщик YAML сливает "
+                    "отображения и молча отдаёт перекрытое значение; хостинг такой "
+                    "процесс отвергает" % (rel, path or "корень", key.value,
+                                           key.start_mark.line + 1))
+            try:
+                ident = constructor.construct_object(key, deep=True)
+                hash(ident)
+            except (yaml.YAMLError, TypeError):
+                ident = None  # несравнимый ключ отвергнет сам разбор ниже
+            text_ident = key.value if isinstance(key, yaml.ScalarNode) else None
+            for table, k in ((by_value, ident), (by_text, text_ident)):
+                if k is None:
+                    continue
+                if k in table:
+                    raise Unknown(
+                        "%s: %s: ключ «%s» повторён (строки %d и %d) — разборщик YAML "
+                        "молча берёт последнее значение, и гейт судил бы одно из двух; "
+                        "хостинг такой процесс отвергает"
+                        % (rel, path or "корень", label(key),
+                           table[k].start_mark.line + 1, key.start_mark.line + 1))
+                table[k] = key
+            walk(value, "%s.%s" % (path, label(key)) if path else label(key))
+
+    walk(root, "")
+
+
 def audit(files, out):
     """files: {путь: текст} отслеживаемых процессов. Возвращает код исхода."""
     try:
@@ -565,6 +642,7 @@ def audit(files, out):
         if not files:
             raise Unknown("обход пуст: в индексе нет ни одного процесса .github/workflows/*.y(a)ml")
         for rel in sorted(files):
+            _duplicate_keys(rel, files[rel], yaml)
             try:
                 doc = yaml.safe_load(files[rel])
             except yaml.YAMLError as e:
@@ -890,6 +968,21 @@ def self_test():
         {F: chain + job("zz-report2", "build", "cancelled()")
             + job("zz-after", "[zz-report, zz-report2]")},
         must=("вышестоящие zz-report, zz-report2 на зелёном пути пропущены",))
+    # X2 — процесс живого замера corelib#59 задание в задание: хостинг на
+    # запросе в ветку-номер пропустил (skipped) after-report, last1 и last,
+    # исполнил mid1, mid2 и last-always (три запуска, исход один). Нарушения
+    # гейта обязаны совпасть с пропущенными хостингом заданиями без условия —
+    # ни больше, ни меньше; прочтение «только прямые вышестоящие» дало бы одно.
+    x2 = (GOOD + job("report", "build", "failure()") + job("after-report", "report")
+          + job("mid1", "report", "always()") + job("mid2", "mid1", "always()")
+          + job("last", "mid2") + job("last1", "mid1") + job("last-always", "mid2", "always()"))
+    run(1, "(+) X2 замера corelib#59: нарушения — ровно пропущенные хостингом",
+        {F: x2},
+        must=("задание after-report — на зелёном пути НЕ исполняется",
+              "задание last — на зелёном пути НЕ исполняется: вышестоящее report",
+              "задание last1 — на зелёном пути НЕ исполняется: вышестоящее report",
+              "гаснут вслед за вышестоящим 3", "КРАСНЫЙ: нарушений 3."),
+        must_not=("задание mid1 —", "задание mid2 —", "задание last-always —"))
     run(0, "(−) транзитивный близнец: !cancelled() ниже always()-звена",
         {F: chain + job("zz-mid", "zz-report", "always()")
             + job("zz-after", "zz-mid", "${{ !cancelled() }}")}, must=("ЗЕЛЁНЫЙ",))
@@ -939,6 +1032,62 @@ def self_test():
             check("незнакомое условие %r — отказ разбора" % bad, False)
         except Unknown:
             check("незнакомое условие %r — отказ разбора" % bad, True)
+
+    # ── ПОВТОР КЛЮЧА: исход 2, а не выбор одного из значений ───────────────────
+    # Прежде разбор при повторе молча брал ПОСЛЕДНЕЕ значение, и гейт судил одно
+    # из двух: форма X9 (второй `needs` у задания) давала ЗЕЛЁНЫЙ (приёмка #31,
+    # круг 3; corelib#58). Каждая форма — своим миром; у каждой близнец без
+    # повтора — в мире рядом либо в GOOD.
+    after = "  after:\n    needs: build\n%s    runs-on: ubuntu-latest\n" \
+            "    steps:\n      - run: echo after\n"
+    run(2, "(+) X9: needs повторён у задания — не состоялось, названы ключ и задание",
+        {F: GOOD + after % "    needs: build\n"},
+        must=("jobs.after: ключ «needs» повторён (строки 17 и 18)", "ПРОВЕРКА НЕ СОСТОЯЛАСЬ"))
+    run(0, "(−) близнец X9: needs один", {F: GOOD + after % ""}, must=("ЗЕЛЁНЫЙ",))
+    run(2, "(+) повтор, СКРЫВАЮЩИЙ нарушение: if: false, затем if: always()",
+        {F: GOOD + after % "    if: false\n    if: always()\n"},
+        must=("jobs.after: ключ «if» повторён",))
+    run(2, "(+) повтор имени задания",
+        {F: GOOD + GOOD[GOOD.index("  build:"):]}, must=("jobs: ключ «build» повторён",))
+    run(2, "(+) повтор события запроса: второй pull_request сужен до [main]",
+        {F: GOOD.replace("  schedule:\n", "  pull_request:\n    branches: [main]\n  schedule:\n")},
+        must=("on: ключ «pull_request» повторён",))
+    run(2, "(+) повтор в потоковом отображении: {branches: [main], branches: […]}",
+        {F: GOOD.replace("  pull_request:\n    branches: [main, '[0-9]+']\n",
+                         "  pull_request: {branches: [main], branches: [main, '[0-9]+']}\n")},
+        must=("on.pull_request: ключ «branches» повторён",))
+    run(2, "(+) повтор ключа шага",
+        {F: GOOD.replace("      - if: always()\n", "      - if: always()\n        if: false\n")},
+        must=("jobs.build.steps[2]: ключ «if» повторён",))
+    run(2, "(+) `on` и `\"on\"` — один ключ для хостинга, два для разборщика",
+        {F: GOOD.replace("\njobs:\n", "\n\"on\":\n  push:\n    branches: [x]\njobs:\n")},
+        must=("корень: ключ «on» повторён",))
+    run(2, "(+) `on` и `On` — два ключа для хостинга, один (True) для разборщика",
+        {F: GOOD.replace("\njobs:\n", "\nOn:\n  push:\n    branches: [x]\njobs:\n")},
+        must=("корень: ключ «On» повторён",))
+    run(0, "(−) якорь и ссылка без повтора — законная запись",
+        {F: GOOD.replace("    steps:\n", "    steps: &st\n", 1)
+            + "  other:\n    runs-on: ubuntu-latest\n    steps: *st\n"},
+        must=("ЗЕЛЁНЫЙ", "заданий осмотрено   : 2"))
+    run(2, "(+) ключ слияния `<<`: разборщик сливает, хостинг процесс отвергает",
+        {F: GOOD.replace("  build:\n", "  build: &b\n", 1)
+            + "  other:\n    <<: *b\n    needs: build\n"},
+        must=("jobs.other: ключ слияния «<<» (строка 17)",))
+    # Настоящий вход: ci.yml ЭТОГО дерева, X9 — во втором его задании. Инъекция
+    # не состоялась (задания или ci.yml нет) — провал, а не пропуск.
+    real_path = Path(__file__).resolve().parents[2] / F
+    real = real_path.read_text(encoding="utf-8") if real_path.is_file() else ""
+    heads = re.findall(r"(?m)^  ([a-z][a-z0-9-]*):\n(?=    )", real.split("\njobs:\n", 1)[-1])
+    check("настоящий ci.yml прочитан и несёт хотя бы два задания (%s)" % F, len(heads) >= 2)
+    if len(heads) >= 2:
+        head = "\n  %s:\n" % heads[1]
+        once = real.replace(head, head + "    needs: %s\n" % heads[0], 1)
+        twice = real.replace(head, head + "    needs: %s\n    needs: %s\n" % (heads[0], heads[0]), 1)
+        check("инъекция в настоящий ci.yml состоялась", once != real and twice != once)
+        run(0, "(−) настоящий ci.yml: needs один у задания %s" % heads[1], {F: once},
+            must=("ЗЕЛЁНЫЙ",))
+        run(2, "(+) настоящий ci.yml: X9 — needs повторён у задания %s" % heads[1], {F: twice},
+            must=("jobs.%s: ключ «needs» повторён" % heads[1],))
 
     # (+) исход 2: проверка не состоялась, и это не зелёное.
     run(2, "(+) пустой обход — не состоялось", {}, must=("обход пуст",))
