@@ -360,14 +360,17 @@ func TestConfigFieldJudgedButNotReadIsFoundAndItsTwinIsSilent(t *testing.T) {
 
 // TestConfigReaderInAFormTheScanDoesNotKnowIsRedNotSilent — читателем разбор не
 // признаёт ни чтения в форме вне двух названных (локальная копия, результат
-// вызова), ни выборки поля с тем же именем у затенившего параметр значения
-// другого типа — это не чтение настроек вовсе. В обоих случаях поле остаётся
-// находкой, а не проходит молча.
+// вызова), ни выборки поля с тем же именем у значения другого типа — у
+// затенившего параметр имени либо у поля структуры, объявленного не типом
+// настроек (`h.o.Orphan`): это не чтение настроек вовсе. В обоих случаях поле
+// остаётся находкой, а не проходит молча.
 func TestConfigReaderInAFormTheScanDoesNotKnowIsRedNotSilent(t *testing.T) {
 	forms := map[string]string{
 		"локальная копия":  "\nfunc (c *Ceremony) spend() int { local := c.cfg; return local.Orphan }\n",
 		"результат вызова": "\nfunc (c *Ceremony) conf() Config { return c.cfg }\n\nfunc (c *Ceremony) spend() int { return c.conf().Orphan }\n",
 		"затенённое имя":   "\ntype other struct{ Orphan int }\n\nfunc spend(cfg Config) int { { cfg := other{}; return cfg.Orphan } }\n",
+		"поле другого типа": "\ntype other struct{ Orphan int }\n\ntype holder struct{ o other }\n\n" +
+			"func (h *holder) spend() int { return h.o.Orphan }\n",
 	}
 	for name, reader := range forms {
 		t.Run(name, func(t *testing.T) {
@@ -376,7 +379,8 @@ func TestConfigReaderInAFormTheScanDoesNotKnowIsRedNotSilent(t *testing.T) {
 				t.Fatalf("НЕ ВЫПОЛНИЛОСЬ: %s", census.refusal)
 			}
 			if got := census.orphans(); !slices.Equal(got, []string{"Orphan"}) {
-				t.Errorf("форма, которой разбор не знает, прошла за читателя: находки %v", got)
+				t.Errorf("форма, которой разбор не знает, прошла за читателя: находки %v, читатели Orphan %v",
+					got, census.readers["Orphan"])
 			}
 		})
 	}
