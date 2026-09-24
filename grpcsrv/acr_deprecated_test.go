@@ -187,24 +187,24 @@ func TestDeprecatedACRAddressesAreForwardingFunctions(t *testing.T) {
 }
 
 // TestForwarderDefectIsFoundAndItsTwinIsSilent — injection both ways on a
-// synthetic package; each defect differs from the twin in one fact.
+// synthetic package; each defect differs from the twin in one fact. The
+// synthetic forwarder is named LegacyRank, not ACRRank, so that no line of this
+// file reads as a declaration of the real address.
 func TestForwarderDefectIsFoundAndItsTwinIsSilent(t *testing.T) {
-	const twin = `package p
-
-import "github.com/PRO-Robotech/corelib/acrlevel"
-
-// ACRRank ranks.
-//
-// Deprecated: use acrlevel.Rank.
-func ACRRank(acr string) int { return acrlevel.Rank(acr) }
-`
+	const decl = "func LegacyRank(acr string) int { return acrlevel.Rank(acr) }"
+	const twin = "package p\n\n" +
+		"import \"github.com/PRO-Robotech/corelib/acrlevel\"\n\n" +
+		"// LegacyRank ranks.\n" +
+		"//\n" +
+		"// Deprecated: use acrlevel.Rank.\n" +
+		decl + "\n"
 	worlds := []struct {
 		name string
 		src  string
 		want string
 	}{
 		{"variable in place of a function",
-			strings.Replace(twin, "func ACRRank(acr string) int { return acrlevel.Rank(acr) }", "var ACRRank = acrlevel.Rank", 1),
+			strings.Replace(twin, decl, "var LegacyRank = acrlevel.Rank", 1),
 			"declared with var"},
 		{"no Deprecated paragraph",
 			strings.Replace(twin, "// Deprecated: use acrlevel.Rank.", "// Use acrlevel.Rank.", 1),
@@ -218,6 +218,9 @@ func ACRRank(acr string) int { return acrlevel.Rank(acr) }
 		{"forwards to another function",
 			strings.Replace(twin, "return acrlevel.Rank(acr)", "return acrlevel.Other(acr)", 1),
 			"body is not one"},
+		{"forwards something other than its parameter",
+			strings.Replace(twin, "return acrlevel.Rank(acr)", "return acrlevel.Rank(\"3\")", 1),
+			"body is not one"},
 		{"absent",
 			"package p\n",
 			"is not declared"},
@@ -228,7 +231,7 @@ func ACRRank(acr string) int { return acrlevel.Rank(acr) }
 		if err := os.WriteFile(filepath.Join(dir, "p.go"), []byte(src), 0o600); err != nil {
 			t.Fatalf("NOT EXECUTED: %v", err)
 		}
-		files, defects, err := forwarderDefects(dir, []forwarder{{"ACRRank", "Rank"}})
+		files, defects, err := forwarderDefects(dir, []forwarder{{"LegacyRank", "Rank"}})
 		if err != nil || files != 1 {
 			t.Fatalf("NOT EXECUTED: files %d, err %v", files, err)
 		}
