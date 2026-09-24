@@ -38,10 +38,14 @@ const (
 	testState                 = "s6BhdRkqt3s6BhdRkqt3s6BhdRkqt3xx"
 	testVerifier              = "dBjftJeZ4CVPmB92K27uhbUJU1p1r_wW1gFWFOEjXkQ"
 
-	// testAccessLifespan — срок токена доступа в настройках проб. Он меньше
-	// потолка подставки выпуска (tokenpolicy.MaxTokenTTL), чтобы срок в
-	// ответе был сроком НАСТРОЕК, а не потолком подписанта.
+	// testAccessLifespan и testCodeLifespan — сроки токена доступа и кода
+	// авторизации в настройках проб. Оба НИЖЕ своих потолков фундамента
+	// (tokenpolicy.MaxTokenTTL — он же потолок подставки выпуска — и
+	// tokenpolicy.MaxAuthorizationCodeTTL): срок в ответе иначе не отличался
+	// бы от потолка подписанта, а проба границы, названной службой, — граница
+	// от срока настроек.
 	testAccessLifespan = 20 * time.Minute
+	testCodeLifespan   = 30 * time.Second
 )
 
 // newTestCeremonyConfig — полный набор настроек проб. Ни одно поле не
@@ -52,7 +56,7 @@ func newTestCeremonyConfig(tweaks ...func(*oauthceremony.Config)) oauthceremony.
 		TokenEndpoint:             testTokenEndpoint,
 		AccessTokenLifespan:       testAccessLifespan,
 		RefreshTokenLifespan:      24 * time.Hour,
-		AuthorizationCodeLifespan: 10 * time.Minute,
+		AuthorizationCodeLifespan: testCodeLifespan,
 		ScopeMatching:             oauthceremony.ScopeMatchingExact,
 		RefreshTokenIssuance:      oauthceremony.RefreshTokenIssuanceOnScope,
 		RefreshTokenScopes:        []string{"offline"},
@@ -490,7 +494,7 @@ func TestDenialTravelsBackAsRedirect(t *testing.T) {
 }
 
 // TestIntentFromAnotherCeremonyIsRejected — намерение годно ровно одной
-// церемонии. Иначе настройки одной («срок кода 10 минут») молча применялись бы
+// церемонии. Иначе настройки одной («срок кода 30 секунд») молча применялись бы
 // в другой.
 func TestIntentFromAnotherCeremonyIsRejected(t *testing.T) {
 	store := newMemoryPorts()
@@ -584,7 +588,7 @@ func TestNewRejectsEveryUnnamedSetting(t *testing.T) {
 		TokenEndpoint:             testTokenEndpoint,
 		AccessTokenLifespan:       testAccessLifespan,
 		RefreshTokenLifespan:      24 * time.Hour,
-		AuthorizationCodeLifespan: 10 * time.Minute,
+		AuthorizationCodeLifespan: testCodeLifespan,
 		ScopeMatching:             oauthceremony.ScopeMatchingExact,
 		RefreshTokenIssuance:      oauthceremony.RefreshTokenIssuanceAlways,
 		MinParameterEntropy:       8,
@@ -654,7 +658,7 @@ func TestNewRejectsAnEndpointThatIsNotAnAbsoluteAddress(t *testing.T) {
 		TokenEndpoint:             testTokenEndpoint,
 		AccessTokenLifespan:       testAccessLifespan,
 		RefreshTokenLifespan:      24 * time.Hour,
-		AuthorizationCodeLifespan: 10 * time.Minute,
+		AuthorizationCodeLifespan: testCodeLifespan,
 		ScopeMatching:             oauthceremony.ScopeMatchingExact,
 		RefreshTokenIssuance:      oauthceremony.RefreshTokenIssuanceAlways,
 		MinParameterEntropy:       8,
@@ -758,7 +762,7 @@ func TestNewRejectsEveryMissingPort(t *testing.T) {
 		TokenEndpoint:             testTokenEndpoint,
 		AccessTokenLifespan:       testAccessLifespan,
 		RefreshTokenLifespan:      24 * time.Hour,
-		AuthorizationCodeLifespan: 10 * time.Minute,
+		AuthorizationCodeLifespan: testCodeLifespan,
 		ScopeMatching:             oauthceremony.ScopeMatchingExact,
 		RefreshTokenIssuance:      oauthceremony.RefreshTokenIssuanceAlways,
 		MinParameterEntropy:       8,

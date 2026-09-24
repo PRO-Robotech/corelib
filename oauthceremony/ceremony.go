@@ -81,14 +81,24 @@ type Config struct {
 	TokenEndpoint         string
 
 	// AccessTokenLifespan, RefreshTokenLifespan, AuthorizationCodeLifespan
-	// — сроки жизни артефактов. Все три обязаны быть положительными.
+	// — сроки жизни артефактов, каждый от выпуска артефакта. Все три обязаны
+	// быть положительными и не длиннее своих потолков фундамента —
+	// tokenpolicy.MaxTokenTTL, tokenpolicy.MaxRefreshTokenFamilyTTL и
+	// tokenpolicy.MaxAuthorizationCodeTTL. Срок выше потолка New отвергает,
+	// называя поле и потолок, а не урезает молча; решение, из которого взято
+	// значение каждого потолка, записано у самой константы.
 	//
-	// AccessTokenLifespan к тому же не длиннее tokenpolicy.MaxTokenTTL:
-	// токен доступа подписывает служба (Ports.AccessTokenIssuer), а её
-	// подписант выше потолка платформы не выпускает. Выпуск короче границы
-	// законен (контракт порта), поэтому церемония со сроком длиннее
-	// обменивала бы исправно, но срок настроек не исполнялся бы ни на одном
-	// выпуске — настройка лгала бы молча; отказ при сборке её не допускает.
+	// У AccessTokenLifespan причина потолка ещё и в выпуске: токен доступа
+	// подписывает служба (Ports.AccessTokenIssuer), а её подписант выше
+	// потолка платформы не выпускает. Выпуск короче границы законен (контракт
+	// порта), поэтому церемония со сроком длиннее обменивала бы исправно, но
+	// срок настроек не исполнялся бы ни на одном выпуске — настройка лгала бы
+	// молча; отказ при сборке её не допускает.
+	//
+	// RefreshTokenLifespan — срок ОДНОГО токена обновления: оборот выпускает
+	// преемника с тем же сроком от своего выпуска. Предел всего семейства New
+	// не держит — его держат граница гранта (AuthorizationGrant.ExpiresAt) и
+	// база службы (tokenpolicy.MaxRefreshTokenFamilyTTL называет обоих).
 	//
 	// Подписного материала в настройках нет: код авторизации и токен
 	// обновления непрозрачны (случайные байты, в хранилище — sha256
@@ -358,8 +368,16 @@ func validateConfig(cfg *Config) error {
 			"; the access token is signed by the service, whose signer issues nothing longer")
 	case cfg.RefreshTokenLifespan <= 0:
 		return misuse("Config.RefreshTokenLifespan is not a positive duration")
+	case cfg.RefreshTokenLifespan > tokenpolicy.MaxRefreshTokenFamilyTTL:
+		return misuse("Config.RefreshTokenLifespan " + cfg.RefreshTokenLifespan.String() +
+			" exceeds tokenpolicy.MaxRefreshTokenFamilyTTL " + tokenpolicy.MaxRefreshTokenFamilyTTL.String() +
+			"; no refresh token outlives the bound of its family")
 	case cfg.AuthorizationCodeLifespan <= 0:
 		return misuse("Config.AuthorizationCodeLifespan is not a positive duration")
+	case cfg.AuthorizationCodeLifespan > tokenpolicy.MaxAuthorizationCodeTTL:
+		return misuse("Config.AuthorizationCodeLifespan " + cfg.AuthorizationCodeLifespan.String() +
+			" exceeds tokenpolicy.MaxAuthorizationCodeTTL " + tokenpolicy.MaxAuthorizationCodeTTL.String() +
+			"; the lifespan is the window an intercepted code stays exchangeable in")
 	case cfg.ScopeMatching == ScopeMatchingUnspecified:
 		return misuse("Config.ScopeMatching is not named")
 	case cfg.ScopeMatching != ScopeMatchingExact && cfg.ScopeMatching != ScopeMatchingWildcard:

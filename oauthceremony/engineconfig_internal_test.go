@@ -192,7 +192,7 @@ func engineConfigOfNewCeremony(t *testing.T) *engine.Config {
 		TokenEndpoint:             "https://iam.example.net/iam/v1/token",
 		AccessTokenLifespan:       20 * time.Minute,
 		RefreshTokenLifespan:      24 * time.Hour,
-		AuthorizationCodeLifespan: 10 * time.Minute,
+		AuthorizationCodeLifespan: 30 * time.Second,
 		ScopeMatching:             ScopeMatchingExact,
 		RefreshTokenIssuance:      RefreshTokenIssuanceOnScope,
 		RefreshTokenScopes:        []string{"offline"},

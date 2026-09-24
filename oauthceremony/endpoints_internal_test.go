@@ -203,7 +203,7 @@ func endpointProbeConfig(authorize, token string) Config {
 		TokenEndpoint:             token,
 		AccessTokenLifespan:       20 * time.Minute,
 		RefreshTokenLifespan:      24 * time.Hour,
-		AuthorizationCodeLifespan: 10 * time.Minute,
+		AuthorizationCodeLifespan: 30 * time.Second,
 		ScopeMatching:             ScopeMatchingExact,
 		RefreshTokenIssuance:      RefreshTokenIssuanceOnScope,
 		RefreshTokenScopes:        []string{"offline"},
