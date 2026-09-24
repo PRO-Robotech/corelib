@@ -208,7 +208,7 @@ type Ceremony struct {
 // рабочем пути означала бы, что негодная сборка живёт до первого обращения и
 // падает на пользователе.
 func New(cfg Config, ports Ports) (*Ceremony, error) {
-	if err := validateConfig(&cfg); err != nil {
+	if err := validateConfig(cfg); err != nil {
 		return nil, err
 	}
 	if err := validatePorts(ports); err != nil {
@@ -357,7 +357,10 @@ var (
 	_ engineproofkey.PKCERequestStorage    = (*transactionalStorageBridge)(nil)
 )
 
-func validateConfig(cfg *Config) error {
+// validateConfig судит настройки и не меняет их: принимает значение, а не
+// указатель, и поправить настройки, с которыми New соберёт церемонию, не может
+// по построению.
+func validateConfig(cfg Config) error {
 	const minEntropy = 8
 	switch {
 	case cfg.AccessTokenLifespan <= 0:
