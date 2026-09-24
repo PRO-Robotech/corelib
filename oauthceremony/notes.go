@@ -36,9 +36,13 @@ import (
 // которого движок нашёл артефакт в другом месте, ни на что не влияет.
 //
 // Записывается ПЕРВЫЙ случай: первый отказ ХРАНИЛИЩА в разборе движка и есть
-// причина, а последующие — уже следствия разбора. Отказ ОТЗЫВА семейства
-// через ведомость не идёт вовсе: его церемония возвращает прямо, отказом
-// операции (см. ниже), и записанный случай повтора его не заслоняет.
+// причина, а последующие — уже следствия разбора. Повтор записывается в тот
+// миг, когда он замечен (markReplayedFamily), — раньше, чем мост соберёт по
+// записи повторённого артефакта запрос движку. Отказ этой сборки (клиента
+// сняли, запись сеанса не принимает hydrateSession) — следствие разбора
+// мёртвого артефакта, и ответом операции остаётся повтор. Отказ ОТЗЫВА
+// семейства через ведомость не идёт вовсе: его церемония возвращает прямо,
+// отказом операции (см. ниже), и записанный случай повтора его не заслоняет.
 //
 // # Второе, что несёт ведомость: семейство, которое обязано умереть
 //
@@ -58,12 +62,54 @@ import (
 // Церемония отзывает ВНЕ единицы работы движка и называет отказ отзыва
 // отказом операции — а не «повтор», за которым живое семейство.
 //
-// # Третье: код, предъявленный в этой операции
+// # Третье: код, предъявленный и погашенный в этой операции
 //
 // Ноль строк погашения приходит мосту БЕЗ гранта (порт гасит по подписи), а
-// пропавшая запись PKCE — без гранта и без признака, была ли она вообще.
-// Выборка кода в той же операции стоит раньше обоих, и её грант и признак
-// привязки к PKCE мост записывает сюда: по ним повтор узнаётся и там.
+// движок спрашивает привязку PKCE отдельно от кода. Выборка кода в той же
+// операции стоит раньше обоих, и её запись мост заносит сюда: по её гранту
+// повтор узнаётся на нуле строк погашения, а привязку PKCE движок получает из
+// неё же — из записи кода, а не из второго хранилища.
+//
+// Погашение кода мост тоже заносит сюда: код гасится РОВНО ОДИН РАЗ за обмен —
+// при снятии привязки PKCE, — и выборка выдачи, нашедшая код погашенным ЭТОЙ
+// ЖЕ операцией, повтором не является, как и погашение на выдаче, которому
+// остаётся лишь это признать.
+//
+// # Четвёртое: почему в этой операции отзывают
+//
+// Порт отзыва получает причину (RevocationReason), а отзывают в операции двое
+// — движок и церемония, — и движок причины не передаёт: его хранилище
+// отзывает по одному идентификатору запроса. Причина берётся отсюда, и
+// источников у неё ровно два:
+//
+//   - операция называет её сама — отзыв, о котором просит клиент (Revoke);
+//   - мост замечает повтор кода или токена обновления и записывает её вместе с
+//     семейством.
+//
+// Названная операцией побеждает: клиент, отзывающий прежним, уже обёрнутым
+// токеном обновления, просит отзыва, хотя мост и замечает повтор. Нет ни
+// одного источника — отзыва в операции быть не должно, и мост отказывает, не
+// позвав порта (см. revocationReason).
+//
+// # Пятое: токен доступа — выпущенный и предъявленный
+//
+// Выпуск токена доступа портом службы записывается сюда целиком: срок в ответе
+// обмена церемония берёт у ЭТОГО выпуска (exp минус момент выпуска), а не у
+// движка, который пересчитал бы его от своих часов (withIssuedLifetime).
+//
+// Опознание предъявленного токена доступа движок спрашивает методом, который
+// отказать не умеет (artifactStrategy.AccessTokenSignature). Отказ опознания
+// записывается сюда, и мост отвечает им на выборку по пустой подписи.
+//
+// # Шестое: клиент, который доказывает себя
+//
+// Секрет клиента сверяет порт службы, а движок передаёт хешеру настроек только
+// предъявленный секрет и проверочное значение записи, которого у церемонии нет
+// (clientSecretHasher). Кого сверять, хешер узнаёт отсюда: операция, в которой
+// клиент доказывает себя (обмен, интроспекция, отзыв), отмечает это до движка,
+// а мост записывает клиента, о котором движок спросил справочник, — и знает ли
+// его справочник. Без отметки клиент не записывается: вне доказательства
+// сверять некого, и хешер, позванный там, отказывает, не позвав порта.
 type operationNotes struct {
 	mu      sync.Mutex
 	precise *ProtocolError
@@ -73,6 +119,33 @@ type operationNotes struct {
 	// presented — код, предъявленный в этой операции. Нулевое значение —
 	// кода не предъявляли.
 	presented presentedCode
+	// consumed — подпись кода, погашенного этой операцией. Пусто — операция
+	// кода не гасила.
+	consumed string
+	// requested — причина отзыва, названная самой операцией. Нулевое
+	// значение — операция причины не называет.
+	requested RevocationReason
+	// issuedAccess — токен доступа, выпущенный портом в этой операции;
+	// issuedAccessNoted — выпуск был.
+	issuedAccess      IssuedAccessToken
+	issuedAccessNoted bool
+	// unidentified — отказ последнего опознания токена доступа. Пусто —
+	// опознание либо состоялось, либо ответило «токен не наш».
+	unidentified *ProtocolError
+	// proving — операция доказывает клиента. Ложь — не доказывает (точка
+	// авторизации) или ведомость вне операции.
+	proving bool
+	// claim — клиент, которого операция доказывает; claimed — справочник о
+	// нём спросили.
+	claim   clientClaim
+	claimed bool
+}
+
+// clientClaim — клиент, названный в доказательстве, и знает ли его
+// справочник.
+type clientClaim struct {
+	clientID   string
+	registered bool
 }
 
 // replayedFamily — грант повторённого артефакта, клиент, которому грант
@@ -86,19 +159,21 @@ type operationNotes struct {
 //
 // refusal — отказ, которым церемония отвечает, если движок сам обмен НЕ
 // отверг: выданное таким обменом принадлежит отозванному семейству.
+//
+// reason — причина отзыва по этому повтору: повтор кода или повтор токена
+// обновления. Её называет тот, кто повтор заметил, вместе с отказом.
 type replayedFamily struct {
 	grantID  string
 	clientID string
 	refusal  *ProtocolError
+	reason   RevocationReason
 }
 
-// presentedCode — код, выбранный в этой операции: подпись, грант, клиент и
-// привязан ли код к PKCE (у записи кода есть `code_challenge`).
+// presentedCode — код, выбранный в этой операции: подпись и запись кода
+// такой, какой её отдало хранилище.
 type presentedCode struct {
-	signature  string
-	grantID    string
-	clientID   string
-	proofBound bool
+	signature string
+	record    AuthorizationCodeRecord
 }
 
 type operationNotesKey struct{}
@@ -150,23 +225,59 @@ func (n *operationNotes) preferRecorded(engineVerdict error) error {
 }
 
 // markReplayedFamily записывает грант, чьё семейство обязано быть отозвано,
-// и случай, которым отвечается повтор. Пустой идентификатор сюда не доходит:
-// мост отвергает его раньше как нарушение контракта порта (отозвать семейство
-// без имени нечем).
-func (n *operationNotes) markReplayedFamily(grantID, clientID string, refusal *ProtocolError) {
+// случай, которым отвечается повтор, и причину отзыва. Пустой идентификатор
+// сюда не доходит: мост отвергает его раньше как нарушение контракта порта
+// (отозвать семейство без имени нечем).
+//
+// Случай повтора тем же вызовом становится и точным случаем операции (первым,
+// как у record). Это одно место для всех путей, где повтор замечается вместе с
+// грантом семейства: выборки кода и токена обновления, ноль строк погашения и
+// оборота. Поэтому ни один шаг моста после пометки повтора не записывает свой
+// случай первым, и порядок шагов на каждом пути этого не решает.
+func (n *operationNotes) markReplayedFamily(grantID, clientID string, refusal *ProtocolError, reason RevocationReason) {
 	if n == nil || grantID == "" {
 		return
 	}
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	if n.replayedFamily.grantID == "" {
-		n.replayedFamily = replayedFamily{grantID: grantID, clientID: clientID, refusal: refusal}
+		n.replayedFamily = replayedFamily{grantID: grantID, clientID: clientID, refusal: refusal, reason: reason}
 	}
+	if n.precise == nil {
+		n.precise = refusal
+	}
+}
+
+// requestRevocation записывает причину отзыва, названную самой операцией.
+func (n *operationNotes) requestRevocation(reason RevocationReason) {
+	if n == nil {
+		return
+	}
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	n.requested = reason
+}
+
+// revocationReason отдаёт причину отзыва в этой операции: названную ею самой,
+// а если она не названа — причину замеченного повтора. Ложь — причины нет ни
+// у операции, ни у повтора (или ведомости нет вовсе): отзыв в такой операции —
+// дефект провязки, и порт отзыва звать нельзя.
+func (n *operationNotes) revocationReason() (RevocationReason, bool) {
+	if n == nil {
+		return "", false
+	}
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	reason := n.requested
+	if !reason.Declared() {
+		reason = n.replayedFamily.reason
+	}
+	return reason, reason.Declared()
 }
 
 // notePresentedCode записывает код, выбранный в этой операции.
 func (n *operationNotes) notePresentedCode(code presentedCode) {
-	if n == nil || code.grantID == "" {
+	if n == nil || code.signature == "" {
 		return
 	}
 	n.mu.Lock()
@@ -182,10 +293,33 @@ func (n *operationNotes) presentedCodeOf(signature string) (presentedCode, bool)
 	}
 	n.mu.Lock()
 	defer n.mu.Unlock()
-	if n.presented.grantID == "" || n.presented.signature != signature {
+	if n.presented.signature == "" || n.presented.signature != signature {
 		return presentedCode{}, false
 	}
 	return n.presented, true
+}
+
+// noteConsumed записывает, что код под подписью signature погасила эта
+// операция.
+func (n *operationNotes) noteConsumed(signature string) {
+	if n == nil {
+		return
+	}
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	n.consumed = signature
+}
+
+// consumedHere отвечает, погасила ли код под подписью signature эта операция.
+// Без ведомости — нет: мосту, вызванному вне операции, признать погашение
+// своим нечем.
+func (n *operationNotes) consumedHere(signature string) bool {
+	if n == nil {
+		return false
+	}
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	return signature != "" && n.consumed == signature
 }
 
 // replayed отдаёт семейство, у которого замечен повтор; нулевое значение —
@@ -221,4 +355,94 @@ func note(ctx context.Context, p *ProtocolError) *ProtocolError {
 		notesFrom(ctx).record(p)
 	}
 	return p
+}
+
+// noteIssuedAccessToken записывает выпуск токена доступа этой операции.
+func (n *operationNotes) noteIssuedAccessToken(issued IssuedAccessToken) {
+	if n == nil {
+		return
+	}
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	n.issuedAccess = issued
+	n.issuedAccessNoted = true
+}
+
+// issuedAccessToken отдаёт выпуск токена доступа этой операции; ложь — выпуска
+// не было (или ведомости нет).
+func (n *operationNotes) issuedAccessToken() (IssuedAccessToken, bool) {
+	if n == nil {
+		return IssuedAccessToken{}, false
+	}
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	return n.issuedAccess, n.issuedAccessNoted
+}
+
+// noteUnidentified записывает исход последнего опознания токена доступа:
+// отказ либо пусто, если опознание состоялось или ответило «не наш».
+func (n *operationNotes) noteUnidentified(failure *ProtocolError) {
+	if n == nil {
+		return
+	}
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	n.unidentified = failure
+}
+
+// unidentifiedFailure отдаёт отказ последнего опознания токена доступа; пусто
+// — отказа не было.
+func (n *operationNotes) unidentifiedFailure() *ProtocolError {
+	if n == nil {
+		return nil
+	}
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	return n.unidentified
+}
+
+// expectClientProof отмечает, что операция доказывает клиента.
+func (n *operationNotes) expectClientProof() {
+	if n == nil {
+		return
+	}
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	n.proving = true
+}
+
+// provesClient отвечает, доказывает ли операция клиента. Без ведомости — нет.
+func (n *operationNotes) provesClient() bool {
+	if n == nil {
+		return false
+	}
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	return n.proving
+}
+
+// noteClientClaim записывает клиента, о котором движок спросил справочник, и
+// знает ли его справочник. Вне доказательства клиента не записывает ничего.
+func (n *operationNotes) noteClientClaim(clientID string, registered bool) {
+	if n == nil {
+		return
+	}
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	if !n.proving {
+		return
+	}
+	n.claim = clientClaim{clientID: clientID, registered: registered}
+	n.claimed = true
+}
+
+// claimedClient отдаёт клиента, которого операция доказывает; ложь —
+// справочник о доказывающем в этой операции не спрашивали (или ведомости нет).
+func (n *operationNotes) claimedClient() (clientClaim, bool) {
+	if n == nil {
+		return clientClaim{}, false
+	}
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	return n.claim, n.claimed
 }

@@ -143,6 +143,8 @@ func runtimeRoster() map[string]reflect.Type {
 		"FailureCode":          reflect.TypeOf(oauthceremony.FailureCode(0)),
 		"StoreOutcome":         reflect.TypeOf(oauthceremony.StoreOutcome{}),
 		"GrantRecord":          reflect.TypeOf(oauthceremony.GrantRecord{}),
+		"ProofKeyMethod":       reflect.TypeOf(oauthceremony.ProofKeyMethod("")),
+		"ProofKeyBinding":      reflect.TypeOf(oauthceremony.ProofKeyBinding{}),
 		"SessionRecord":        reflect.TypeOf(oauthceremony.SessionRecord{}),
 		"ClientRegistration":   reflect.TypeOf(oauthceremony.ClientRegistration{}),
 		"AuthorizationRequest": reflect.TypeOf(oauthceremony.AuthorizationRequest{}),
@@ -154,6 +156,7 @@ func runtimeRoster() map[string]reflect.Type {
 		"IntrospectionRequest": reflect.TypeOf(oauthceremony.IntrospectionRequest{}),
 		"IntrospectionResult":  reflect.TypeOf(oauthceremony.IntrospectionResult{}),
 		"RevocationRequest":    reflect.TypeOf(oauthceremony.RevocationRequest{}),
+		"RevocationReason":     reflect.TypeOf(oauthceremony.RevocationReason("")),
 		"GrantKind":            reflect.TypeOf(oauthceremony.GrantKind("")),
 		"ResponseKind":         reflect.TypeOf(oauthceremony.ResponseKind("")),
 		"ResponseDelivery":     reflect.TypeOf(oauthceremony.ResponseDelivery("")),
@@ -162,13 +165,20 @@ func runtimeRoster() map[string]reflect.Type {
 		"ScopeMatching":        reflect.TypeOf(oauthceremony.ScopeMatching(0)),
 		"RefreshTokenIssuance": reflect.TypeOf(oauthceremony.RefreshTokenIssuance(0)),
 		"ClientDirectory":      reflect.TypeOf((*oauthceremony.ClientDirectory)(nil)).Elem(),
+		"AuthorizationCodeRecord": reflect.TypeOf(
+			oauthceremony.AuthorizationCodeRecord{}),
 		"AuthorizationCodeVault": reflect.TypeOf(
 			(*oauthceremony.AuthorizationCodeVault)(nil)).Elem(),
 		"AccessTokenVault":  reflect.TypeOf((*oauthceremony.AccessTokenVault)(nil)).Elem(),
 		"RefreshTokenVault": reflect.TypeOf((*oauthceremony.RefreshTokenVault)(nil)).Elem(),
 		"GrantRevoker":      reflect.TypeOf((*oauthceremony.GrantRevoker)(nil)).Elem(),
-		"ProofKeyVault":     reflect.TypeOf((*oauthceremony.ProofKeyVault)(nil)).Elem(),
 		"UnitOfWork":        reflect.TypeOf((*oauthceremony.UnitOfWork)(nil)).Elem(),
+		"AccessTokenIssuer": reflect.TypeOf((*oauthceremony.AccessTokenIssuer)(nil)).Elem(),
+		"IssuedAccessToken": reflect.TypeOf(oauthceremony.IssuedAccessToken{}),
+		"ClientSecretVerifier": reflect.TypeOf(
+			(*oauthceremony.ClientSecretVerifier)(nil)).Elem(),
+		"PresentedSecret": reflect.TypeOf(oauthceremony.PresentedSecret{}),
+		"SecretVerdict":   reflect.TypeOf(oauthceremony.SecretVerdict(0)),
 	}
 }
 

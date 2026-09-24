@@ -118,6 +118,12 @@ const (
 // TestFailureCodeTableIsTotal, а не внимательностью: код без строки печатался
 // бы как `oauthceremony.FailureCode(37)` и молча терял бы и проводное
 // представление, и состояние HTTP.
+//
+// Состояние следует за ПРОВОДНЫМ кодом, а не за состоянием отказа движка: у
+// одного проводного кода одно состояние, и там, где его называет определение
+// кода (`server_error` — 500, `invalid_token` — 401), — названное. Пара, где
+// они спорят, отдаёт клиенту два утверждения об одном отказе. Держит это проба
+// TestWireCodeCarriesOneStatusAndTheOneItsDefinitionNames.
 var failureMeta = [failureCodeCount]struct {
 	name   string
 	wire   string
@@ -143,7 +149,7 @@ var failureMeta = [failureCodeCount]struct {
 	CodeRequestForbidden:          {"request_forbidden", "request_forbidden", http.StatusForbidden},
 	CodeTokenExpired:              {"token_expired", "invalid_token", http.StatusUnauthorized},
 	CodeTokenSignatureMismatch:    {"token_signature_mismatch", "token_signature_mismatch", http.StatusBadRequest},
-	CodeInvalidTokenFormat:        {"invalid_token_format", "invalid_token", http.StatusBadRequest},
+	CodeInvalidTokenFormat:        {"invalid_token_format", "invalid_token", http.StatusUnauthorized},
 	CodeTokenClaim:                {"token_claim", "token_claim", http.StatusUnauthorized},
 	CodeScopeNotGranted:           {"scope_not_granted", "scope_not_granted", http.StatusForbidden},
 	CodeInactiveToken:             {"inactive_token", "token_inactive", http.StatusUnauthorized},
@@ -155,7 +161,7 @@ var failureMeta = [failureCodeCount]struct {
 	CodeRegistrationNotSupported:  {"registration_not_supported", "registration_not_supported", http.StatusBadRequest},
 	CodeInvalidRequestURI:         {"invalid_request_uri", "invalid_request_uri", http.StatusBadRequest},
 	CodeInvalidRequestObject:      {"invalid_request_object", "invalid_request_object", http.StatusBadRequest},
-	CodeStorageConflict:           {"storage_conflict", "server_error", http.StatusConflict},
+	CodeStorageConflict:           {"storage_conflict", "server_error", http.StatusInternalServerError},
 	CodeAuthorizationCodeConsumed: {"authorization_code_consumed", "invalid_grant", http.StatusBadRequest},
 	CodeUnhandledRequest:          {"unhandled_request", "invalid_request", http.StatusBadRequest},
 	CodeGrantNotFound:             {"grant_not_found", "invalid_grant", http.StatusBadRequest},

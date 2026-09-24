@@ -11,22 +11,19 @@
 // церемония по завершении операции, а отказ отзыва — отказ операции, а не
 // случай «код погашен», за которым живое семейство.
 //
-// Одновременный повтор воспроизводится в двух окнах, потому что проигравший
-// замечает его в разных местах:
-//
-//   - ДО ВЫБОРКИ PKCE — оба обмена прошли выборку кода, запись PKCE снял
-//     первый, и второй находит её снятой: код, привязанный к PKCE, уже
-//     предъявлялся;
-//   - ПОСЛЕ ПРОВЕРКИ PKCE — оба прошли и выборку кода, и PKCE, и повтор виден
-//     только по нулю строк погашения.
-//
-// Каждое окно прогоняется с единицей работы и без неё.
+// Код гасится РОВНО ОДИН РАЗ за обмен — при предъявлении, до сверки
+// доказательства (привязка PKCE — поле той же записи и снимается вместе с
+// кодом). Поэтому одновременный повтор у кода один путь, которым его замечает
+// проигравший: оба обмена прошли выборку кода, и погашение одного из них
+// затрагивает ноль строк. Окно воспроизводится двумя встречами — на выборке
+// кода и перед погашением, — с единицей работы и без неё.
 package oauthceremony_test
 
 import (
 	"context"
 	"errors"
 	"sync"
+	"sync/atomic"
 	"testing"
 
 	"github.com/PRO-Robotech/corelib/oauthceremony"
@@ -61,7 +58,8 @@ func requireCodeReplayRefusal(t *testing.T, err error) {
 	}
 }
 
-// requirePairDead — пара, выданная по коду, негодна, и отозвано семейство.
+// requirePairDead — пара, выданная по коду, негодна, и отозвано семейство —
+// с причиной «повтор кода авторизации» у каждого вызова порта отзыва.
 func requirePairDead(t *testing.T, ceremony *oauthceremony.Ceremony, store *memoryPorts, grantID string,
 	tokens oauthceremony.TokenResult) {
 	t.Helper()
@@ -69,6 +67,7 @@ func requirePairDead(t *testing.T, ceremony *oauthceremony.Ceremony, store *memo
 	if !store.familyRevoked(grantID) {
 		t.Errorf("семейство гранта %s не отозвано", grantID)
 	}
+	requireRevokedFor(t, store, grantID, oauthceremony.RevocationCodeReplay)
 	if access, refresh := store.liveArtifactsOf(grantID); access != 0 || refresh != 0 {
 		t.Errorf("у гранта %s после повтора кода живы токенов доступа %d шт, токенов обновления %d шт",
 			grantID, access, refresh)
@@ -95,6 +94,7 @@ func TestSingleCodeExchangeKeepsThePairAlive(t *testing.T) {
 	if store.familyRevoked(grantID) {
 		t.Fatal("одиночный обмен отозвал семейство")
 	}
+	requireNotRevoked(t, store, grantID)
 	if !introspect(t, ceremony, tokens.RefreshToken, oauthceremony.TokenKindRefresh).Active {
 		t.Error("токен обновления одиночного обмена назван негодным")
 	}
@@ -183,30 +183,22 @@ func TestSequentialRefreshReplayWithAFailingRevokerFailsTheOperation(t *testing.
 	}
 }
 
-// TestCodePresentedAfterItsProofKeyWasTakenIsAReplay — последовательная форма
-// окна «до выборки PKCE»: первое предъявление с неверным доказательством сняло
-// запись PKCE и не выдало ничего, второе — с верным. Код, привязанный к PKCE и
-// лишившийся записи, уже предъявлялся: это повтор, а не «данных PKCE нет».
-//
-// Второй прогон — тот же порядок при PKCE, не требуемом настройками, и без
-// доказательства во втором предъявлении: такой обмен не имеет права выдать
-// токены по коду, привязанному к PKCE.
-func TestCodePresentedAfterItsProofKeyWasTakenIsAReplay(t *testing.T) {
+// TestCodePresentedAgainAfterAFailedProofIsAReplay — первое предъявление с
+// неверным доказательством погасило код и не выдало ничего, второе — с верным
+// доказательством либо без него. Предъявление и есть использование кода: код
+// уже предъявлялся, и это повтор, а не второй шанс сверить доказательство.
+func TestCodePresentedAgainAfterAFailedProofIsAReplay(t *testing.T) {
 	for _, tc := range []struct {
 		name           string
-		requireProof   bool
 		secondVerifier string
 	}{
-		{name: "pkce-required", requireProof: true, secondVerifier: testVerifier},
-		{name: "pkce-optional-no-verifier", requireProof: false, secondVerifier: ""},
+		{name: "second-with-the-right-verifier", secondVerifier: testVerifier},
+		{name: "second-without-a-verifier", secondVerifier: ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			store := newMemoryPorts()
 			registerTestClient(t, store)
-			ceremony := newTestCeremony(t, store.ports(), func(cfg *oauthceremony.Config) {
-				cfg.RequireProofKey = tc.requireProof
-				cfg.RequireProofKeyForPublicClients = tc.requireProof
-			})
+			ceremony := newTestCeremony(t, store.ports())
 
 			code, _ := issueCode(t, ceremony)
 			wrong := codeExchange(code)
@@ -226,8 +218,9 @@ func TestCodePresentedAfterItsProofKeyWasTakenIsAReplay(t *testing.T) {
 			issued := len(store.access)
 			store.mu.Unlock()
 			if issued != 0 {
-				t.Errorf("по коду, лишившемуся записи PKCE, положено токенов доступа %d шт", issued)
+				t.Errorf("по коду, предъявленному второй раз, положено токенов доступа %d шт", issued)
 			}
+			requireRevokedFor(t, store, grantOfStored(t, store), oauthceremony.RevocationCodeReplay)
 		})
 	}
 }
@@ -241,24 +234,14 @@ type codeRace struct {
 func codeRaces() []codeRace {
 	return []codeRace{
 		{
-			// Встреча на выборке кода; вторая выборка PKCE ждёт, пока первую
-			// запись PKCE снимут, — проигравший находит её снятой.
-			name: "before-proof-key",
+			// Встреча на выборке кода (оба прочли код непогашенным) и перед
+			// погашением при предъявлении (оба дошли до него): повтор виден
+			// только по нулю строк погашения.
+			name: "both-read-then-consume",
 			setup: func(store *memoryPorts) []*rendezvous {
 				store.codeFetchGate = newRendezvous(2)
-				store.proofTaken = make(chan struct{})
-				return []*rendezvous{store.codeFetchGate}
-			},
-		},
-		{
-			// Встреча на выборке PKCE (оба прочли запись) и перед погашением
-			// (оба прошли выборку кода в выдаче): повтор виден только по нулю
-			// строк погашения.
-			name: "after-proof-key",
-			setup: func(store *memoryPorts) []*rendezvous {
-				store.proofFetchGate = newRendezvous(2)
 				store.consumeGate = newRendezvous(2)
-				return []*rendezvous{store.proofFetchGate, store.consumeGate}
+				return []*rendezvous{store.codeFetchGate, store.consumeGate}
 			},
 		},
 	}
@@ -330,6 +313,113 @@ func TestConcurrentCodeRedemptionRevokesTheFamily(t *testing.T) {
 	}
 }
 
+// revocationSignal — порт отзыва подставки, который сообщает об отзыве
+// токенов доступа, исполненном без отказа: по этому сообщению проба ставит
+// выпуск ПОСЛЕ отметки отзыва.
+type revocationSignal struct {
+	oauthceremony.GrantRevoker
+	once sync.Once
+	done chan struct{}
+}
+
+func (r *revocationSignal) RevokeGrantAccessTokens(ctx context.Context, grantID string, reason oauthceremony.RevocationReason) (oauthceremony.StoreOutcome, error) {
+	out, err := r.GrantRevoker.RevokeGrantAccessTokens(ctx, grantID, reason)
+	if err == nil {
+		r.once.Do(func() { close(r.done) })
+	}
+	return out, err
+}
+
+// TestConcurrentCodeReplayWinnerMayIssueAfterTheRevocation — предпосылка
+// абзаца GrantRevoker «Отсечка действует на ВСЯКИЙ токен семейства»: на
+// одновременном повторе кода опередивший гасит код при предъявлении, раньше
+// своего выпуска, и его выпуск достижим ПОСЛЕ того, как отставший отозвал
+// семейство.
+//
+// Выпуск задержан до исполненного отзыва (recordingIssuer.hold). Встань выпуск
+// раньше погашения кода, оба обмена ждали бы отзыва, которого никто не
+// исполнит, и проба покраснела бы отказом выпуска по сроку вызова: у абзаца
+// пропал бы довод «и после». Пара, выпущенная после отметки, в хранилище
+// негодна: отметку семейства выборка сверяет, когда бы запись ни легла.
+//
+// Законный близнец — TestConcurrentCodeRedemptionRevokesTheFamily: та же гонка
+// без задержки выпуска.
+func TestConcurrentCodeReplayWinnerMayIssueAfterTheRevocation(t *testing.T) {
+	store := newMemoryPorts()
+	registerTestClient(t, store)
+	revoker := &revocationSignal{GrantRevoker: store, done: make(chan struct{})}
+	ports := store.ports()
+	ports.Grants = revoker
+	ceremony := newTestCeremony(t, ports)
+	code, _ := issueCode(t, ceremony)
+	// Встречи на выборке кода довольно: оба обмена прочли код непогашенным, и
+	// погашение второго затрагивает ноль строк, где бы ни стояло погашение.
+	store.codeFetchGate = newRendezvous(2)
+
+	var heldPastRevocation atomic.Int32
+	store.issuer.mu.Lock()
+	store.issuer.hold = func(ctx context.Context) error {
+		select {
+		case <-revoker.done:
+			heldPastRevocation.Add(1)
+			return nil
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+	store.issuer.mu.Unlock()
+
+	type outcome struct {
+		tokens oauthceremony.TokenResult
+		err    error
+	}
+	outcomes := make([]outcome, 2)
+	var wg sync.WaitGroup
+	for i := range outcomes {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			tokens, err := ceremony.Exchange(context.Background(), codeExchange(code))
+			outcomes[i] = outcome{tokens: tokens, err: err}
+		}()
+	}
+	wg.Wait()
+
+	if !store.codeFetchGate.met() {
+		t.Fatalf("НЕ ВЫПОЛНИЛОСЬ: встреча на выборке кода не состоялась — одновременность не создана (исходы: %v; %v)",
+			outcomes[0].err, outcomes[1].err)
+	}
+
+	var winners []oauthceremony.TokenResult
+	var refusals []error
+	for _, o := range outcomes {
+		if o.err == nil {
+			winners = append(winners, o.tokens)
+			continue
+		}
+		refusals = append(refusals, o.err)
+	}
+	if len(winners) == 0 && errors.Is(refusals[0], oauthceremony.ErrPortDeadline) &&
+		errors.Is(refusals[1], oauthceremony.ErrPortDeadline) {
+		t.Fatalf("ни один обмен не прошёл: выпуск не дождался отзыва (%v; %v) — выпуск стоит раньше "+
+			"погашения кода, и довод «и после» абзаца GrantRevoker снят", refusals[0], refusals[1])
+	}
+	if len(winners) != 1 || len(refusals) != 1 {
+		t.Fatalf("из 2 одновременных обменов прошло %d и отказано %d; ожидалось 1 и 1 (отказы: %v)",
+			len(winners), len(refusals), refusals)
+	}
+	requireCodeReplayRefusal(t, refusals[0])
+
+	issuances := store.issuer.issuances()
+	if len(issuances) != 1 || issuances[0].issued.Token != winners[0].AccessToken {
+		t.Fatalf("выпусков %d, ожидался 1 — токен опередившего", len(issuances))
+	}
+	if held := heldPastRevocation.Load(); held != 1 {
+		t.Fatalf("выпусков, начатых после отзыва, %d; ожидался 1", held)
+	}
+	requirePairDead(t, ceremony, store, grantOfStored(t, store), winners[0])
+}
+
 // grantOfStored — грант единственного выданного кода. Берётся из хранилища:
 // после отзыва интроспекция гранта не назовёт.
 func grantOfStored(t *testing.T, store *memoryPorts) string {
@@ -358,8 +448,9 @@ func TestConsumedCodeWithoutItsGrantIsAContractBreach(t *testing.T) {
 	ceremony := newTestCeremony(t, store.ports())
 
 	code, _ := issueCode(t, ceremony)
-	store.fetchCodeOverride = func(string) (oauthceremony.GrantRecord, error) {
-		return oauthceremony.GrantRecord{ClientID: testClientID}, oauthceremony.ErrAuthorizationCodeConsumed
+	store.fetchCodeOverride = func(string) (oauthceremony.AuthorizationCodeRecord, error) {
+		return oauthceremony.AuthorizationCodeRecord{Grant: oauthceremony.GrantRecord{ClientID: testClientID}},
+			oauthceremony.ErrAuthorizationCodeConsumed
 	}
 
 	_, err := ceremony.Exchange(context.Background(), codeExchange(code))

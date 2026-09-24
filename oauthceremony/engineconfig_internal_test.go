@@ -151,12 +151,13 @@ var offRequestPath = []struct {
 		write: getterWrite{method: "GetJWKSFetcherStrategy", field: "JWKSFetcherStrategy"},
 		why: "набор ключей клиента по адресу движок запрашивает только у клиента, " +
 			"реализующего engine.OpenIDConnectClient (утверждение клиента и объект запроса), " +
-			"а представление клиента церемонии его не реализует (clientViewOf). Назвать поле " +
+			"а представления клиента церемонии его не реализуют (clientViewOf, unregisteredClientOf). Назвать поле " +
 			"умолчанием движка значило бы запустить в New фоновый исполнитель кеша ключей " +
 			"без способа его остановить — ради пути, которого нет",
 		stillOff: func() bool {
-			_, oidc := clientViewOf(ClientRegistration{}).(engine.OpenIDConnectClient)
-			return !oidc
+			_, registered := clientViewOf(ClientRegistration{}).(engine.OpenIDConnectClient)
+			_, unregistered := unregisteredClientOf("probe-client").(engine.OpenIDConnectClient)
+			return !registered && !unregistered
 		},
 	},
 }
@@ -170,8 +171,15 @@ type (
 	uncalledAccessTokens       struct{ AccessTokenVault }
 	uncalledRefreshTokens      struct{ RefreshTokenVault }
 	uncalledGrants             struct{ GrantRevoker }
-	uncalledProofKeys          struct{ ProofKeyVault }
+	uncalledAccessTokenIssuer  struct{ AccessTokenIssuer }
+	uncalledClientSecrets      struct{ ClientSecretVerifier }
 )
+
+// uncalledGrantIDHook — крючок чеканки идентификатора гранта, которого обход
+// тоже не вызывает. Вызов — громкое красное, как у портов выше.
+func uncalledGrantIDHook(context.Context) (string, error) {
+	panic("oauthceremony: the engine settings walk reached Config.NewGrantID")
+}
 
 // engineConfigOfNewCeremony собирает церемонию через New и достаёт настройки,
 // которые держит её движок. Предпосылка проверяется, а не предполагается:
@@ -180,27 +188,26 @@ func engineConfigOfNewCeremony(t *testing.T) *engine.Config {
 	t.Helper()
 
 	c, err := New(Config{
-		Issuer:                          "https://iam.example.net",
-		SigningSecret:                   []byte("0123456789abcdef0123456789abcdef"),
-		AccessTokenLifespan:             time.Hour,
-		RefreshTokenLifespan:            24 * time.Hour,
-		AuthorizationCodeLifespan:       10 * time.Minute,
-		ScopeMatching:                   ScopeMatchingExact,
-		RefreshTokenIssuance:            RefreshTokenIssuanceOnScope,
-		RefreshTokenScopes:              []string{"offline"},
-		RequireProofKey:                 true,
-		RequireProofKeyForPublicClients: true,
-		SecretHashCost:                  10,
-		MinParameterEntropy:             8,
-		PortTimeout:                     2 * time.Second,
-		OperationTimeout:                5 * time.Second,
+		AuthorizationEndpoint:     "https://iam.example.net/iam/v1/authorize",
+		TokenEndpoint:             "https://iam.example.net/iam/v1/token",
+		AccessTokenLifespan:       20 * time.Minute,
+		RefreshTokenLifespan:      24 * time.Hour,
+		AuthorizationCodeLifespan: 30 * time.Second,
+		ScopeMatching:             ScopeMatchingExact,
+		RefreshTokenIssuance:      RefreshTokenIssuanceOnScope,
+		RefreshTokenScopes:        []string{"offline"},
+		MinParameterEntropy:       8,
+		PortTimeout:               2 * time.Second,
+		OperationTimeout:          5 * time.Second,
+		NewGrantID:                uncalledGrantIDHook,
 	}, Ports{
 		Clients:            uncalledClients{},
 		AuthorizationCodes: uncalledAuthorizationCodes{},
 		AccessTokens:       uncalledAccessTokens{},
 		RefreshTokens:      uncalledRefreshTokens{},
 		Grants:             uncalledGrants{},
-		ProofKeys:          uncalledProofKeys{},
+		AccessTokenIssuer:  uncalledAccessTokenIssuer{},
+		ClientSecrets:      uncalledClientSecrets{},
 	})
 	if err != nil {
 		t.Fatalf("New не собрал церемонию: %v", err)
@@ -332,8 +339,8 @@ func TestGetterWriteCensusIsSilentWhenEveryLazyFieldIsNamed(t *testing.T) {
 		ScopeStrategy:            engine.ExactScopeStrategy,
 		AudienceMatchingStrategy: engine.DefaultAudienceMatchingStrategy,
 		JWKSFetcherStrategy:      namedFetcher{},
+		ClientSecretsHasher:      clientSecretHasher{},
 	}
-	cfg.ClientSecretsHasher = &engine.BCrypt{Config: cfg}
 
 	census := censusGetterWrites(cfg)
 	requireCensusCovered(t, census)

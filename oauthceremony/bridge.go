@@ -67,27 +67,81 @@ func (b *storageBridge) deadline(ctx context.Context) (context.Context, context.
 
 // ── Разбор исхода порта ─────────────────────────────────────────────────────
 
+// Тексты отказа портов. Портов два вида — хранения и выпуска токена доступа,
+// — и тексты называют ПОРТ, а не хранилище: отказ порта выпуска, названный
+// отказом хранилища, послал бы оператора чинить не то. Какой именно порт
+// отказал, называют подробности (Debug) — именем вызова.
+const (
+	textPortFailed       = "A port of the authorization server failed."
+	textPortDeadline     = "A port call did not finish in time."
+	textPortCanceled     = "A port call was canceled."
+	textPortContract     = "A port of the authorization server broke its contract."
+	textPortContractHint = "Fix the port implementation; this is not a protocol failure."
+)
+
+// portDebug приписывает к подробности отказа имя вызова. Пустая подробность —
+// часовой пакета её не несёт, а чужая ошибка вправе иметь пустой текст — даёт
+// ровно имя вызова: склейка дала бы `"<вызов>: "`, разделитель без продолжения,
+// и у одного отказа в журнале было бы два написания.
+func portDebug(op, detail string) string {
+	if detail == "" {
+		return op
+	}
+	return op + ": " + detail
+}
+
 // fromPort переводит отказ порта в наш отказ, приписывая имя вызова.
 func fromPort(op string, err error) *ProtocolError {
 	var ours *ProtocolError
 	if errors.As(err, &ours) {
-		return failf(ours.Code, err, ours.Description, ours.Hint, op+": "+ours.Debug)
+		return failf(ours.Code, err, ours.Description, ours.Hint, portDebug(op, ours.Debug))
 	}
 	switch {
 	case errors.Is(err, context.DeadlineExceeded):
-		return failf(CodePortDeadline, err, "A storage call did not finish in time.", "", op+": "+err.Error())
+		return failf(CodePortDeadline, err, textPortDeadline, "", portDebug(op, err.Error()))
 	case errors.Is(err, context.Canceled):
-		return failf(CodePortCanceled, err, "A storage call was canceled.", "", op+": "+err.Error())
+		return failf(CodePortCanceled, err, textPortCanceled, "", portDebug(op, err.Error()))
 	}
-	return failf(CodeServerError, err, "The storage backing the authorization server failed.", "", op+": "+err.Error())
+	return failf(CodeServerError, err, textPortFailed, "", portDebug(op, err.Error()))
 }
 
 // contractBreach — порт нарушил контракт. Отдельный конструктор, чтобы
-// нарушение контракта нельзя было перепутать с отказом хранилища.
+// нарушение контракта нельзя было перепутать с отказом порта.
 func contractBreach(op, why string) *ProtocolError {
-	return failf(CodePortContract, nil,
-		"A storage port of the authorization server broke its contract.",
-		"Fix the port implementation; this is not a protocol failure.", op+": "+why)
+	return failf(CodePortContract, nil, textPortContract, textPortContractHint, portDebug(op, why))
+}
+
+// closedPortFailure переводит отказ порта доказательства клиента — сверки
+// секрета и справочника клиентов — в наш отказ ЗАКРЫТЫМ перечнем: срок,
+// отмена, нарушение контракта, отказ сервера.
+//
+// # Почему не fromPort
+//
+// fromPort сохраняет случай нашего отказа, которым ответил порт: у портов
+// хранения это сигналы контракта («записи нет», «код погашен»). У портов
+// доказательства таких сигналов нет — у сверки ни одного, у справочника один,
+// «клиента нет», и его вызывающий разбирает раньше. Отказ этих портов
+// становится ответом операции (ведомость), а отзыв и интроспекция часть
+// случаев читают исходом протокола: «нечего снимать», «токен негоден».
+// Сохрани мы случай порта, несостоявшаяся сверка стала бы вердиктом — отзыв
+// ответил бы успехом, не сняв токена.
+//
+// Поэтому наш случай из такого порта — нарушение контракта, а сам отказ порта
+// в цепочку не кладётся: errors.Is по случаю порта не должен находить ничего.
+// Его текст не уезжает и на провод — только имя случая в Debug.
+func closedPortFailure(op string, err error) *ProtocolError {
+	var ours *ProtocolError
+	if errors.As(err, &ours) {
+		return contractBreach(op, "the port failed with case "+ours.Code.String()+
+			" of this package; its contract declares no such failure")
+	}
+	switch {
+	case errors.Is(err, context.DeadlineExceeded):
+		return failf(CodePortDeadline, err, textPortDeadline, "", portDebug(op, err.Error()))
+	case errors.Is(err, context.Canceled):
+		return failf(CodePortCanceled, err, textPortCanceled, "", portDebug(op, err.Error()))
+	}
+	return failf(CodeServerError, err, textPortFailed, "", portDebug(op, err.Error()))
 }
 
 // checkDeclared — общая часть всех разборов: отказ порта и незаполненный
@@ -142,19 +196,194 @@ func pairEngine(ctx context.Context, ours *ProtocolError, engineSentinel error) 
 
 // ── Справочник клиентов ─────────────────────────────────────────────────────
 
+// GetClient отдаёт движку запись клиента.
+//
+// # Клиент, которого справочник не знает, в доказательстве клиента
+//
+// В операции, где клиент доказывает себя (обмен, интроспекция, отзыв —
+// operationNotes.provesClient), движок спрашивает справочник ради
+// доказательства и на «клиента нет» отказывает СРАЗУ, не сверяя секрета.
+// Отказ неизвестному клиенту стоил бы тогда меньше отказа неверному секрету, а
+// на интроспекции ещё и назывался бы другими словами: время и текст ответа
+// стали бы прибором для перебора зарегистрированных клиентов.
+//
+// Поэтому неизвестному клиенту здесь отдаётся представление без единого права
+// (unregisteredClient), и движок идёт тем же путём, что с известным: к сверке
+// секрета портом службы (clientSecretHasher) — ровно один раз, — и отказ
+// приходит оттуда же и теми же словами. Доказать себя такое представление не
+// может: «совпал» о нём — нарушение контракта порта (verifyClientSecret).
+//
+// Вне доказательства клиента (точка авторизации) «клиента нет» — отказ, как
+// прежде: секрета там не предъявляют.
+//
+// Клиент, о котором спросили, записывается в ведомость операции: по ней хешер
+// церемонии узнаёт, чей секрет сверять.
+//
+// # Отказ справочника — отказ операции
+//
+// Справочник, который не ответил, — не «клиента нет» и не «клиент не доказан».
+// Движок оборачивает отказ этого вызова в свой отказ доказательства на обоих
+// путях — у точки токена и отзыва и у интроспекции, — но fromEngine поднимает
+// из цепочки наш случай только из перечня coarsenable, а отказа сервера в нём
+// нет. Без записи сбой хранилища стал бы отказом доказательства и выглядел бы
+// потоком неверных секретов. Поэтому отказ пишется в ведомость операции любым
+// случаем, и операция отвечает им, как отказом порта сверки
+// (verifyClientSecret).
+//
+// Случай отказа — из закрытого перечня (closedPortFailure): единственный
+// случай пакета, который контракт справочника объявляет, — «клиента нет», и он
+// разобран выше; любой другой наш случай — нарушение контракта, а не исход
+// протокола.
 func (b *storageBridge) GetClient(ctx context.Context, id string) (engine.Client, error) {
+	const op = "ClientDirectory.LookupClient"
 	ctx, cancel := b.deadline(ctx)
 	defer cancel()
 
+	notes := notesFrom(ctx)
 	reg, err := b.ports.Clients.LookupClient(ctx, id)
 	if err != nil {
-		ours := fromPort("ClientDirectory.LookupClient", err)
-		if ours.Code == CodeGrantNotFound {
-			return nil, pairEngine(ctx, ours, engine.ErrNotFound)
+		if CodeOf(err) == CodeGrantNotFound && notes.provesClient() {
+			notes.noteClientClaim(id, false)
+			return unregisteredClientOf(id), nil
 		}
-		return nil, note(ctx, ours)
+		return nil, directoryFailure(ctx, op, err)
 	}
+	notes.noteClientClaim(id, true)
 	return clientViewOf(reg), nil
+}
+
+// grantClient — запись клиента, которому выдан грант: её спрашивает сборка
+// запроса движка по записи кода или токена (requesterFromGrant). Отказ
+// справочника уходит отсюда движку уже переведённым (directoryFailure).
+//
+// Клиента, которому выдан грант, могли снять между выдачей и предъявлением, и
+// артефакт такого клиента негоден. Операция отвечает на него как на любой
+// негодный артефакт: обмен — `invalid_grant`, интроспекция — `active: false`,
+// отзыв — успехом без действия (RFC 7009 §2.2): отозвать грант вправе только
+// его клиент, а снятый клиент себя не докажет. Повтор, замеченный до сборки,
+// остаётся ответом операции: его пометка уже в ведомости
+// (markReplayedFamily).
+func (b *storageBridge) grantClient(ctx context.Context, id string) (ClientRegistration, error) {
+	const op = "ClientDirectory.LookupClient"
+	reg, err := b.ports.Clients.LookupClient(ctx, id)
+	if err != nil {
+		return ClientRegistration{}, directoryFailure(ctx, op, err)
+	}
+	return reg, nil
+}
+
+// directoryFailure переводит отказ справочника клиентов для движка — один
+// перевод на оба места вопроса справочнику: доказательство клиента
+// (GetClient) и сборку запроса по записи гранта (grantClient).
+//
+// «Клиента нет» — единственный случай пакета, который контракт справочника
+// объявляет, — сопрягается с часовым движка «записи нет»: без часового движок
+// принял бы его за поломку хранилища и ответил бы отказом сервера. В ведомость
+// этот случай не пишется: он не из перечня coarsenable, а записанный он
+// вытеснил бы вердикт движка там, где вердикт и есть ответ, — у интроспекции
+// «негоден» стал бы отказом.
+//
+// Любой другой отказ — отказ операции закрытым перечнем (closedPortFailure),
+// и он пишется в ведомость любым случаем: движок сжимает отказ справочника сам
+// — в отказ доказательства, у интроспекции в «токен негоден», у отзыва во
+// «временно недоступно», — и без записи сбой справочника стал бы вердиктом о
+// клиенте или о годном токене.
+func directoryFailure(ctx context.Context, op string, err error) error {
+	if CodeOf(err) == CodeGrantNotFound {
+		return pairEngine(ctx, fromPort(op, err), engine.ErrNotFound)
+	}
+	failure := closedPortFailure(op, err)
+	notesFrom(ctx).record(failure)
+	return failure
+}
+
+// ── Сверка секрета клиента ──────────────────────────────────────────────────
+
+// clientSecretHasher — хешер секретов в настройках движка, который сверяет
+// портом службы (Ports.ClientSecrets).
+//
+// Движок сверяет секрет клиента на двух путях — доказательство точек токена и
+// отзыва и своё у интроспекции, — и оба зовут хешер настроек ровно один раз на
+// клиента: прежних проверочных значений у представлений клиента нет (оборот
+// секретов — забота службы), и других сверок движок не делает. Хешер движка
+// по умолчанию на этих путях не участвует: функцию, цену и сравнение выбирает
+// служба.
+//
+// Хешировать хешер церемонии не умеет: проверочное значение чеканит служба.
+type clientSecretHasher struct {
+	bridge *storageBridge
+}
+
+// Compare сверяет предъявленный секрет портом службы. Проверочного значения,
+// которое передаёт движок, у церемонии нет — представления клиента отдают его
+// пустым; клиента хешер берёт из ведомости операции.
+func (h clientSecretHasher) Compare(ctx context.Context, _, presented []byte) error {
+	return h.bridge.verifyClientSecret(ctx, presented)
+}
+
+// Hash отказывает: проверочное значение секрета чеканит служба, а не
+// церемония (см. clientSecretHasher).
+func (clientSecretHasher) Hash(context.Context, []byte) ([]byte, error) {
+	return nil, misuse("the ceremony mints no client secret hash; the verification value belongs to the service")
+}
+
+var _ engine.Hasher = clientSecretHasher{}
+
+// verifyClientSecret — одна сверка секрета клиента, которого операция
+// доказывает.
+//
+// Исход порта становится ответом движку так:
+//   - «совпал» о зарегистрированном клиенте — клиент доказан;
+//   - «не совпал» — отказ clientSecretRefused, на который движок отвечает своим
+//     отказом доказательства: одним и тем же для неизвестного клиента и для
+//     неверного секрета;
+//   - отказ порта, вердикт вне словаря, «совпал» о клиенте, которого справочник
+//     не знает, и сверка вне доказательства клиента — отказ ОПЕРАЦИИ. Он
+//     пишется в ведомость любым случаем: на интроспекции движок отказа хешера
+//     не оборачивает, а на точке токена оборачивает в «клиент не доказан», и
+//     без записи несостоявшаяся сверка стала бы вердиктом «не совпал».
+//     Случай отказа порта — из закрытого перечня (closedPortFailure): в
+//     контракте сверки нет ни одного отказа со случаем пакета, и такой отказ —
+//     нарушение контракта, а не исход протокола.
+func (b *storageBridge) verifyClientSecret(ctx context.Context, presented []byte) error {
+	const op = "ClientSecretVerifier.VerifyClientSecret"
+	notes := notesFrom(ctx)
+	fail := func(failure *ProtocolError) error {
+		notes.record(failure)
+		return failure
+	}
+
+	claim, named := notes.claimedClient()
+	if !named {
+		return fail(failf(CodeCeremonyMisuse, nil,
+			"The authorization server was asked to verify a client secret outside a client authentication.", "",
+			op+": the operation looked up no client for authentication; the port was not called"))
+	}
+
+	ctx, cancel := b.deadline(ctx)
+	defer cancel()
+
+	verdict, err := b.ports.ClientSecrets.VerifyClientSecret(ctx, claim.clientID, NewPresentedSecret(string(presented)))
+	switch {
+	case err != nil:
+		return fail(closedPortFailure(op, err))
+	case !verdict.Declared():
+		return fail(contractBreach(op, "the verdict is neither SecretMatched nor SecretMismatched"))
+	case verdict == SecretMatched && !claim.registered:
+		return fail(contractBreach(op, "the verifier matched the secret of a client the directory does not know"))
+	case verdict == SecretMatched:
+		return nil
+	default:
+		return clientSecretRefused()
+	}
+}
+
+// clientSecretRefused — «секрет не совпал». Один конструктор и один текст на
+// оба случая, которые обязаны быть неотличимы: неизвестный клиент и неверный
+// секрет.
+func clientSecretRefused() *ProtocolError {
+	return failf(CodeInvalidClient, nil, "The client could not be authenticated.", "",
+		"ClientSecretVerifier.VerifyClientSecret: the presented secret did not match")
 }
 
 // ClientAssertionJWTValid и SetClientAssertionJWT — часть контракта
@@ -180,11 +409,23 @@ func clientAssertionsNotServed() *ProtocolError {
 
 // ── Коды авторизации ────────────────────────────────────────────────────────
 
+// CreateAuthorizeCodeSession кладёт запись кода — грант вместе с привязкой к
+// доказательству владения ключом. Привязка доезжает сюда потому, что
+// церемония называет оба её поля движку в перечне сохраняемых полей
+// (Config.SanitationWhiteList в New).
+//
+// Негодной привязки здесь быть не может: запрос без неё церемония отвергает
+// раньше, чем движок выпускает код (requireProofKey). Если она всё же пришла,
+// запись в хранилище не уезжает.
 func (b *storageBridge) CreateAuthorizeCodeSession(ctx context.Context, code string, request engine.Requester) error {
 	ctx, cancel := b.deadline(ctx)
 	defer cancel()
 
-	out, err := b.ports.AuthorizationCodes.StoreAuthorizationCode(ctx, code, grantFromRequester(request))
+	rec, bad := codeRecordFromRequester(request)
+	if bad != nil {
+		return note(ctx, bad)
+	}
+	out, err := b.ports.AuthorizationCodes.StoreAuthorizationCode(ctx, code, rec)
 	if bad := exactlyOneRow("AuthorizationCodeVault.StoreAuthorizationCode", out, err); bad != nil {
 		return note(ctx, bad)
 	}
@@ -193,66 +434,94 @@ func (b *storageBridge) CreateAuthorizeCodeSession(ctx context.Context, code str
 
 // GetAuthorizeCodeSession отдаёт грант по подписи кода.
 //
-// Погашенный код — ПОВТОР (RFC 6749 §4.1.2): грант его семейства
-// записывается в ведомость ДО сборки запроса, и отзыв исполняет церемония по
-// завершении операции — как на полосе токена обновления. Движок, увидев
-// часовой, отзывает и сам, но его исход после отзыва огрубляется: отказ его
-// отзыва был бы неотличим от успеха. Погашенный код без гранта — нарушение
-// контракта порта: отзывать нечего.
+// Погашенный код — ПОВТОР (RFC 6749 §4.1.2): грант его семейства и случай
+// повтора записываются в ведомость ДО сборки запроса (см. replayedCode), и
+// отзыв исполняет церемония по завершении операции — как на полосе токена
+// обновления. Движок, увидев часовой, отзывает и сам, но его исход после
+// отзыва огрубляется: отказ его отзыва был бы неотличим от успеха. Погашенный
+// код без гранта — нарушение контракта порта: отзывать нечего.
 //
-// Годный код записывается в ведомость как ПРЕДЪЯВЛЕННЫЙ: по нему повтор
-// узнаётся там, где грант мосту не приходит, — на нуле строк погашения и на
-// пропавшей записи PKCE.
+// Код, погашенный ЭТОЙ ЖЕ операцией, повтором не является: движок выбирает
+// код второй раз перед выдачей, уже после того, как церемония погасила его при
+// предъявлении (см. consumeCode).
+//
+// Годный код записывается в ведомость как ПРЕДЪЯВЛЕННЫЙ: по его гранту повтор
+// узнаётся на нуле строк погашения, а из его записи движок получает привязку
+// PKCE. Живой код без годной привязки S256 — порча записи службой, нарушение
+// контракта порта; на погашенном коде привязка не судится — отзыву семейства
+// она не нужна, и порча записи не вправе оставить семейство живым.
 func (b *storageBridge) GetAuthorizeCodeSession(ctx context.Context, code string, session engine.Session) (engine.Requester, error) {
 	ctx, cancel := b.deadline(ctx)
 	defer cancel()
 
 	const op = "AuthorizationCodeVault.FetchAuthorizationCode"
 	rec, err := b.ports.AuthorizationCodes.FetchAuthorizationCode(ctx, code)
-	if err == nil {
-		notesFrom(ctx).notePresentedCode(presentedCode{
-			signature:  code,
-			grantID:    rec.GrantID,
-			clientID:   rec.ClientID,
-			proofBound: proofBound(rec),
-		})
-		return requesterFromGrant(ctx, b.ports.Clients.LookupClient, rec, session)
-	}
-	ours := fromPort(op, err)
-	switch ours.Code {
-	case CodeAuthorizationCodeConsumed:
-		if rec.GrantID == "" {
+	if err != nil {
+		ours := fromPort(op, err)
+		switch {
+		case ours.Code == CodeAuthorizationCodeConsumed && rec.Grant.GrantID == "":
 			return nil, note(ctx, contractBreach(op, "a consumed authorization code was returned without its grant; "+
 				"what was issued under a replayed code cannot be revoked without its identifier"))
+		case ours.Code == CodeAuthorizationCodeConsumed && !notesFrom(ctx).consumedHere(code):
+			return b.replayedCode(ctx, op, rec, session)
+		case ours.Code == CodeAuthorizationCodeConsumed:
+			// Погашен этой операцией при предъявлении — выборка выдачи.
+		case ours.Code == CodeGrantNotFound:
+			return nil, pairEngine(ctx, ours, engine.ErrNotFound)
+		default:
+			return nil, note(ctx, ours)
 		}
-		ours = codeReplayed(op)
-		notesFrom(ctx).markReplayedFamily(rec.GrantID, rec.ClientID, ours)
-		requester, buildErr := requesterFromGrant(ctx, b.ports.Clients.LookupClient, rec, session)
-		if buildErr != nil {
-			// Как у токена обновления: движок получит отказ сборки, а
-			// церемония ответит повтором и отзовёт семейство по записанному
-			// гранту.
-			notesFrom(ctx).record(ours)
-			return nil, buildErr
-		}
-		return requester, pairEngine(ctx, ours, engine.ErrInvalidatedAuthorizeCode)
-	case CodeGrantNotFound:
-		return nil, pairEngine(ctx, ours, engine.ErrNotFound)
-	default:
-		return nil, note(ctx, ours)
 	}
+	if defect := bindingDefect(rec.ProofKey); defect != "" {
+		return nil, note(ctx, contractBreach(op, "a live authorization code came back without an S256 proof-key binding: "+defect))
+	}
+	notesFrom(ctx).notePresentedCode(presentedCode{signature: code, record: rec})
+	return requesterFromCode(ctx, b.grantClient, rec, session)
 }
 
-// InvalidateAuthorizeCodeSession гасит код.
+// replayedCode — ответ на выборку кода, погашенного не этой операцией: повтор.
+//
+// Грант семейства и случай повтора ведомость получает раньше сборки запроса
+// (markReplayedFamily). Сборка может отказать: клиента сняли, запись сеанса не
+// принимает hydrateSession. Тогда движок получает отказ сборки, а церемония
+// отзывает семейство по записанному гранту и отвечает повтором — первым
+// случаем ведомости, а не отказом сборки.
+func (b *storageBridge) replayedCode(ctx context.Context, op string, rec AuthorizationCodeRecord, session engine.Session) (engine.Requester, error) {
+	ours := codeReplayed(op)
+	notesFrom(ctx).markReplayedFamily(rec.Grant.GrantID, rec.Grant.ClientID, ours, RevocationCodeReplay)
+	requester, buildErr := requesterFromGrant(ctx, b.grantClient, rec.Grant, session)
+	if buildErr != nil {
+		return nil, buildErr
+	}
+	return requester, pairEngine(ctx, ours, engine.ErrInvalidatedAuthorizeCode)
+}
+
+// InvalidateAuthorizeCodeSession гасит код на выдаче — ту же запись, что и
+// снятие привязки PKCE (см. consumeCode).
+func (b *storageBridge) InvalidateAuthorizeCodeSession(ctx context.Context, code string) error {
+	return b.consumeCode(ctx, code)
+}
+
+// consumeCode гасит код РОВНО ОДИН РАЗ за операцию.
+//
+// Движок гасит код дважды за обмен и разными словами: снимает привязку PKCE
+// при предъявлении, до сверки доказательства (DeletePKCERequestSession), и
+// гасит код на выдаче (InvalidateAuthorizeCodeSession). У службы и привязка, и
+// код — одна запись, и оба действия означают одно: код использован. Первое из
+// них гасит запись и заносит погашение в ведомость; второе, найдя его там,
+// порта не зовёт.
 //
 // ЗДЕСЬ И ТОЛЬКО ЗДЕСЬ решается, состоится ли обмен: ноль затронутых строк
 // означает, что код погасил кто-то другой, — ОДНОВРЕМЕННЫЙ ПОВТОР: выборку
 // кода прошли двое. Обмен обязан не состояться, а семейство гранта — умереть
 // вместе с парой, которую получил опередивший: сервер не знает, который из
-// двоих законный. Движок на этом исходе откатывает свою единицу работы и не
-// отзывает ничего; грант берётся из ведомости (код выбран в этой же операции),
+// двоих законный. Грант берётся из ведомости (код выбран в этой же операции),
 // и отзыв исполняет церемония.
-func (b *storageBridge) InvalidateAuthorizeCodeSession(ctx context.Context, code string) error {
+func (b *storageBridge) consumeCode(ctx context.Context, code string) error {
+	if notesFrom(ctx).consumedHere(code) {
+		return nil
+	}
+
 	ctx, cancel := b.deadline(ctx)
 	defer cancel()
 
@@ -263,11 +532,13 @@ func (b *storageBridge) InvalidateAuthorizeCodeSession(ctx context.Context, code
 	}
 	switch {
 	case out.Rows() == 1:
+		notesFrom(ctx).noteConsumed(code)
 		return nil
 	case out.Rows() == 0:
 		ours := codeReplayed(op)
 		if presented, known := notesFrom(ctx).presentedCodeOf(code); known {
-			notesFrom(ctx).markReplayedFamily(presented.grantID, presented.clientID, ours)
+			notesFrom(ctx).markReplayedFamily(presented.record.Grant.GrantID, presented.record.Grant.ClientID,
+				ours, RevocationCodeReplay)
 		}
 		return pairEngine(ctx, ours, engine.ErrInvalidatedAuthorizeCode)
 	default:
@@ -276,24 +547,11 @@ func (b *storageBridge) InvalidateAuthorizeCodeSession(ctx context.Context, code
 }
 
 // codeReplayed — наш отказ на повтор кода. Один конструктор на все пути,
-// которыми повтор замечается: выборку погашенного кода, ноль строк погашения
-// и пропавшую запись PKCE у кода, к PKCE привязанного.
+// которыми повтор замечается: выборку погашенного кода и ноль строк погашения.
 func codeReplayed(op string) *ProtocolError {
 	return failf(CodeAuthorizationCodeConsumed, nil,
 		"The authorization code was already redeemed.",
 		"Every authorization code may be redeemed exactly once; what was issued under it has been revoked.", op)
-}
-
-// proofBound — привязан ли код к PKCE: у его записи есть `code_challenge`.
-// Поле доезжает до записи кода потому, что церемония называет его движку в
-// перечне сохраняемых полей (Config.SanitationWhiteList в New).
-func proofBound(rec GrantRecord) bool {
-	for _, challenge := range rec.Form["code_challenge"] {
-		if challenge != "" {
-			return true
-		}
-	}
-	return false
 }
 
 // ── Токены доступа ──────────────────────────────────────────────────────────
@@ -309,15 +567,38 @@ func (b *storageBridge) CreateAccessTokenSession(ctx context.Context, signature 
 	return nil
 }
 
+// GetAccessTokenSession отдаёт грант по подписи токена доступа — его jti.
+//
+// Пустая подпись — токен, который порт выпуска НЕ ОПОЗНАЛ
+// (artifactStrategy.AccessTokenSignature): пустого jti у выпущенного токена не
+// бывает, его отвергает выпуск (checkIssued). Хранилище по пустой подписи не
+// спрашивается. Если порт ответил «не наш», ответ — «записи нет». Если
+// опознание ОТКАЗАЛО, ответ — этот отказ, и он пишется в ведомость операции
+// любым случаем, а не только из перечня coarsenable: движок сжимает всякий
+// отказ интроспекции в «токен неактивен», а отказ отзыва — в «временно
+// недоступно», и без записи интроспекция назвала бы годный токен негодным.
+// Отказ опознания — (а) точнее любого вердикта движка и (б) означает, что
+// опознать токен доступа эта операция не смогла; операцию, которая всё же
+// нашла артефакт иным путём (токен обновления), запись не трогает —
+// ведомость читается только на отказе.
 func (b *storageBridge) GetAccessTokenSession(ctx context.Context, signature string, session engine.Session) (engine.Requester, error) {
 	ctx, cancel := b.deadline(ctx)
 	defer cancel()
+
+	if signature == "" {
+		notes := notesFrom(ctx)
+		if failure := notes.unidentifiedFailure(); failure != nil {
+			notes.record(failure)
+			return nil, failure
+		}
+		return nil, pairEngine(ctx, fromPort("AccessTokenIssuer.IdentifyAccessToken", ErrGrantNotFound), engine.ErrNotFound)
+	}
 
 	rec, err := b.ports.AccessTokens.FetchAccessToken(ctx, signature)
 	if err != nil {
 		return nil, notFoundAware(ctx, "AccessTokenVault.FetchAccessToken", err)
 	}
-	return requesterFromGrant(ctx, b.ports.Clients.LookupClient, rec, session)
+	return requesterFromGrant(ctx, b.grantClient, rec, session)
 }
 
 func (b *storageBridge) DeleteAccessTokenSession(ctx context.Context, signature string) error {
@@ -349,9 +630,11 @@ func (b *storageBridge) CreateRefreshTokenSession(ctx context.Context, signature
 // Обёрнутый токен — ПОВТОР, и он отдаётся движку ВМЕСТЕ с грантом и часовым
 // «токен неактивен»: по этому часовому движок на пути обмена отзывает
 // артефакты гранта (`flow_refresh.go`, handleRefreshTokenReuse), а для отзыва
-// ему нужен идентификатор гранта. Грант семейства записывается в ведомость
-// ДО сборки запроса: если сборка откажет (клиента успели снять), отзыв всё
-// равно состоится — его исполнит церемония.
+// ему нужен идентификатор гранта. Грант семейства и случай повтора
+// записываются в ведомость ДО сборки запроса (markReplayedFamily). Если сборка
+// откажет (клиента успели снять, запись сеанса не принимает hydrateSession),
+// отзыв всё равно состоится — его исполнит церемония, — а ответом операции
+// останется повтор, а не отказ сборки.
 func (b *storageBridge) GetRefreshTokenSession(ctx context.Context, signature string, session engine.Session) (engine.Requester, error) {
 	ctx, cancel := b.deadline(ctx)
 	defer cancel()
@@ -359,7 +642,7 @@ func (b *storageBridge) GetRefreshTokenSession(ctx context.Context, signature st
 	const op = "RefreshTokenVault.FetchRefreshToken"
 	rec, err := b.ports.RefreshTokens.FetchRefreshToken(ctx, signature)
 	if err == nil {
-		return requesterFromGrant(ctx, b.ports.Clients.LookupClient, rec, session)
+		return requesterFromGrant(ctx, b.grantClient, rec, session)
 	}
 	ours := fromPort(op, err)
 	switch ours.Code {
@@ -369,13 +652,9 @@ func (b *storageBridge) GetRefreshTokenSession(ctx context.Context, signature st
 				"the family of a replayed token cannot be revoked without its identifier"))
 		}
 		ours = refreshReplayed(op)
-		notesFrom(ctx).markReplayedFamily(rec.GrantID, rec.ClientID, ours)
-		requester, buildErr := requesterFromGrant(ctx, b.ports.Clients.LookupClient, rec, session)
+		notesFrom(ctx).markReplayedFamily(rec.GrantID, rec.ClientID, ours, RevocationRefreshReplay)
+		requester, buildErr := requesterFromGrant(ctx, b.grantClient, rec, session)
 		if buildErr != nil {
-			// Случай повтора записывается и тогда, когда запрос собрать не
-			// удалось: движок получит отказ сборки, а церемония ответит
-			// повтором и отзовёт семейство по записанному гранту.
-			notesFrom(ctx).record(ours)
 			return nil, buildErr
 		}
 		return requester, pairEngine(ctx, ours, engine.ErrInactiveToken)
@@ -421,7 +700,7 @@ func (b *storageBridge) RotateRefreshToken(ctx context.Context, grantID, signatu
 				"the family of a replayed token cannot be revoked without it"))
 		}
 		ours := refreshReplayed(op)
-		notesFrom(ctx).markReplayedFamily(grantID, "", ours)
+		notesFrom(ctx).markReplayedFamily(grantID, "", ours, RevocationRefreshReplay)
 		return pairEngine(ctx, ours, engine.ErrInactiveToken)
 	default:
 		return note(ctx, contractBreach(op, "the single statement touched more than one row"))
@@ -437,85 +716,107 @@ func refreshReplayed(op string) *ProtocolError {
 }
 
 // ── Отзыв по гранту ─────────────────────────────────────────────────────────
+//
+// Оба отзыва зовут двое: движок (последовательный повтор кода и токена
+// обновления, отзыв живого артефакта клиентом) и церемония
+// (revokeReplayedFamily). Движок причины не передаёт — его хранилище отзывает
+// по одному идентификатору запроса, — поэтому причину порту называет ведомость
+// операции (operationNotes.revocationReason).
 
 func (b *storageBridge) RevokeRefreshToken(ctx context.Context, grantID string) error {
+	const op = "GrantRevoker.RevokeGrantRefreshTokens"
+	reason, bad := revocationReasonFor(ctx, op)
+	if bad != nil {
+		return bad
+	}
+
 	ctx, cancel := b.deadline(ctx)
 	defer cancel()
 
-	out, err := b.ports.Grants.RevokeGrantRefreshTokens(ctx, grantID)
-	if bad := anyRows("GrantRevoker.RevokeGrantRefreshTokens", out, err); bad != nil {
+	out, err := b.ports.Grants.RevokeGrantRefreshTokens(ctx, grantID, reason)
+	if bad := anyRows(op, out, err); bad != nil {
 		return note(ctx, bad)
 	}
 	return nil
 }
 
 func (b *storageBridge) RevokeAccessToken(ctx context.Context, grantID string) error {
+	const op = "GrantRevoker.RevokeGrantAccessTokens"
+	reason, bad := revocationReasonFor(ctx, op)
+	if bad != nil {
+		return bad
+	}
+
 	ctx, cancel := b.deadline(ctx)
 	defer cancel()
 
-	out, err := b.ports.Grants.RevokeGrantAccessTokens(ctx, grantID)
-	if bad := anyRows("GrantRevoker.RevokeGrantAccessTokens", out, err); bad != nil {
+	out, err := b.ports.Grants.RevokeGrantAccessTokens(ctx, grantID, reason)
+	if bad := anyRows(op, out, err); bad != nil {
 		return note(ctx, bad)
 	}
 	return nil
+}
+
+// revocationReasonFor — причина отзыва в операции, которой принадлежит ctx.
+//
+// Причины нет — порт не зовётся. Подставить её нечем: значения «не названа» у
+// словаря нет, а любое из трёх было бы ложью службе в её журнал. Отзыв в
+// операции, которая причины не называет и повтора в которой не замечено, —
+// дефект провязки церемонии, а не отказ хранилища и не отказ протокола:
+// каждая операция, в которой движок отзывает, причину называет (Revoke) либо
+// замечает повтор раньше отзыва (Exchange).
+func revocationReasonFor(ctx context.Context, op string) (RevocationReason, *ProtocolError) {
+	reason, named := notesFrom(ctx).revocationReason()
+	if !named {
+		return "", failf(CodeCeremonyMisuse, nil,
+			"The authorization server was about to revoke a grant without knowing why.", "",
+			op+": the operation names no revocation reason and noticed no replay; the port was not called")
+	}
+	return reason, nil
 }
 
 // ── Доказательство владения ключом ──────────────────────────────────────────
+//
+// Привязка кода к доказательству — поля ЗАПИСИ КОДА (AuthorizationCodeRecord),
+// и отдельного хранилища у неё нет. Три метода ниже — часть контракта
+// хранилища обработчика PKCE движка, и каждый переводит его слово на эту одну
+// запись.
 
-func (b *storageBridge) CreatePKCERequestSession(ctx context.Context, signature string, request engine.Requester) error {
-	ctx, cancel := b.deadline(ctx)
-	defer cancel()
-
-	out, err := b.ports.ProofKeys.StoreProofKeyRequest(ctx, signature, grantFromRequester(request))
-	if bad := exactlyOneRow("ProofKeyVault.StoreProofKeyRequest", out, err); bad != nil {
-		return note(ctx, bad)
-	}
+// CreatePKCERequestSession: писать нечего. Обработчик PKCE движка стоит ПОСЛЕ
+// обработчика кода (порядок закреплён в New) и привязывает к коду то, что уже
+// уехало в хранилище вместе с кодом: оба берут поля из одного и того же
+// запроса авторизации. Вторая запись под подписью кода была бы вторым ходом
+// там, где служба держит одну строку.
+func (b *storageBridge) CreatePKCERequestSession(context.Context, string, engine.Requester) error {
 	return nil
 }
 
-// GetPKCERequestSession отдаёт запрос PKCE по подписи кода.
-//
-// # Пропавшая запись у кода, привязанного к PKCE, — ПОВТОР
-//
-// Запись PKCE снимает движок при предъявлении кода, ДО сверки доказательства
-// и до погашения кода. Значит у кода, привязанного к PKCE (запись кода,
-// выбранная в этой же операции, несёт `code_challenge`), запись пропадает
-// ровно тогда, когда код уже предъявлялся: одновременно — и тот обмен ещё
-// идёт, — либо раньше, с неверным доказательством. Это второе предъявление
-// кода (RFC 6749 §4.1.2), и отвечается оно как повтор: семейство гранта
-// отзывается, а движок получает НЕ «записи нет» — на «записи нет» при пустом
-// доказательстве и PKCE, не требуемом настройками, он выдал бы токены по коду,
-// к PKCE привязанному.
-//
-// У кода без привязки к PKCE записи не было никогда, и «записи нет» —
-// законный исход.
+// GetPKCERequestSession отдаёт привязку PKCE по подписи кода — из записи кода,
+// выбранной в этой же операции: обработчик кода движка выбирает код раньше,
+// чем обработчик PKCE спрашивает привязку, и отказ той выборки до обработчика
+// PKCE не доходит. Спрос привязки у кода, которого операция не выбирала, —
+// дефект провязки, а не «PKCE не было»: ответить «записи нет» значило бы
+// позволить движку судить код без привязки.
 func (b *storageBridge) GetPKCERequestSession(ctx context.Context, signature string, session engine.Session) (engine.Requester, error) {
+	presented, known := notesFrom(ctx).presentedCodeOf(signature)
+	if !known {
+		return nil, failf(CodeCeremonyMisuse, nil,
+			"The authorization server was asked for the proof key of a code it did not read.", "",
+			"engine storage: GetPKCERequestSession came before GetAuthorizeCodeSession of the same code")
+	}
+
 	ctx, cancel := b.deadline(ctx)
 	defer cancel()
 
-	const op = "ProofKeyVault.FetchProofKeyRequest"
-	rec, err := b.ports.ProofKeys.FetchProofKeyRequest(ctx, signature)
-	if err != nil {
-		ours := fromPort(op, err)
-		if presented, known := notesFrom(ctx).presentedCodeOf(signature); ours.Code == CodeGrantNotFound && known && presented.proofBound {
-			replay := codeReplayed(op)
-			notesFrom(ctx).markReplayedFamily(presented.grantID, presented.clientID, replay)
-			return nil, pairEngine(ctx, replay, engine.ErrInvalidatedAuthorizeCode)
-		}
-		return nil, notFoundAware(ctx, op, err)
-	}
-	return requesterFromGrant(ctx, b.ports.Clients.LookupClient, rec, session)
+	return requesterFromCode(ctx, b.grantClient, presented.record, session)
 }
 
+// DeletePKCERequestSession — привязку снимают вместе с кодом: при
+// предъявлении, до сверки доказательства, код гасится (см. consumeCode).
+// Предъявление и есть использование кода: код, предъявленный с неверным
+// доказательством, второго предъявления не получает — оно отвечается повтором.
 func (b *storageBridge) DeletePKCERequestSession(ctx context.Context, signature string) error {
-	ctx, cancel := b.deadline(ctx)
-	defer cancel()
-
-	out, err := b.ports.ProofKeys.DropProofKeyRequest(ctx, signature)
-	if bad := atMostOneRow("ProofKeyVault.DropProofKeyRequest", out, err); bad != nil {
-		return note(ctx, bad)
-	}
-	return nil
+	return b.consumeCode(ctx, signature)
 }
 
 // ── Единица работы ──────────────────────────────────────────────────────────
@@ -542,6 +843,8 @@ func (b *transactionalStorageBridge) BeginTX(ctx context.Context) (context.Conte
 	return txCtx, nil
 }
 
+// Commit закрепляет единицу работы в сроке ОПЕРАЦИИ: закрепить работу после
+// срока значило бы отдать успех тому, кто уже получил отказ по сроку.
 func (b *transactionalStorageBridge) Commit(ctx context.Context) error {
 	inner, cancel := b.deadline(ctx)
 	defer cancel()
@@ -552,8 +855,20 @@ func (b *transactionalStorageBridge) Commit(ctx context.Context) error {
 	return nil
 }
 
+// Rollback откатывает единицу работы в контексте, отвязанном от отмены
+// операции, со своим сроком (Config.PortTimeout).
+//
+// Движок откатывает, когда запись в единице работы отказала, и отказ этот
+// часто и есть истёкший срок операции: откат, унаследовавший его, получил бы
+// мёртвый контекст и не исполнился бы, и транзакция службы осталась бы
+// открытой до разрыва соединения. Основания те же, что у отзыва семейства
+// после повтора (Ceremony.revokeReplayedFamily): откат — уборка за операцией,
+// которая уже кончилась отказом, и вызывающий, оборвавший запрос, не должен
+// оставлять её незавершённой. Бессрочным откат не становится: срок у него
+// свой. Значения контекста — транзакция службы и ведомость операции —
+// сохраняются.
 func (b *transactionalStorageBridge) Rollback(ctx context.Context) error {
-	inner, cancel := b.deadline(ctx)
+	inner, cancel := b.deadline(context.WithoutCancel(ctx))
 	defer cancel()
 
 	if err := b.ports.Transaction.Rollback(inner); err != nil {

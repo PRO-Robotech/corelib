@@ -15,15 +15,30 @@ package oauthceremony_test
 
 import (
 	"context"
+	"crypto/rand"
+	"crypto/subtle"
+	"encoding/hex"
+	"errors"
+	"fmt"
+	"reflect"
+	"slices"
 	"sync"
+	"testing"
 	"time"
 
 	"github.com/PRO-Robotech/corelib/oauthceremony"
+	"github.com/PRO-Robotech/corelib/tokenpolicy"
 )
 
+// codeRow — строка кода авторизации так, как её держит служба: грант, привязка
+// к доказательству владения ключом (вызов и метод — колонки той же строки, как
+// `code_challenge` и `code_challenge_method` у `authorization_codes` службы
+// доступа) и отметка погашения.
 type codeRow struct {
-	grant    oauthceremony.GrantRecord
-	consumed bool
+	grant     oauthceremony.GrantRecord
+	challenge string
+	method    string
+	consumed  bool
 }
 
 type refreshRow struct {
@@ -39,7 +54,16 @@ type memoryPorts struct {
 	codes   map[string]*codeRow
 	access  map[string]oauthceremony.GrantRecord
 	refresh map[string]*refreshRow
-	proof   map[string]oauthceremony.GrantRecord
+
+	// secrets — проверочные значения секретов клиентов, как их держит служба:
+	// клиент → секрет. У службы здесь лежит значение хеш-функции, у подставки —
+	// сам секрет; сверка — постоянного времени и у той, и у другой.
+	secrets map[string]string
+	// verifications — каждый вызов порта сверки секрета в порядке прихода: так
+	// проба считает вызовы и видит, что порт получил.
+	verifications []verifierCall
+	// verifyOverride подменяет вердикт сверки. Пусто — сверка как есть.
+	verifyOverride func(clientID string) (oauthceremony.SecretVerdict, error)
 
 	// revoked — гранты, чьё семейство отозвано. Ведётся подставкой, чтобы
 	// проба утверждала СОСТОЯНИЕ гранта после отказа, а не только текст
@@ -53,28 +77,197 @@ type memoryPorts struct {
 	// fetchRefreshOverride подменяет исход выборки токена обновления.
 	fetchRefreshOverride func(signature string) (oauthceremony.GrantRecord, error)
 	// fetchCodeOverride подменяет исход выборки кода авторизации.
-	fetchCodeOverride func(signature string) (oauthceremony.GrantRecord, error)
+	fetchCodeOverride func(signature string) (oauthceremony.AuthorizationCodeRecord, error)
 
 	// refreshFetchGate — точка встречи одновременных выборок токена
 	// обновления. Пусто — выборка не ждёт никого.
 	refreshFetchGate *rendezvous
 
-	// codeFetchGate, proofFetchGate, consumeGate — точки встречи
-	// одновременных обменов одного кода: на выборке кода (до выборки PKCE),
-	// на выборке запроса PKCE и перед погашением кода. Пусто — не ждёт никто.
-	codeFetchGate  *rendezvous
-	proofFetchGate *rendezvous
-	consumeGate    *rendezvous
-
-	// proofTaken — если задан, ВТОРАЯ и последующие выборки запроса PKCE ждут,
-	// пока первую запись PKCE не снимут. Так воспроизводится ровно тот
-	// порядок, в котором проигравший обмен находит запись PKCE уже снятой.
-	proofTaken     chan struct{}
-	proofTakenOnce sync.Once
-	proofFetches   int
+	// codeFetchGate, consumeGate — точки встречи одновременных обменов одного
+	// кода: на выборке кода и перед его погашением. Пусто — не ждёт никто.
+	codeFetchGate *rendezvous
+	consumeGate   *rendezvous
 
 	// revokeFailure — отказ порта отзыва. Пусто — отзыв исполняется.
 	revokeFailure error
+
+	// revocations — каждый вызов порта отзыва в порядке прихода: метод,
+	// грант и ПРИЧИНА, которую назвала церемония. Ведётся подставкой, чтобы
+	// проба утверждала причину, полученную портом, а не только факт вызова.
+	revocations []revocationCall
+
+	// issuer — порт выпуска токена доступа: у службы он живёт рядом с её
+	// хранилищем и подписантом, здесь — рядом с подставкой хранилища.
+	issuer *recordingIssuer
+}
+
+// verifierCall — один вызов порта сверки секрета так, как его увидела служба:
+// о ком спросили, что предъявлено, какой срок пришёл с контекстом вызова и что
+// порт ответил. limited — у контекста был срок; remaining — сколько от него
+// оставалось в миг вызова; verdict — вердикт, который порт отдал церемонии.
+type verifierCall struct {
+	clientID  string
+	presented string
+	limited   bool
+	remaining time.Duration
+	verdict   oauthceremony.SecretVerdict
+}
+
+// decoySecret — приманка подставки: против неё сверяется секрет клиента,
+// которого у службы нет, чтобы отказ стоил столько же, сколько отказ неверному
+// секрету. Исход этой сверки выбрасывается.
+const decoySecret = "decoy-verifier-of-the-declared-class"
+
+// revocationCall — один вызов порта отзыва так, как его увидела служба.
+type revocationCall struct {
+	method  string
+	grantID string
+	reason  oauthceremony.RevocationReason
+}
+
+// recordingIssuer — подставка порта выпуска токена доступа.
+//
+// Держит СЕМАНТИКУ порта так, как её держит подписант службы: момент выпуска
+// берётся с часов, которые проба вправе остановить — но не раньше начала
+// секунды вызова, иначе выпуск нарушает контракт порта; срок — не дальше
+// границы, названной церемонией (Session.ExpiresAt[TokenKindAccess]), и не
+// длиннее своего потолка, в целых секундах. Опознание отвечает идентификатором
+// ТОЛЬКО на токен, выпущенный этой подставкой: чужое значение —
+// ErrGrantNotFound, как токен с чужой подписью у настоящего подписанта.
+// Подставка, опознающая всякое предъявленное, сделала бы пробу подделки
+// бессмысленной. Срока опознание не судит — как велит контракт: истёкший
+// токен, выпущенный здесь, опознаётся своим jti.
+type recordingIssuer struct {
+	mu sync.Mutex
+
+	// now — часы выпуска. Проба, утверждающая срок в ответе точным
+	// равенством, останавливает их.
+	now func() time.Time
+	// ceiling — потолок срока, как MaxTokenTTL у подписанта службы.
+	ceiling time.Duration
+
+	// byToken — выпущенное: значение токена → выпуск.
+	byToken map[string]oauthceremony.IssuedAccessToken
+	// log — выпуски по порядку, с грантом, который церемония назвала.
+	log []issuance
+
+	// reshape правит выпуск перед возвратом: так проба контракта порта
+	// меняет в выпуске РОВНО ОДИН факт. Пусто — выпуск как есть.
+	reshape func(grant oauthceremony.GrantRecord, issued *oauthceremony.IssuedAccessToken)
+	// issueFailure — отказ выпуска. Пусто — выпуск исполняется.
+	issueFailure error
+	// identifyFailure — отказ опознания. Пусто — опознание исполняется.
+	identifyFailure error
+	// identifyEmpty — опознание отвечает пустым идентификатором без отказа.
+	identifyEmpty bool
+	// hold задерживает выпуск ДО того, как взяты часы выпуска, и без замка
+	// подставки: так проба ставит выпуск после события в других портах.
+	// Отказ hold — отказ выпуска. Пусто — выпуск не ждёт.
+	hold func(ctx context.Context) error
+}
+
+// issuance — один выпуск: что церемония назвала и что подставка вернула.
+type issuance struct {
+	grant  oauthceremony.GrantRecord
+	issued oauthceremony.IssuedAccessToken
+}
+
+func newRecordingIssuer() *recordingIssuer {
+	return &recordingIssuer{
+		now:     time.Now,
+		ceiling: tokenpolicy.MaxTokenTTL,
+		byToken: map[string]oauthceremony.IssuedAccessToken{},
+	}
+}
+
+// IssueAccessToken выпускает токен сроком не дальше границы церемонии.
+func (f *recordingIssuer) IssueAccessToken(ctx context.Context, grant oauthceremony.GrantRecord) (oauthceremony.IssuedAccessToken, error) {
+	f.mu.Lock()
+	hold := f.hold
+	f.mu.Unlock()
+	if hold != nil {
+		if err := hold(ctx); err != nil {
+			return oauthceremony.IssuedAccessToken{}, err
+		}
+	}
+
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	if f.issueFailure != nil {
+		return oauthceremony.IssuedAccessToken{}, f.issueFailure
+	}
+	notAfter, named := grant.Session.ExpiresAt[oauthceremony.TokenKindAccess]
+	if !named {
+		return oauthceremony.IssuedAccessToken{}, errors.New("recording issuer: the ceremony named no expiry bound for the access token")
+	}
+	issuedAt := f.now()
+	lifetime := min(f.ceiling, notAfter.Sub(issuedAt)).Truncate(time.Second)
+	if lifetime <= 0 {
+		return oauthceremony.IssuedAccessToken{}, errors.New("recording issuer: the expiry bound has already passed")
+	}
+
+	token, id := randomHex(24), "jti-"+randomHex(12)
+	issued := oauthceremony.IssuedAccessToken{
+		Token:     "at." + token,
+		ID:        id,
+		IssuedAt:  issuedAt,
+		ExpiresAt: issuedAt.Add(lifetime),
+	}
+	if f.reshape != nil {
+		f.reshape(grant, &issued)
+	}
+	f.byToken[issued.Token] = issued
+	f.log = append(f.log, issuance{grant: grant, issued: issued})
+	return issued, nil
+}
+
+// IdentifyAccessToken отвечает идентификатором выпущенного здесь токена.
+func (f *recordingIssuer) IdentifyAccessToken(_ context.Context, token string) (string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	switch {
+	case f.identifyFailure != nil:
+		return "", f.identifyFailure
+	case f.identifyEmpty:
+		return "", nil
+	}
+	issued, found := f.byToken[token]
+	if !found {
+		return "", oauthceremony.ErrGrantNotFound
+	}
+	return issued.ID, nil
+}
+
+// issuances отдаёт копию журнала выпусков.
+func (f *recordingIssuer) issuances() []issuance {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]issuance(nil), f.log...)
+}
+
+// setIdentifyFailure меняет отказ опознания под замком: проба ставит и снимает
+// его между операциями.
+func (f *recordingIssuer) setIdentifyFailure(err error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.identifyFailure = err
+}
+
+// setIssueFailure — то же для отказа выпуска.
+func (f *recordingIssuer) setIssueFailure(err error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.issueFailure = err
+}
+
+func randomHex(n int) string {
+	b := make([]byte, n)
+	if _, err := rand.Read(b); err != nil {
+		panic("НЕ ВЫПОЛНИЛОСЬ: источник случайности подставки отказал: " + err.Error())
+	}
+	return hex.EncodeToString(b)
 }
 
 // rendezvous — встреча ровно n участников. Пока не собрались все, каждый
@@ -162,14 +355,374 @@ func (m *memoryPorts) familyRevoked(grantID string) bool {
 	return m.revoked[grantID]
 }
 
+// revocationsOf — вызовы порта отзыва по гранту, в порядке прихода.
+func (m *memoryPorts) revocationsOf(grantID string) []revocationCall {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	var calls []revocationCall
+	for _, call := range m.revocations {
+		if call.grantID == grantID {
+			calls = append(calls, call)
+		}
+	}
+	return calls
+}
+
+// storedCodeView — единственная выданная запись кода так, как её видит служба.
+type storedCodeView struct {
+	signature string
+	challenge string
+	method    string
+	form      map[string][]string
+}
+
+// storedCode отдаёт единственную запись кода. Запись не одна — проба не
+// создала своего условия, и это «не выполнилось», а не красное.
+func (m *memoryPorts) storedCode(t *testing.T) storedCodeView {
+	t.Helper()
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if len(m.codes) != 1 {
+		t.Fatalf("НЕ ВЫПОЛНИЛОСЬ: в хранилище кодов %d шт, ожидался 1", len(m.codes))
+	}
+	for signature, row := range m.codes {
+		return storedCodeView{signature: signature, challenge: row.challenge, method: row.method, form: row.grant.Form}
+	}
+	return storedCodeView{}
+}
+
+// rebindStoredCode переписывает привязку единственной записи кода — так, как её
+// переписала бы служба (или порча строки) между выдачей и обменом.
+func (m *memoryPorts) rebindStoredCode(t *testing.T, challenge, method string) {
+	t.Helper()
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if len(m.codes) != 1 {
+		t.Fatalf("НЕ ВЫПОЛНИЛОСЬ: в хранилище кодов %d шт, ожидался 1", len(m.codes))
+	}
+	for _, row := range m.codes {
+		row.challenge, row.method = challenge, method
+	}
+}
+
+// sweepConsumedCode снимает запись погашенного кода под подписью signature —
+// так, как её сняла бы уборка службы. Под подписью нет погашенного кода —
+// проба не создала своего условия, и это «не выполнилось», а не красное.
+func (m *memoryPorts) sweepConsumedCode(t *testing.T, signature string) {
+	t.Helper()
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	row, found := m.codes[signature]
+	if !found || !row.consumed {
+		t.Fatalf("НЕ ВЫПОЛНИЛОСЬ: под подписью %s погашенного кода нет (запись есть: %t) — снимать нечего",
+			signature, found)
+	}
+	delete(m.codes, signature)
+}
+
+// codeExpiresAt — срок, записанный у кода под подписью signature: его движок
+// читает, решая, истёк ли код. Записи нет или срока в ней нет — проба не
+// создала своего условия.
+func (m *memoryPorts) codeExpiresAt(t *testing.T, signature string) time.Time {
+	t.Helper()
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	row, found := m.codes[signature]
+	if !found {
+		t.Fatalf("НЕ ВЫПОЛНИЛОСЬ: под подписью %s записи кода нет", signature)
+	}
+	expiresAt := row.grant.Session.ExpiresAt[oauthceremony.TokenKindAuthorizationCode]
+	if expiresAt.IsZero() {
+		t.Fatalf("НЕ ВЫПОЛНИЛОСЬ: у записи кода под подписью %s срока нет: %v", signature, row.grant.Session.ExpiresAt)
+	}
+	return expiresAt
+}
+
+// ageCodeRecord старит запись кода под подписью signature на by: каждое
+// мгновение записи сдвигается на by назад. Всякий, кто сравнивает записанное
+// мгновение с нынешним — движок, мост, служба, — видит у этой записи by
+// прошедшего времени. Истечение кода поэтому наблюдается без паузы на часах, и
+// исход пробы не зависит от того, сколько процессора досталось её шагам.
+//
+// Сдвигаются ВСЕ мгновения записи гранта, а не один срок: запись со сдвинутым
+// сроком и прежним мигом выдачи — не прошедшее время, а другая запись, и
+// проверка, судящая срок от мига выдачи, её не узнала бы. Перечня полей у
+// подставки нет: мгновения находит обход самой записи (agedCopy), и поле,
+// которое запись получит завтра, состарится вместе с прочими. Перечень,
+// выписанный рукой, однажды уже не узнал поля, пришедшего в запись позже него.
+//
+// Состаренность судится исходом, а не устройством сдвига: мгновения записи
+// снимаются до и после (instantsOf) и сверяются поштучно. Записи нет, мига
+// выдачи нет, форма записи сдвигу не поддаётся, или хоть одно мгновение не
+// сдвинулось ровно на by, — проба не создала своего условия.
+func (m *memoryPorts) ageCodeRecord(t *testing.T, signature string, by time.Duration) {
+	t.Helper()
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	row, found := m.codes[signature]
+	if !found {
+		t.Fatalf("НЕ ВЫПОЛНИЛОСЬ: под подписью %s записи кода нет — старить нечего", signature)
+	}
+	if row.grant.IssuedAt.IsZero() {
+		t.Fatalf("НЕ ВЫПОЛНИЛОСЬ: у записи кода под подписью %s нет мига выдачи — сдвигать не от чего", signature)
+	}
+	aged, err := agedCopy(row.grant, -by)
+	if err != nil {
+		t.Fatalf("НЕ ВЫПОЛНИЛОСЬ: запись кода под подписью %s не состарить: %v", signature, err)
+	}
+	off, err := instantsNotShifted(row.grant, aged, -by)
+	switch {
+	case err != nil:
+		t.Fatalf("НЕ ВЫПОЛНИЛОСЬ: мгновения записи кода под подписью %s не снять: %v", signature, err)
+	case len(off) > 0:
+		t.Fatalf("НЕ ВЫПОЛНИЛОСЬ: мгновения %v записи кода не сдвинуты на %s: состаренная запись не была бы "+
+			"прошедшим временем", off, -by)
+	}
+	row.grant = aged
+}
+
+// agedCopy — копия value, в которой каждое ненулевое мгновение (time.Time где
+// угодно по составу значения: само, под указателем и под `any`, в срезе, в
+// массиве, в значении карты, во вложенной структуре) сдвинуто на by.
+//
+// Копия, а не правка на месте: карты и срезы записи могли прийти из сеанса
+// движка, и правка на месте тронула бы его. Нулевое мгновение — «значения
+// нет», а не момент, и остаётся нулевым: состаренное отсутствие стало бы
+// значением. Две формы сдвигу не поддаются, и обе — отказ, а не пропуск:
+// неэкспортированное поле, чей тип несёт мгновение (его не записать), и ключ
+// карты, чей тип несёт мгновение (сдвиг ключа менял бы саму карту).
+func agedCopy[T any](value T, by time.Duration) (T, error) {
+	aged, err := agedValue(reflect.ValueOf(&value).Elem(), by, reflect.TypeFor[T]().Name())
+	if err != nil {
+		var zero T
+		return zero, err
+	}
+	return aged.Interface().(T), nil
+}
+
+func agedValue(v reflect.Value, by time.Duration, path string) (reflect.Value, error) {
+	if v.Type() == timeType {
+		at := v.Interface().(time.Time)
+		if at.IsZero() {
+			return v, nil
+		}
+		return reflect.ValueOf(at.Add(by)), nil
+	}
+	out := reflect.New(v.Type()).Elem()
+	switch v.Kind() {
+	case reflect.Pointer:
+		if v.IsNil() {
+			return v, nil
+		}
+		elem, err := agedValue(v.Elem(), by, path)
+		if err != nil {
+			return reflect.Value{}, err
+		}
+		out.Set(reflect.New(v.Type().Elem()))
+		out.Elem().Set(elem)
+	case reflect.Interface:
+		if v.IsNil() {
+			return v, nil
+		}
+		elem, err := agedValue(v.Elem(), by, path)
+		if err != nil {
+			return reflect.Value{}, err
+		}
+		out.Set(elem)
+	case reflect.Slice, reflect.Array:
+		if v.Kind() == reflect.Slice {
+			if v.IsNil() {
+				return v, nil
+			}
+			out = reflect.MakeSlice(v.Type(), v.Len(), v.Len())
+		}
+		for i := range v.Len() {
+			elem, err := agedValue(v.Index(i), by, fmt.Sprintf("%s[%d]", path, i))
+			if err != nil {
+				return reflect.Value{}, err
+			}
+			out.Index(i).Set(elem)
+		}
+	case reflect.Map:
+		if v.IsNil() {
+			return v, nil
+		}
+		if carriesInstant(v.Type().Key(), map[reflect.Type]bool{}) {
+			return reflect.Value{}, fmt.Errorf("ключ карты %s (%s) несёт мгновение: сдвиг ключа менял бы саму карту",
+				path, v.Type().Key())
+		}
+		out = reflect.MakeMapWithSize(v.Type(), v.Len())
+		for iter := v.MapRange(); iter.Next(); {
+			elem, err := agedValue(iter.Value(), by, fmt.Sprintf("%s[%v]", path, iter.Key()))
+			if err != nil {
+				return reflect.Value{}, err
+			}
+			out.SetMapIndex(iter.Key(), elem)
+		}
+	case reflect.Struct:
+		out.Set(v)
+		for i := range v.NumField() {
+			field := v.Type().Field(i)
+			fieldPath := path + "." + field.Name
+			if !field.IsExported() {
+				if carriesInstant(field.Type, map[reflect.Type]bool{}) {
+					return reflect.Value{}, fmt.Errorf("поле %s не экспортировано, а его тип несёт мгновение: "+
+						"записать сдвинутое нечем", fieldPath)
+				}
+				continue
+			}
+			elem, err := agedValue(v.Field(i), by, fieldPath)
+			if err != nil {
+				return reflect.Value{}, err
+			}
+			out.Field(i).Set(elem)
+		}
+	default:
+		return v, nil
+	}
+	return out, nil
+}
+
+// instantsOf снимает все ненулевые мгновения значения v по путям — поле через
+// точку, элемент среза и массива в [i], значение карты в [ключ] — в into.
+// Обход по составу тот же, что у agedValue, но код другой: сверка сдвига не
+// судит сдвиг им же самим. Отказ — те же формы, что не поддаются agedValue.
+func instantsOf(v reflect.Value, path string, into map[string]time.Time) error {
+	if v.Type() == timeType {
+		if at := v.Interface().(time.Time); !at.IsZero() {
+			into[path] = at
+		}
+		return nil
+	}
+	switch v.Kind() {
+	case reflect.Pointer, reflect.Interface:
+		if !v.IsNil() {
+			return instantsOf(v.Elem(), path, into)
+		}
+	case reflect.Slice, reflect.Array:
+		for i := range v.Len() {
+			if err := instantsOf(v.Index(i), fmt.Sprintf("%s[%d]", path, i), into); err != nil {
+				return err
+			}
+		}
+	case reflect.Map:
+		if carriesInstant(v.Type().Key(), map[reflect.Type]bool{}) {
+			return fmt.Errorf("ключ карты %s (%s) несёт мгновение", path, v.Type().Key())
+		}
+		for iter := v.MapRange(); iter.Next(); {
+			if err := instantsOf(iter.Value(), fmt.Sprintf("%s[%v]", path, iter.Key()), into); err != nil {
+				return err
+			}
+		}
+	case reflect.Struct:
+		for i := range v.NumField() {
+			switch field := v.Type().Field(i); {
+			case field.IsExported():
+				if err := instantsOf(v.Field(i), path+"."+field.Name, into); err != nil {
+					return err
+				}
+			case carriesInstant(field.Type, map[reflect.Type]bool{}):
+				return fmt.Errorf("поле %s.%s не экспортировано, а его тип несёт мгновение", path, field.Name)
+			}
+		}
+	}
+	return nil
+}
+
+// instantsNotShifted сверяет before и after поштучно по мгновениям и называет
+// пути, где мгновение не сдвинуто ровно на by: у after его нет, оно иное, или
+// у after есть мгновение, которого не было у before. Пусто — сдвинуто всё.
+// Сверка, не нашедшая у before ни одного мгновения, — не «сдвинуто всё», а
+// «сверять нечего», и это отказ.
+func instantsNotShifted[T any](before, after T, by time.Duration) ([]string, error) {
+	name := reflect.TypeFor[T]().Name()
+	was, now := map[string]time.Time{}, map[string]time.Time{}
+	if err := instantsOf(reflect.ValueOf(before), name, was); err != nil {
+		return nil, err
+	}
+	if err := instantsOf(reflect.ValueOf(after), name, now); err != nil {
+		return nil, err
+	}
+	if len(was) == 0 {
+		return nil, fmt.Errorf("у %s нет ни одного мгновения — сверять нечего", name)
+	}
+	var off []string
+	for path, at := range was {
+		if got, found := now[path]; !found || !got.Equal(at.Add(by)) {
+			off = append(off, path)
+		}
+	}
+	for path := range now {
+		if _, found := was[path]; !found {
+			off = append(off, path)
+		}
+	}
+	slices.Sort(off)
+	return off, nil
+}
+
+var timeType = reflect.TypeFor[time.Time]()
+
+// carriesInstant — есть ли в типе typ time.Time где угодно по его составу.
+// Значения под `any` статически не видны; их мгновения agedValue и instantsOf
+// находят по самому значению.
+func carriesInstant(typ reflect.Type, seen map[reflect.Type]bool) bool {
+	if typ == timeType {
+		return true
+	}
+	if seen[typ] {
+		return false
+	}
+	seen[typ] = true
+	switch typ.Kind() {
+	case reflect.Pointer, reflect.Slice, reflect.Array:
+		return carriesInstant(typ.Elem(), seen)
+	case reflect.Map:
+		return carriesInstant(typ.Key(), seen) || carriesInstant(typ.Elem(), seen)
+	case reflect.Struct:
+		for field := range typ.Fields() {
+			if carriesInstant(field.Type, seen) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// recordsUnder — сколько записей ВСЕХ хранилищ подставки лежит под подписью
+// signature. У выданного кода она ровно одна — его собственная.
+func (m *memoryPorts) recordsUnder(signature string) int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	n := 0
+	if _, found := m.codes[signature]; found {
+		n++
+	}
+	if _, found := m.access[signature]; found {
+		n++
+	}
+	if _, found := m.refresh[signature]; found {
+		n++
+	}
+	return n
+}
+
 func newMemoryPorts() *memoryPorts {
 	return &memoryPorts{
 		clients: map[string]oauthceremony.ClientRegistration{},
+		secrets: map[string]string{},
 		codes:   map[string]*codeRow{},
 		access:  map[string]oauthceremony.GrantRecord{},
 		refresh: map[string]*refreshRow{},
-		proof:   map[string]oauthceremony.GrantRecord{},
 		revoked: map[string]bool{},
+		issuer:  newRecordingIssuer(),
 	}
 }
 
@@ -180,7 +733,8 @@ func (m *memoryPorts) ports() oauthceremony.Ports {
 		AccessTokens:       m,
 		RefreshTokens:      m,
 		Grants:             m,
-		ProofKeys:          m,
+		AccessTokenIssuer:  m.issuer,
+		ClientSecrets:      m,
 	}
 }
 
@@ -204,9 +758,60 @@ func (m *memoryPorts) LookupClient(ctx context.Context, clientID string) (oauthc
 	return reg, nil
 }
 
+// ── ClientSecretVerifier ────────────────────────────────────────────────────
+
+// VerifyClientSecret сверяет секрет так, как сверяет служба: постоянным
+// временем, а для клиента без проверочного значения — против приманки, чей
+// исход выбрасывается. Каждый вызов записывается вместе со сроком контекста.
+func (m *memoryPorts) VerifyClientSecret(ctx context.Context, clientID string, presented oauthceremony.PresentedSecret) (oauthceremony.SecretVerdict, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	call := verifierCall{clientID: clientID, presented: presented.Reveal()}
+	if deadline, limited := ctx.Deadline(); limited {
+		call.limited, call.remaining = true, time.Until(deadline)
+	}
+	verdict, err := m.secretVerdict(clientID, presented)
+	call.verdict = verdict
+	m.verifications = append(m.verifications, call)
+	return verdict, err
+}
+
+// secretVerdict — вердикт сверки: подменённый пробой либо по проверочному
+// значению. Зовётся под замком m.mu.
+func (m *memoryPorts) secretVerdict(clientID string, presented oauthceremony.PresentedSecret) (oauthceremony.SecretVerdict, error) {
+	if m.verifyOverride != nil {
+		return m.verifyOverride(clientID)
+	}
+	want, found := m.secrets[clientID]
+	if !found {
+		want = decoySecret
+	}
+	matched := subtle.ConstantTimeCompare([]byte(want), []byte(presented.Reveal())) == 1
+	if !found || !matched {
+		return oauthceremony.SecretMismatched, nil
+	}
+	return oauthceremony.SecretMatched, nil
+}
+
+// verificationLog отдаёт копию журнала вызовов порта сверки.
+func (m *memoryPorts) verificationLog() []verifierCall {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return append([]verifierCall(nil), m.verifications...)
+}
+
+// setVerifyOverride меняет вердикт сверки под замком: проба ставит его между
+// подготовкой предмета и операцией.
+func (m *memoryPorts) setVerifyOverride(verdict func(clientID string) (oauthceremony.SecretVerdict, error)) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.verifyOverride = verdict
+}
+
 // ── AuthorizationCodeVault ──────────────────────────────────────────────────
 
-func (m *memoryPorts) StoreAuthorizationCode(_ context.Context, signature string, grant oauthceremony.GrantRecord) (oauthceremony.StoreOutcome, error) {
+func (m *memoryPorts) StoreAuthorizationCode(_ context.Context, signature string, code oauthceremony.AuthorizationCodeRecord) (oauthceremony.StoreOutcome, error) {
 	if m.storeOverride != nil {
 		return m.storeOverride(signature)
 	}
@@ -216,23 +821,27 @@ func (m *memoryPorts) StoreAuthorizationCode(_ context.Context, signature string
 	if _, taken := m.codes[signature]; taken {
 		return oauthceremony.StoreOutcome{}, oauthceremony.ErrStorageConflict
 	}
-	m.codes[signature] = &codeRow{grant: grant}
+	m.codes[signature] = &codeRow{
+		grant:     code.Grant,
+		challenge: code.ProofKey.Challenge,
+		method:    string(code.ProofKey.Method),
+	}
 	return oauthceremony.RowsTouched(1), nil
 }
 
 // FetchAuthorizationCode читает строку ДО встречи — по той же причине, что
 // FetchRefreshToken.
-func (m *memoryPorts) FetchAuthorizationCode(ctx context.Context, signature string) (oauthceremony.GrantRecord, error) {
+func (m *memoryPorts) FetchAuthorizationCode(ctx context.Context, signature string) (oauthceremony.AuthorizationCodeRecord, error) {
 	rec, err := m.readCodeRow(signature)
 	if m.codeFetchGate != nil {
 		if meetErr := m.codeFetchGate.meet(ctx); meetErr != nil {
-			return oauthceremony.GrantRecord{}, meetErr
+			return oauthceremony.AuthorizationCodeRecord{}, meetErr
 		}
 	}
 	return rec, err
 }
 
-func (m *memoryPorts) readCodeRow(signature string) (oauthceremony.GrantRecord, error) {
+func (m *memoryPorts) readCodeRow(signature string) (oauthceremony.AuthorizationCodeRecord, error) {
 	if m.fetchCodeOverride != nil {
 		return m.fetchCodeOverride(signature)
 	}
@@ -240,16 +849,22 @@ func (m *memoryPorts) readCodeRow(signature string) (oauthceremony.GrantRecord, 
 	defer m.mu.Unlock()
 
 	row, found := m.codes[signature]
-	switch {
-	case !found:
-		return oauthceremony.GrantRecord{}, oauthceremony.ErrGrantNotFound
-	case row.consumed:
-		// Грант отдаётся ВМЕСТЕ с отказом: по нему движок отзывает
-		// выданные артефакты.
-		return row.grant, oauthceremony.ErrAuthorizationCodeConsumed
-	default:
-		return row.grant, nil
+	if !found {
+		return oauthceremony.AuthorizationCodeRecord{}, oauthceremony.ErrGrantNotFound
 	}
+	rec := oauthceremony.AuthorizationCodeRecord{
+		Grant: row.grant,
+		ProofKey: oauthceremony.ProofKeyBinding{
+			Challenge: row.challenge,
+			Method:    oauthceremony.ProofKeyMethod(row.method),
+		},
+	}
+	if row.consumed {
+		// Запись отдаётся ВМЕСТЕ с отказом: по её гранту движок отзывает
+		// выданные артефакты.
+		return rec, oauthceremony.ErrAuthorizationCodeConsumed
+	}
+	return rec, nil
 }
 
 // ConsumeAuthorizationCode — одна операция под замком, как одна инструкция
@@ -386,12 +1001,30 @@ func (m *memoryPorts) RotateRefreshToken(_ context.Context, grantID, signature s
 
 // ── GrantRevoker ────────────────────────────────────────────────────────────
 
-func (m *memoryPorts) RevokeGrantRefreshTokens(_ context.Context, grantID string) (oauthceremony.StoreOutcome, error) {
+// errReasonOutsideDictionary — отказ службы на причину вне её закрытого
+// словаря. Подставка отказывает так же, как отказало бы ограничение таблицы
+// службы: причина, которой служба не знает, не записывается молча.
+var errReasonOutsideDictionary = errors.New("revoker: the revocation reason is outside the closed dictionary")
+
+// admitRevocation записывает вызов порта отзыва и отвечает, принимает ли его
+// служба. Вызывается под замком подставки.
+func (m *memoryPorts) admitRevocation(method, grantID string, reason oauthceremony.RevocationReason) error {
+	m.revocations = append(m.revocations, revocationCall{method: method, grantID: grantID, reason: reason})
+	if m.revokeFailure != nil {
+		return m.revokeFailure
+	}
+	if !reason.Declared() {
+		return errReasonOutsideDictionary
+	}
+	return nil
+}
+
+func (m *memoryPorts) RevokeGrantRefreshTokens(_ context.Context, grantID string, reason oauthceremony.RevocationReason) (oauthceremony.StoreOutcome, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	if m.revokeFailure != nil {
-		return oauthceremony.StoreOutcome{}, m.revokeFailure
+	if err := m.admitRevocation("RevokeGrantRefreshTokens", grantID, reason); err != nil {
+		return oauthceremony.StoreOutcome{}, err
 	}
 
 	m.revoked[grantID] = true
@@ -405,12 +1038,12 @@ func (m *memoryPorts) RevokeGrantRefreshTokens(_ context.Context, grantID string
 	return oauthceremony.RowsTouched(touched), nil
 }
 
-func (m *memoryPorts) RevokeGrantAccessTokens(_ context.Context, grantID string) (oauthceremony.StoreOutcome, error) {
+func (m *memoryPorts) RevokeGrantAccessTokens(_ context.Context, grantID string, reason oauthceremony.RevocationReason) (oauthceremony.StoreOutcome, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	if m.revokeFailure != nil {
-		return oauthceremony.StoreOutcome{}, m.revokeFailure
+	if err := m.admitRevocation("RevokeGrantAccessTokens", grantID, reason); err != nil {
+		return oauthceremony.StoreOutcome{}, err
 	}
 
 	m.revoked[grantID] = true
@@ -424,68 +1057,6 @@ func (m *memoryPorts) RevokeGrantAccessTokens(_ context.Context, grantID string)
 	return oauthceremony.RowsTouched(touched), nil
 }
 
-// ── ProofKeyVault ───────────────────────────────────────────────────────────
-
-func (m *memoryPorts) StoreProofKeyRequest(_ context.Context, signature string, grant oauthceremony.GrantRecord) (oauthceremony.StoreOutcome, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	if _, taken := m.proof[signature]; taken {
-		return oauthceremony.StoreOutcome{}, oauthceremony.ErrStorageConflict
-	}
-	m.proof[signature] = grant
-	return oauthceremony.RowsTouched(1), nil
-}
-
-// FetchProofKeyRequest читает строку ДО встречи — по той же причине, что
-// FetchRefreshToken.
-func (m *memoryPorts) FetchProofKeyRequest(ctx context.Context, signature string) (oauthceremony.GrantRecord, error) {
-	m.mu.Lock()
-	m.proofFetches++
-	later := m.proofFetches > 1
-	m.mu.Unlock()
-	if later && m.proofTaken != nil {
-		select {
-		case <-m.proofTaken:
-		case <-ctx.Done():
-			return oauthceremony.GrantRecord{}, ctx.Err()
-		}
-	}
-
-	rec, err := m.readProofRow(signature)
-	if m.proofFetchGate != nil {
-		if meetErr := m.proofFetchGate.meet(ctx); meetErr != nil {
-			return oauthceremony.GrantRecord{}, meetErr
-		}
-	}
-	return rec, err
-}
-
-func (m *memoryPorts) readProofRow(signature string) (oauthceremony.GrantRecord, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	grant, found := m.proof[signature]
-	if !found {
-		return oauthceremony.GrantRecord{}, oauthceremony.ErrGrantNotFound
-	}
-	return grant, nil
-}
-
-func (m *memoryPorts) DropProofKeyRequest(_ context.Context, signature string) (oauthceremony.StoreOutcome, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	if _, found := m.proof[signature]; !found {
-		return oauthceremony.RowsTouched(0), nil
-	}
-	delete(m.proof, signature)
-	if m.proofTaken != nil {
-		m.proofTakenOnce.Do(func() { close(m.proofTaken) })
-	}
-	return oauthceremony.RowsTouched(1), nil
-}
-
 // Утверждения времени сборки: подставка обязана оставаться полной
 // реализацией портов. Отпавший метод — отказ сборки, а не красная проба с
 // неочевидным текстом.
@@ -495,7 +1066,8 @@ var (
 	_ oauthceremony.AccessTokenVault       = (*memoryPorts)(nil)
 	_ oauthceremony.RefreshTokenVault      = (*memoryPorts)(nil)
 	_ oauthceremony.GrantRevoker           = (*memoryPorts)(nil)
-	_ oauthceremony.ProofKeyVault          = (*memoryPorts)(nil)
+	_ oauthceremony.AccessTokenIssuer      = (*recordingIssuer)(nil)
+	_ oauthceremony.ClientSecretVerifier   = (*memoryPorts)(nil)
 )
 
 // ── Единица работы ──────────────────────────────────────────────────────────
