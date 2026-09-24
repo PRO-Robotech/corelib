@@ -79,16 +79,35 @@ const (
 type TokenKind string
 
 // Виды артефактов.
+//
+// Токена личности (`id_token`, OpenID Connect) здесь НЕТ: обработчика OpenID
+// Connect церемония не провязывает (doc.go), и вид без выпуска обещал бы
+// поведение, которого нет. Выдача токена личности — свой предмет со своим
+// портом ключей и своими настройками.
 const (
 	TokenKindAccess            TokenKind = "access_token"
 	TokenKindRefresh           TokenKind = "refresh_token"
 	TokenKindAuthorizationCode TokenKind = "authorization_code"
-	TokenKindIdentity          TokenKind = "id_token"
 	// TokenKindUnspecified — вид не назван. Отдельно от пустой строки в
 	// значении поля: в интроспекции «вид определить не удалось» —
 	// законный исход, и он обязан быть выразим.
 	TokenKindUnspecified TokenKind = ""
 )
+
+// TokenKinds возвращает словарь видов, которые церемония ВЫПУСКАЕТ, — службе,
+// которая хранит сроки и границы по видам (SessionRecord.ExpiresAt,
+// SessionRecord.NotAfter) и сопрягает словарь со своим (ограничение столбца
+// вида). Вида без выпуска в словаре нет: граница или срок под ним не значили
+// бы ничего.
+func TokenKinds() []TokenKind {
+	return []TokenKind{TokenKindAccess, TokenKindRefresh, TokenKindAuthorizationCode}
+}
+
+// Declared отвечает, входит ли вид в словарь выпускаемых. Нулевое значение
+// (TokenKindUnspecified) НЕ входит: это «вид не назван», а не вид.
+func (k TokenKind) Declared() bool {
+	return slices.Contains(TokenKinds(), k)
+}
 
 // ClientAuthMethod — способ, которым клиент доказывает себя точке токена
 // (RFC 6749 §2.3).
@@ -178,8 +197,8 @@ type ClientRegistration struct {
 	GrantKinds []GrantKind
 
 	// ResponseKinds — разрешённые СОЧЕТАНИЯ типов ответа. Каждый элемент —
-	// одно сочетание; составное сочетание записывается через пробел
-	// ("code id_token"), как того требует RFC 6749 §3.1.1.
+	// одно сочетание; составное записывается через пробел (RFC 6749 §3.1.1).
+	// Церемония обслуживает одно сочетание — `code` (ResponseKindCode).
 	ResponseKinds []string
 
 	// Scopes — области, которые клиенту дозволено запрашивать.
@@ -463,7 +482,8 @@ type AuthorizationGrant struct {
 	// Нулевое время — не граница и отвергается церемонией по имени вида
 	// (ErrCeremonyMisuse) до выпуска кода: движок читает нулевой срок
 	// токена обновления как «без срока», и граница-ноль сделала бы семейство
-	// бессрочным.
+	// бессрочным. Вид вне словаря TokenKinds отвергается так же: церемония
+	// его не выпускает, и граница под ним не ограничила бы ничего.
 	ExpiresAt map[TokenKind]time.Time
 }
 
@@ -560,9 +580,6 @@ type TokenResult struct {
 
 	// RefreshToken — токен обновления. Пусто, если не выдавался.
 	RefreshToken string
-
-	// IdentityToken — токен личности (OIDC). Пусто, если не выдавался.
-	IdentityToken string
 
 	// Scopes — выданные области.
 	Scopes []string

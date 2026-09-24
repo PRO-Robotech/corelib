@@ -428,7 +428,6 @@ var engineTokenTypes = map[TokenKind]engine.TokenType{
 	TokenKindAccess:            engine.AccessToken,
 	TokenKindRefresh:           engine.RefreshToken,
 	TokenKindAuthorizationCode: engine.AuthorizeCode,
-	TokenKindIdentity:          engine.IDToken,
 }
 
 // engineTypeOf переводит наш вид в вид движка. Вид вне словаря — вид,

@@ -217,13 +217,12 @@ func New(cfg Config, ports Ports) (*Ceremony, error) {
 
 	bridge, store := newStorageBridge(ports, cfg.PortTimeout)
 
-	// Издателя (AccessTokenIssuer, IDTokenIssuer) настройки движка не
-	// называют: его читают лишь стратегии JWT движка, а New строит свою
-	// стратегию (artifactStrategy, ниже), которая его не читает. Код
-	// авторизации и токен обновления у неё — непрозрачные строки без
-	// утверждений, и `iss` в них нести негде; токен доступа выпускает порт
-	// службы, и `iss` в него кладёт служба; токена личности церемония не
-	// выдаёт (doc.go).
+	// Издателя токенов настройки движка не называют: его читают лишь стратегии
+	// JWT движка, а New строит свою стратегию (artifactStrategy, ниже), которая
+	// его не читает. Код авторизации и токен обновления у неё — непрозрачные
+	// строки без утверждений, и `iss` в них нести негде; токен доступа
+	// выпускает порт службы, и `iss` в него кладёт служба; токена личности
+	// церемония не выдаёт (doc.go).
 	//
 	// PKCE (RFC 7636) обязателен ВСЕМ клиентам и только с методом S256
 	// (EnforcePKCE, EnforcePKCEForPublicClients, EnablePKCEPlainChallengeMethod
@@ -818,16 +817,25 @@ func (c *Ceremony) checkGrantWithinRequest(intent AuthorizationIntent, grant Aut
 	return nil
 }
 
-// checkGrantBounds отвергает границу семейства, равную нулевому времени.
+// checkGrantBounds отвергает границу семейства, равную нулевому времени, и
+// границу под видом, которого церемония не выпускает.
 //
 // Нулевое время — не граница. Движок читает нулевой срок токена обновления как
 // «без срока», и граница-ноль, сжав к себе каждый назначаемый срок, сделала бы
 // семейство БЕССРОЧНЫМ — обратное тому, о чём служба просила, назвав границу.
-// Вид без границы выражается отсутствием ключа, а не нулём. Отказ называет
-// вид; при нескольких нулевых — первый по порядку имени, чтобы текст отказа не
-// зависел от порядка обхода карты.
+// Вид без границы выражается отсутствием ключа, а не нулём.
+//
+// Вид вне словаря TokenKinds церемония не выпускает, и граница под ним не
+// ограничила бы ничего, а служба считала бы её действующей.
+//
+// Отказ называет вид; при нескольких негодных — первый по порядку имени, чтобы
+// текст отказа не зависел от порядка обхода карты.
 func checkGrantBounds(bounds map[TokenKind]time.Time) error {
 	for _, kind := range slices.Sorted(maps.Keys(bounds)) {
+		if !kind.Declared() {
+			return misuse("AuthorizationGrant.ExpiresAt[" + strconv.Quote(string(kind)) + "] names a kind the ceremony " +
+				"does not issue, so the bound would limit nothing; the kinds issued are those of TokenKinds")
+		}
 		if bounds[kind].IsZero() {
 			return misuse("AuthorizationGrant.ExpiresAt[" + strconv.Quote(string(kind)) + "] is the zero time; " +
 				"the zero time is no bound (a zero refresh token expiry reads as no expiry at all) — " +
@@ -1290,10 +1298,6 @@ func tokenResultOf(responder engine.AccessResponder) TokenResult {
 		case "refresh_token":
 			if token, ok := value.(string); ok {
 				result.RefreshToken = token
-			}
-		case "id_token":
-			if token, ok := value.(string); ok {
-				result.IdentityToken = token
 			}
 		default:
 			result.Additional[key] = value
