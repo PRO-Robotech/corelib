@@ -17,6 +17,7 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -99,6 +100,46 @@ func registerTestClient(t *testing.T, store *memoryPorts) {
 		ResponseKinds: []string{"code"},
 		Scopes:        []string{"openid", "profile", "offline"},
 	}
+}
+
+// registerClientLike заводит второго клиента clientID — ту же регистрацию и тот
+// же секрет, что у тестового клиента, — в ОБОИХ местах, где их держит служба:
+// в справочнике клиентов и у порта сверки секрета. Клиент, заведённый одной
+// регистрацией, порту сверки незнаком: его запрос отвергается `invalid_client`
+// раньше, чем движок видит предъявленный артефакт, и проба, чей предмет лежит
+// за сверкой, судила бы отказ сверки.
+func registerClientLike(t *testing.T, store *memoryPorts, clientID string) {
+	t.Helper()
+
+	reg, registered := store.clients[testClientID]
+	secret, known := store.secrets[testClientID]
+	if !registered || !known {
+		t.Fatalf("НЕ ВЫПОЛНИЛОСЬ: тестовый клиент не заведён (регистрация %t, секрет %t) — второго не с кого списать",
+			registered, known)
+	}
+	reg.ClientID = clientID
+	store.clients[clientID] = reg
+	store.secrets[clientID] = secret
+}
+
+// requireAuthenticatedBy — предпосылка пробы, чей предмет лежит ЗА сверкой
+// секрета: в calls (вызовы порта сверки за операцию) порт признал секрет
+// клиента clientID. Иначе отказ операции — отказ сверки, а предъявленного
+// артефакта движок не видел, и проба судила бы не свой предмет.
+func requireAuthenticatedBy(t *testing.T, calls []verifierCall, clientID string) {
+	t.Helper()
+
+	for _, call := range calls {
+		if call.clientID == clientID && call.verdict == oauthceremony.SecretMatched {
+			return
+		}
+	}
+	verdicts := make([]string, 0, len(calls))
+	for _, call := range calls {
+		verdicts = append(verdicts, fmt.Sprintf("%s признан=%t", call.clientID, call.verdict == oauthceremony.SecretMatched))
+	}
+	t.Fatalf("НЕ ВЫПОЛНИЛОСЬ: порт сверки не признал секрет клиента %s за операцию (вызовы %v) — "+
+		"предъявленного артефакта движок не видел", clientID, verdicts)
 }
 
 func proofKeyChallenge(verifier string) string {

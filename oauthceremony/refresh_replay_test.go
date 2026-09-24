@@ -334,15 +334,13 @@ func TestRevokingAStaleRefreshTokenRevokesTheFamily(t *testing.T) {
 // клиента, которого уже сняли, предъявлен другим клиентом. Запрос движка по
 // такому гранту не собрать (клиента нет в справочнике), но повтор от этого не
 // перестаёт быть повтором: семейство отзывается по гранту, записанному до
-// сборки.
+// сборки. Предъявитель — клиент, прошедший сверку секрета
+// (requireAuthenticatedBy), как у пары на пути кода.
 func TestReplayOfATokenWhoseClientIsGoneStillRevokesTheFamily(t *testing.T) {
 	store := newMemoryPorts()
 	registerTestClient(t, store)
 	const otherClientID = "svc-other"
-	other := store.clients[testClientID]
-	other.ClientID = otherClientID
-	store.clients[otherClientID] = other
-	store.secrets[otherClientID] = testSecret
+	registerClientLike(t, store, otherClientID)
 	ceremony := newTestCeremony(t, store.ports())
 
 	first := exchangeCode(t, ceremony)
@@ -357,7 +355,9 @@ func TestReplayOfATokenWhoseClientIsGoneStillRevokesTheFamily(t *testing.T) {
 
 	replay := refreshRequest(first.RefreshToken)
 	replay.ClientID = otherClientID
+	verified := len(store.verificationLog())
 	_, err := ceremony.Exchange(context.Background(), replay)
+	requireAuthenticatedBy(t, store.verificationLog()[verified:], otherClientID)
 	requireReplayRefusal(t, err)
 
 	if !store.familyRevoked(grantID) {

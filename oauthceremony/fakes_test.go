@@ -102,14 +102,15 @@ type memoryPorts struct {
 }
 
 // verifierCall — один вызов порта сверки секрета так, как его увидела служба:
-// о ком спросили, что предъявлено и какой срок пришёл с контекстом вызова.
-// limited — у контекста был срок; remaining — сколько от него оставалось в миг
-// вызова.
+// о ком спросили, что предъявлено, какой срок пришёл с контекстом вызова и что
+// порт ответил. limited — у контекста был срок; remaining — сколько от него
+// оставалось в миг вызова; verdict — вердикт, который порт отдал церемонии.
 type verifierCall struct {
 	clientID  string
 	presented string
 	limited   bool
 	remaining time.Duration
+	verdict   oauthceremony.SecretVerdict
 }
 
 // decoySecret — приманка подставки: против неё сверяется секрет клиента,
@@ -770,7 +771,15 @@ func (m *memoryPorts) VerifyClientSecret(ctx context.Context, clientID string, p
 	if deadline, limited := ctx.Deadline(); limited {
 		call.limited, call.remaining = true, time.Until(deadline)
 	}
+	verdict, err := m.secretVerdict(clientID, presented)
+	call.verdict = verdict
 	m.verifications = append(m.verifications, call)
+	return verdict, err
+}
+
+// secretVerdict — вердикт сверки: подменённый пробой либо по проверочному
+// значению. Зовётся под замком m.mu.
+func (m *memoryPorts) secretVerdict(clientID string, presented oauthceremony.PresentedSecret) (oauthceremony.SecretVerdict, error) {
 	if m.verifyOverride != nil {
 		return m.verifyOverride(clientID)
 	}
