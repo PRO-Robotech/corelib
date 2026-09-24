@@ -832,6 +832,8 @@ func (b *transactionalStorageBridge) BeginTX(ctx context.Context) (context.Conte
 	return txCtx, nil
 }
 
+// Commit закрепляет единицу работы в сроке ОПЕРАЦИИ: закрепить работу после
+// срока значило бы отдать успех тому, кто уже получил отказ по сроку.
 func (b *transactionalStorageBridge) Commit(ctx context.Context) error {
 	inner, cancel := b.deadline(ctx)
 	defer cancel()
@@ -842,8 +844,20 @@ func (b *transactionalStorageBridge) Commit(ctx context.Context) error {
 	return nil
 }
 
+// Rollback откатывает единицу работы в контексте, отвязанном от отмены
+// операции, со своим сроком (Config.PortTimeout).
+//
+// Движок откатывает, когда запись в единице работы отказала, и отказ этот
+// часто и есть истёкший срок операции: откат, унаследовавший его, получил бы
+// мёртвый контекст и не исполнился бы, и транзакция службы осталась бы
+// открытой до разрыва соединения. Основания те же, что у отзыва семейства
+// после повтора (Ceremony.revokeReplayedFamily): откат — уборка за операцией,
+// которая уже кончилась отказом, и вызывающий, оборвавший запрос, не должен
+// оставлять её незавершённой. Бессрочным откат не становится: срок у него
+// свой. Значения контекста — транзакция службы и ведомость операции —
+// сохраняются.
 func (b *transactionalStorageBridge) Rollback(ctx context.Context) error {
-	inner, cancel := b.deadline(ctx)
+	inner, cancel := b.deadline(context.WithoutCancel(ctx))
 	defer cancel()
 
 	if err := b.ports.Transaction.Rollback(inner); err != nil {
