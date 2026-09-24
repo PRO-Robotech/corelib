@@ -644,7 +644,9 @@ func (d *flakyDirectory) refusals() int {
 // grantLookupFailures — отказы справочника, который отвечает уже после
 // доказательства клиента: простой сбой, срок и каждый случай пакета, кроме
 // «клиента нет». «Клиента нет» у записи гранта — сигнал контракта (клиента
-// сняли), и его судит TestReplayOfATokenWhoseClientIsGoneStillRevokesTheFamily.
+// сняли), и его судят TestArtifactOfARemovedClientIsAnInvalidArtifact (артефакт
+// без повтора) и TestReplayOfATokenWhoseClientIsGoneStillRevokesTheFamily
+// (повтор).
 func grantLookupFailures() []struct {
 	name string
 	err  error

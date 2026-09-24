@@ -242,39 +242,59 @@ func (b *storageBridge) GetClient(ctx context.Context, id string) (engine.Client
 	notes := notesFrom(ctx)
 	reg, err := b.ports.Clients.LookupClient(ctx, id)
 	if err != nil {
-		switch {
-		case CodeOf(err) == CodeGrantNotFound && notes.provesClient():
+		if CodeOf(err) == CodeGrantNotFound && notes.provesClient() {
 			notes.noteClientClaim(id, false)
 			return unregisteredClientOf(id), nil
-		case CodeOf(err) == CodeGrantNotFound:
-			return nil, pairEngine(ctx, fromPort(op, err), engine.ErrNotFound)
-		default:
-			failure := closedPortFailure(op, err)
-			notes.record(failure)
-			return nil, failure
 		}
+		return nil, directoryFailure(ctx, op, err)
 	}
 	notes.noteClientClaim(id, true)
 	return clientViewOf(reg), nil
 }
 
 // grantClient — запись клиента, которому выдан грант: её спрашивает сборка
-// запроса движка по записи кода или токена (requesterFromGrant).
+// запроса движка по записи кода или токена (requesterFromGrant). Отказ
+// справочника уходит отсюда движку уже переведённым (directoryFailure).
 //
-// «Клиента нет» отдаётся как есть: клиента, которому выдан грант, могли
-// снять, и что это значит для операции, решает движок. Любой другой отказ
-// справочника — отказ операции тем же закрытым перечнем, что в GetClient, и
-// он пишется в ведомость: движок сжимает отказ сборки сам — у интроспекции в
-// «токен негоден», у отзыва во «временно недоступно», — и без записи сбой
-// справочника стал бы ответом «негоден» о годном токене.
+// Клиента, которому выдан грант, могли снять между выдачей и предъявлением, и
+// артефакт такого клиента негоден. Операция отвечает на него как на любой
+// негодный артефакт: обмен — `invalid_grant`, интроспекция — `active: false`,
+// отзыв — успехом без действия (RFC 7009 §2.2): отозвать грант вправе только
+// его клиент, а снятый клиент себя не докажет. Повтор, замеченный до сборки,
+// остаётся ответом операции: его пометка уже в ведомости
+// (markReplayedFamily).
 func (b *storageBridge) grantClient(ctx context.Context, id string) (ClientRegistration, error) {
+	const op = "ClientDirectory.LookupClient"
 	reg, err := b.ports.Clients.LookupClient(ctx, id)
-	if err == nil || CodeOf(err) == CodeGrantNotFound {
-		return reg, err
+	if err != nil {
+		return ClientRegistration{}, directoryFailure(ctx, op, err)
 	}
-	failure := closedPortFailure("ClientDirectory.LookupClient", err)
+	return reg, nil
+}
+
+// directoryFailure переводит отказ справочника клиентов для движка — один
+// перевод на оба места вопроса справочнику: доказательство клиента
+// (GetClient) и сборку запроса по записи гранта (grantClient).
+//
+// «Клиента нет» — единственный случай пакета, который контракт справочника
+// объявляет, — сопрягается с часовым движка «записи нет»: без часового движок
+// принял бы его за поломку хранилища и ответил бы отказом сервера. В ведомость
+// этот случай не пишется: он не из перечня coarsenable, а записанный он
+// вытеснил бы вердикт движка там, где вердикт и есть ответ, — у интроспекции
+// «негоден» стал бы отказом.
+//
+// Любой другой отказ — отказ операции закрытым перечнем (closedPortFailure),
+// и он пишется в ведомость любым случаем: движок сжимает отказ справочника сам
+// — в отказ доказательства, у интроспекции в «токен негоден», у отзыва во
+// «временно недоступно», — и без записи сбой справочника стал бы вердиктом о
+// клиенте или о годном токене.
+func directoryFailure(ctx context.Context, op string, err error) error {
+	if CodeOf(err) == CodeGrantNotFound {
+		return pairEngine(ctx, fromPort(op, err), engine.ErrNotFound)
+	}
+	failure := closedPortFailure(op, err)
 	notesFrom(ctx).record(failure)
-	return ClientRegistration{}, failure
+	return failure
 }
 
 // ── Сверка секрета клиента ──────────────────────────────────────────────────
@@ -823,6 +843,8 @@ func (b *transactionalStorageBridge) BeginTX(ctx context.Context) (context.Conte
 	return txCtx, nil
 }
 
+// Commit закрепляет единицу работы в сроке ОПЕРАЦИИ: закрепить работу после
+// срока значило бы отдать успех тому, кто уже получил отказ по сроку.
 func (b *transactionalStorageBridge) Commit(ctx context.Context) error {
 	inner, cancel := b.deadline(ctx)
 	defer cancel()
@@ -833,8 +855,20 @@ func (b *transactionalStorageBridge) Commit(ctx context.Context) error {
 	return nil
 }
 
+// Rollback откатывает единицу работы в контексте, отвязанном от отмены
+// операции, со своим сроком (Config.PortTimeout).
+//
+// Движок откатывает, когда запись в единице работы отказала, и отказ этот
+// часто и есть истёкший срок операции: откат, унаследовавший его, получил бы
+// мёртвый контекст и не исполнился бы, и транзакция службы осталась бы
+// открытой до разрыва соединения. Основания те же, что у отзыва семейства
+// после повтора (Ceremony.revokeReplayedFamily): откат — уборка за операцией,
+// которая уже кончилась отказом, и вызывающий, оборвавший запрос, не должен
+// оставлять её незавершённой. Бессрочным откат не становится: срок у него
+// свой. Значения контекста — транзакция службы и ведомость операции —
+// сохраняются.
 func (b *transactionalStorageBridge) Rollback(ctx context.Context) error {
-	inner, cancel := b.deadline(ctx)
+	inner, cancel := b.deadline(context.WithoutCancel(ctx))
 	defer cancel()
 
 	if err := b.ports.Transaction.Rollback(inner); err != nil {
