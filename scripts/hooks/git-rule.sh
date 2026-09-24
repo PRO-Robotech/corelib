@@ -17,6 +17,8 @@
 #     `main`; ветка, открытая до правила, не переименовывается;
 #   · первая строка — `#<N> …`, не длиннее 72 СИМВОЛОВ (не байт), одно
 #     утверждение; слияние — `#<N> merge #<M>: …` либо `#<N> merge main: …`;
+#     серверное слияние — `#<N> …` либо `Merge pull request #<P> from
+#     <владелец>/<ветка>` (ниже, «СЕРВЕРНОЕ СЛИЯНИЕ»);
 #   · тело — не длиннее 12 строк;
 #   · подпись — корневая учётная запись (`~/.gitconfig`) у автора и коммиттера.
 #     Переопределение — отказ при любом значении: user.* уровней local,
@@ -34,6 +36,21 @@
 # ветки: у слияния на её первой родительской цепочке и у заголовка запроса.
 # Что N — задача этого репозитория, хукам не узнать (сети у них нет): это
 # сверяет проверка запроса по API трекера.
+#
+# СЕРВЕРНОЕ СЛИЯНИЕ — слияние запроса, собранное площадкой: два родителя и
+# больше, коммиттер GIT_RULE_SERVER_IDENT, подпись площадки. Сообщение ему
+# составляет площадка ПОСЛЕ проверки своего запроса (настройка репозитория
+# merge_commit_title PR_TITLE — «<заголовок запроса> (#<P>)», MERGE_MESSAGE —
+# «Merge pull request #<P> from <владелец>/<ветка>»; либо --subject того, кто
+# вливает), и судит его проверка СЛЕДУЮЩЕГО запроса, когда переписать его
+# можно только --force. Номер у него — задачи сборки (голова запроса), а не
+# ветки, в которую влито, и `merge #<M>:` площадка не пишет: эти два правила
+# слияния клиента к нему не прикладываются. Прочее — длина, одно утверждение,
+# тело, атрибуция — то же, что у любого коммита. Серверным слияние делает
+# ПОТРЕБИТЕЛЬ, спросив площадку (имя коммиттера задаёт клиент): sha
+# подтверждённых — в GIT_RULE_SERVER_MERGES, по строке. У хуков сети нет, и
+# список пуст — слияние с коммиттером площадки судится у них как слияние
+# клиента.
 #
 # T0 — граница истории: НАИМЕНЬШЕЕ время автора среди коммитов, заводивших
 # scripts/hooks/commit-msg в историю названных ревизий (у слияния — обоих
@@ -70,6 +87,8 @@ GIT_RULE_T0_KNOWN=0
 GIT_RULE_T0_ADDS=()
 GIT_RULE_SUBJECT_MAX=72
 GIT_RULE_BODY_MAX=12
+GIT_RULE_SERVER_IDENT="GitHub <noreply@github.com>"
+GIT_RULE_SERVER_MERGES=""
 
 # git_rule_load_t0 [ревизия…] — выставляет GIT_RULE_T0 (эпохой),
 # GIT_RULE_T0_KNOWN и GIT_RULE_T0_ADDS — коммиты, заводившие путь правила в
@@ -147,10 +166,29 @@ git_rule_subject_task() {
 # git_rule_merge_form <первая строка> — `#<N> merge #<M>: …` либо `#<N> merge main: …`.
 git_rule_merge_form() { [[ "$1" =~ ^#[0-9]+\ merge\ (#[0-9]+|main):\ [^[:space:]] ]]; }
 
+# git_rule_server_pull_form <первая строка> — форма площадки по умолчанию
+# `Merge pull request #<P> from <владелец>/<ветка>`; ветку печатает.
+git_rule_server_pull_form() {
+    [[ "$1" =~ ^Merge\ pull\ request\ #[0-9]+\ from\ [^[:space:]/]+/([^[:space:]]+)$ ]] || return 1
+    printf '%s' "${BASH_REMATCH[1]}"
+}
+
+# git_rule_server_form <первая строка> — первая строка серверного слияния:
+# `#<N> …` (заголовок запроса либо --subject) или форма площадки по умолчанию.
+git_rule_server_form() {
+    git_rule_subject_task "$1" >/dev/null || git_rule_server_pull_form "$1" >/dev/null
+}
+
 # git_rule_subject_numbers <первая строка> — номера задач, которые первая строка
-# называет: N из `#<N> …` и M из `… merge #<M>: …`, по строке на номер.
+# называет: N из `#<N> …`, M из `… merge #<M>: …` и ветка-номер из `Merge pull
+# request #<P> from <владелец>/<ветка>`, по строке на номер. <P> — номер
+# запроса, а не задачи: его пишет площадка.
 git_rule_subject_numbers() {
     local n
+    if n="$(git_rule_server_pull_form "$1")"; then
+        ! git_rule_is_number "$n" || printf '%s\n' "$n"
+        return 0
+    fi
     n="$(git_rule_subject_task "$1")" || return 0
     printf '%s\n' "$n"
     if [[ "$1" =~ ^#[0-9]+\ merge\ #([0-9]+):\  ]]; then printf '%s\n' "${BASH_REMATCH[1]}"; fi
@@ -184,9 +222,11 @@ git_rule_second_statement() {
     return 1
 }
 
-# git_rule_form <сообщение> <слияние: 0|1> <ветка> — нарушения ФОРМЫ сообщения
-# (уже после git stripspace), по строке на каждое; пусто — форма соблюдена.
-# Номер слияния сверяется с <веткой>, только когда она — номер; пусто — нет.
+# git_rule_form <сообщение> <слияние: 0|1|server> <ветка> — нарушения ФОРМЫ
+# сообщения (уже после git stripspace), по строке на каждое; пусто — форма
+# соблюдена. server — серверное слияние: первая строка — git_rule_server_form,
+# форма и номер слияния клиента не судятся. Номер слияния сверяется с <веткой>,
+# только когда она — номер; пусто — нет.
 # Единица счёта тела — строка после git stripspace, СЧИТАЯ пустые между
 # абзацами: так тело видит читатель `git log`.
 git_rule_form() {
@@ -194,9 +234,12 @@ git_rule_form() {
     subj="${msg%%$'\n'*}"
     rest=""
     [ "$subj" = "$msg" ] || rest="${msg#*$'\n'}"
-    if ! n="$(git_rule_subject_task "$subj")"; then
+    if [ "$merge" = server ]; then
+        git_rule_server_form "$subj" ||
+            printf '%s\n' "серверное слияние — первая строка «#<N> …» (заголовок запроса либо --subject) или «Merge pull request #<P> from <владелец>/<ветка>», а не «$subj»"
+    elif ! n="$(git_rule_subject_task "$subj")"; then
         printf '%s\n' "первая строка не начинается с «#<N> »: «$subj»"
-    elif [ "$merge" = 1 ]; then
+    elif [ "$merge" != 0 ]; then
         git_rule_merge_form "$subj" ||
             printf '%s\n' "слияние — «#<N> merge #<M>: …» либо «#<N> merge main: …», а не «$subj»"
         if git_rule_is_number "$branch" && [ "$n" != "$branch" ]; then
@@ -303,14 +346,28 @@ git_rule_before_rule() {
     git_rule_range_pre_rule "$1" "${excl[@]}"
 }
 
+# git_rule_server_candidates <аргументы rev-list…> — sha слияний диапазона (два
+# родителя и больше) с коммиттером GIT_RULE_SERVER_IDENT, по строке; коммиты до
+# правила — нет: их форма не судится. Кандидат, а не серверное слияние: имя
+# коммиттера задаёт клиент, и подтверждает его потребитель у площадки.
+git_rule_server_candidates() {
+    local h at ct c
+    while IFS=$'\x1f' read -r h at ct c; do
+        [ -n "$h" ] && [ "$c" = "$GIT_RULE_SERVER_IDENT" ] || continue
+        git_rule_pre_rule "$h" "$at" "$ct" && continue
+        printf '%s\n' "$h"
+    done < <(git log --no-color --merges --format='%H%x1f%at%x1f%ct%x1f%cn <%ce>' "$@" 2>/dev/null)
+}
+
 # git_rule_judge_range <ветка> <подпись> <аргументы rev-list…>
 #
 # Судит каждый ЗАПИСАННЫЙ коммит диапазона — у отправки и у запроса. Сообщение
 # чистится git stripspace, как у хука коммита: единица счёта тела одна.
 #   · атрибуция — у любого коммита;
 #   · коммит не до правила (git_rule_pre_rule) — форма (git_rule_form): слияние
-#     — по числу родителей, номер ветки — у слияний ПЕРВОЙ РОДИТЕЛЬСКОЙ цепочки
-#     <ветки>; номера первой строки копятся в GIT_RULE_NUMBERS;
+#     — по числу родителей, серверное — по GIT_RULE_SERVER_MERGES, номер ветки —
+#     у слияний клиента ПЕРВОЙ РОДИТЕЛЬСКОЙ цепочки <ветки>; номера первой
+#     строки копятся в GIT_RULE_NUMBERS;
 #   · <подпись> «имя <адрес>» — автор у коммита не до правила, коммиттер у
 #     коммита, не ЗАПИСАННОГО до правила (git_rule_recorded_before): перепись
 #     старого коммита записывает нового коммиттера; «-» — подпись не судится.
@@ -354,6 +411,9 @@ git_rule_judge_range() {
         GIT_RULE_AFTER_RULE=$((GIT_RULE_AFTER_RULE + 1))
         merge=0
         [ "$(wc -w <<<"$parents")" -lt 2 ] || merge=1
+        if [ "$merge" = 1 ] && [[ $'\n'"$GIT_RULE_SERVER_MERGES"$'\n' == *$'\n'"$h"$'\n'* ]]; then
+            merge=server
+        fi
         on=""
         [[ $'\n'"$owned"$'\n' != *$'\n'"$h"$'\n'* ]] || on="$branch"
         while IFS= read -r f; do
