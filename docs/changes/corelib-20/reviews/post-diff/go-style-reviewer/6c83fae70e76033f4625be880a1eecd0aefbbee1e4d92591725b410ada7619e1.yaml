@@ -1,0 +1,124 @@
+# Пост-дифф ревью Go-кода — роль go-style-reviewer.
+#
+# Имя файла — content_digest. Прежние записи не правятся; сменился дайджест —
+# новый запуск и новый файл (change-graph §2).
+schema_version: 1
+change_id: corelib-20
+holder: post-diff/go-style-reviewer
+owner: go-style-reviewer
+round: 2
+previous_record: 6e1b10f6e1a313e86d1a5fea5810a49047256546ea8844a554d83bc9837cfd8f.yaml   # круг 1, ⛔ возврат по C1 на дереве af4973d50b39
+subject: >-
+  oauthceremony — статическая проба по исходнику движка переведена из
+  «закрытого распознавателя» в «ограждение известных форм со слепой зоной
+  поимённо»: держимые формы (находка / неразобранная), перечень blindZoneForms
+  с пробой TestNamedBlindZoneFormsStaySilent, правка шапок и doc-комментария
+  Ceremony (ceremony.go — только комментарий).
+
+fingerprint:
+  repo: PRO-Robotech/corelib
+  branch: '20'
+  base: f6dead5d8211bd3864d336683aa6cc04770f768e
+  head: ddee75b75f1344060944c8b9d8bdf1221df0e50a
+  delta_base: af4973d50b3956774b9fe6f6efc7922ab7d5a16d
+  commits: 2   # дерево af4973d50b39, дерево ddee75b75f13
+  files: 4
+  full_diff_shortstat: '4 files changed, 1809 insertions(+), 17 deletions(-)'
+  delta_shortstat: '4 files changed, 476 insertions(+), 102 deletions(-)'
+content_digest: sha256:6c83fae70e76033f4625be880a1eecd0aefbbee1e4d92591725b410ada7619e1
+digest_definition: "sha256 вывода `git diff f6dead5d8211..ddee75b75f13 -- . ':!docs/changes'`"
+
+subject_preflight:
+  head_measured_by_me: '`git rev-parse HEAD` → коммит с деревом ddee75b75f13 — совпадает с заданием.'
+  digest_measured_by_me: 'ДВАЖДЫ — до разбора и перед вердиктом, оба раза 6c83fae7…19e1.'
+  base_attached: '`git merge-base --is-ancestor` коммитов с деревьями f6dead5d8211→ddee75b75f13 и af4973d50b39→ddee75b75f13 — код 0 оба.'
+  full_diff_present: 'ДА: вне docs/ `git status --porcelain` — 0 строк; судился весь дифф base..head, дельта — отдельно.'
+
+experiment:
+  where: >-
+    Отдельный linked worktree на той же голове
+    (detached, дерево ddee75b75f13), файлы-эксперименты oauthceremony/zz_gsr_r2_probe_internal_test.go и
+    zz_gsr_r2b_probe_internal_test.go на СОБСТВЕННОЙ обвязке пробы (injection.apply →
+    engineCopy → walkEngineSource с её контролем controlWrite). Копия ревью не тронута.
+  c1_forms:   # шесть src из experiment.silent_forms круга 1, дословно
+    - {form: '(1) f := c.GetSanitationWhiteList; f(ctx)[0]', result: 'неразобранная 1', held_by: 'TestUnjudgedFormInjectionIsRedNotSilent «значение-метод настроек, вызванное через переменную»; близнец «метод настроек вызван, а не взят значением»'}
+    - {form: '(2) runGetter(c.pairMap)', result: 'неразобранная 1', held_by: 'TestUnjudgedFormInjectionIsRedNotSilent «значение-метод настроек аргументом»'}
+    - {form: '(3) _, m := c.pair(); m[k]', result: 'находка 1 (глубина 2)', held_by: 'TestContentWriteInjectionIsFoundWithItsCoordinate «второй результат…» (:= и var); близнец «…только читается»'}
+    - {form: '(4) замыкание отдаёт содержимое', result: 'молчание — названо', held_by: 'blindZoneForms «замыкание, отдающее содержимое»; шапка :68-69, ceremony.go:125-126; TestNamedBlindZoneFormsStaySilent'}
+    - {form: '(5) локальный составной литерал', result: 'находка 1 (глубина 3)', held_by: 'TestContentWriteInjection… «локальный составной литерал» (+с ключом, под &); близнецы «копии поля-значения», «только читается»'}
+    - {form: '(6) mutateWrapped([]map{c.InjectedMap})', result: 'неразобранная 1', held_by: 'TestUnjudgedFormInjection… «составной литерал аргументом функции»; близнец «литерал копий полей-значений аргументом»'}
+  held_variants_all_red: >-
+    10 вариантов держимых форм вне инъекций автора — все красные: псевдоним через `=`,
+    псевдоним результата метода настроек, вложенный литерал, срез-литерал, (*c).F[k],
+    интерфейс+утверждение, (*c).GetX(ctx)[0], метод-выражение, generic-функция пакета,
+    defer FuncLit(c.F).
+  unnamed_silent: 'append(nil, c.F) и copy(dst, []T{c.F}) — содержимое вторым аргументом встроенной в локальный; молчат (см. I1).'
+  diff_probes: >-
+    `go test -count=1 -v -run '<9 проб диффа>' ./oauthceremony/` → код 0, PASS 65, FAIL 0;
+    перепись живого дерева: файлов 43 · методов 47 · обращений 70 · записей 4 (глубина 1) ·
+    глубже поля 0 · неразобранных 0; слепая зона: форм 4 · текстов 2.
+  doc_name_injection: 'имя «канал, через который прошло содержимое» снято из ceremony.go → TestNamedBlindZoneFormsStaySilent FAIL с координатой; откачено.'
+
+findings:
+  critical: []
+  c1_closure:
+    status: ЗАКРЫТ
+    predicate: 'шесть src круга 1 той же обвязкой: 5 — ≥1 находка или ≥1 неразобранная; 1 (замыкание) — названа в шапке и ceremony.go поимённо, молчание удержано пробой.'
+  important:
+    - id: I1
+      at: ['oauthceremony/engineconfig_static_internal_test.go:728', 'oauthceremony/engineconfig_static_internal_test.go:1613']
+      what: >-
+        Содержимое, ушедшее ВТОРЫМ аргументом встроенной append/copy в локальный
+        (`xs := append([]T(nil), c.F); xs[0][k] = …`), молчит и не названо ни в
+        держимых, ни в blindZoneForms. Шапка честна оговоркой «перечень НЕ замкнут»,
+        поэтому не блокирует.
+      requirement: 'Внести в blindZoneForms (с именем в шапке и в ceremony.go) либо научить root/judgeCall: не-первый аргумент append/copy, несущий содержимое, — неразобранная форма.'
+    - id: I2
+      at: ['oauthceremony/ceremony.go:123-131']
+      what: >-
+        «Всё это держит только -race проба» неверно для записи того же значения:
+        инъекция `c.HashCost = max(c.HashCost, 0)` в метод настроек живого дерева
+        роняет TestSourceAndReflectiveCensusesNameTheSameLazyWrites («приборы
+        разошлись»). Комментарий занижает покрытие (безопасное направление), но
+        это комментарий о защите, не совпадающий с кодом.
+      requirement: 'Сказать, что запись того же значения в формах разбора держит сверка приборов, если на пустых настройках метод это поле не меняет; иначе — только -race.'
+    - id: I3
+      at: ['oauthceremony/engineconfig_static_internal_test.go:573']
+      what: >-
+        literalRoot связывает литерал с глубиной содержимого, а не на шаг выше:
+        законный `s := T{m: c.F}; s.m = nil` (пишет локальный) даёт находку
+        глубины 2 с текстом «назвать поле в New её НЕ снимает». Лишнее красное,
+        не молчание; близнеца этой формы нет.
+      requirement: 'Сдвигать глубину литерала на −1 для его частей либо добавить близнец и назвать цену в шапке.'
+  foundation_candidates: []   # дифф — сама corelib
+  style:
+    - {id: S1, status: 'закрыт — ast.Unparen'}
+    - {id: S2, status: 'закрыт — «надмножество» в шапке'}
+    - {id: S3, status: 'закрыт — slices.Sort, импорта sort нет'}
+    - {id: S4, status: 'остаётся', at: 'engineconfig_static_internal_test.go:290, :1017, :1094, :1103, :1137', what: 'общие имена пакетного уровня (origin, marker, writeFile, replaceOnce, injection) в пространстве внутренних проб.'}
+    - {id: S5, status: 'остаётся', at: 'engineconfig_static_internal_test.go:875', what: 'ручной разбор строки module go.mod; fail-closed.'}
+  approved:
+    - 'Слепая зона — данные (blindZoneForms), и её правдивость держит проба в обе стороны: разбор научился — красное; текст перестал называть — красное (доказано инъекцией).'
+    - 'Каждая держимая форма шапки имеет инъекцию; близнецы тех же форм молчат при видимой глубине 1.'
+    - 'controlWrite вместо живых ленивых геттеров — контроль не истекает на цели.'
+    - 'Паники нет; t.Helper; НЕ ВЫПОЛНИЛОСЬ/ПРЕДПОСЫЛКА/ФИКСТУРА отделены от находок; ошибки обхода обёрнуты %w.'
+    - 'ceremony.go — только комментарий; поведения не меняет.'
+    - 'gofmt -l — пусто; go vet ./oauthceremony/ — 0 (вход находок, исход линтера ролью не объявляется).'
+
+bans:
+  ban11_fresh_deferral_markers: {count: 0, measured_over: 'ПОЛНЫЙ дифф деревьев f6dead5d8211..ddee75b75f13', command: "git diff … | grep -E '^\\+' | grep -E 'TODO|FIXME|XXX|HACK|t\\.Skip|SkipNow'"}
+  ban12_tests_in_the_same_pr: {answer: ДА, evidence: 'три тестовых файла + комментарий ceremony.go'}
+  ban17_latin_identifiers: {violations: 0, measured: 'go/scanner по 4 файлам: идентификаторов 5903, не-ASCII 0; контроль `var В = 1` — 1 найден.'}
+  security_comments_contradicting_code:
+    - 'oauthceremony/ceremony.go:123-131 — I2 (занижает покрытие; не блокирует).'
+
+verdict:
+  value: '✅ принято'
+  blocking: НЕТ
+  rationale: >-
+    C1 закрыт по своему предикату: пять форм распознаются инъекцией с близнецом,
+    замыкание названо слепой зоной в обоих текстах и удержано пробой. Утверждение
+    сужено до «ограждения известных форм», и эксперимент его не опроверг: 10
+    вариантов держимых форм красные. I1–I3 посадку не держат.
+  next: 'сбор пост-дифф записей — convergence-reviewer либо landing-reviewer; I1–I3 — автору диффа в той же ветке по усмотрению.'
+  return_to: '—'

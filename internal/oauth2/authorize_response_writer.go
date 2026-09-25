@@ -1,0 +1,45 @@
+// Copyright © 2024 Ory Corp
+// SPDX-License-Identifier: Apache-2.0
+// Изменено PRO-Robotech (modified by PRO-Robotech): перечень изменений — internal/oauth2/PROVENANCE.md.
+
+package fosite
+
+import (
+	"context"
+	"net/http"
+	"net/url"
+
+	"github.com/PRO-Robotech/corelib/internal/oauth2deps/errorsx"
+	"github.com/PRO-Robotech/corelib/internal/otelx"
+	"go.opentelemetry.io/otel/trace"
+)
+
+func (f *Fosite) NewAuthorizeResponse(ctx context.Context, ar AuthorizeRequester, session Session) (_ AuthorizeResponder, err error) {
+	ctx, span := trace.SpanFromContext(ctx).TracerProvider().Tracer("github.com/PRO-Robotech/corelib/internal/oauth2").Start(ctx, "Fosite.NewAuthorizeResponse")
+	defer otelx.End(span, &err)
+
+	var resp = &AuthorizeResponse{
+		Header:     http.Header{},
+		Parameters: url.Values{},
+	}
+
+	ctx = context.WithValue(ctx, AuthorizeRequestContextKey, ar)
+	ctx = context.WithValue(ctx, AuthorizeResponseContextKey, resp)
+
+	ar.SetSession(session)
+	for _, h := range f.Config.GetAuthorizeEndpointHandlers(ctx) {
+		if err := h.HandleAuthorizeEndpointRequest(ctx, ar, resp); err != nil {
+			return nil, err
+		}
+	}
+
+	if !ar.DidHandleAllResponseTypes() {
+		return nil, errorsx.WithStack(ErrUnsupportedResponseType)
+	}
+
+	if ar.GetDefaultResponseMode() == ResponseModeFragment && ar.GetResponseMode() == ResponseModeQuery {
+		return nil, ErrUnsupportedResponseMode.WithHintf("Insecure response_mode '%s' for the response_type '%s'.", ar.GetResponseMode(), ar.GetResponseTypes())
+	}
+
+	return resp, nil
+}
