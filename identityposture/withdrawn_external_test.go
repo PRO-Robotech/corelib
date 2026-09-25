@@ -3,12 +3,16 @@
 
 // withdrawn_external_test.go — посадка `external` снята со словаря (corelib#30).
 //
-// Два свойства, и оба держатся здесь:
+// Три свойства, и все держатся здесь:
 //
-//   - ЗНАЧЕНИЯ больше нет: разбор отвергает его с именем настройки, перечни его
-//     не производят. Каждое отрицание стоит в паре с живым контролем — законный
-//     близнец `own` отличается ровно одним фактом (значением) и разбирается,
-//     иначе «отвергнуто» неотличимо от «разбор отвергает всё»;
+//   - ЗНАЧЕНИЯ в словаре больше нет: разбор отвергает его с именем настройки,
+//     перечни его не производят. Каждое отрицание стоит в паре с живым
+//     контролем — законный близнец `own` отличается ровно одним фактом
+//     (значением) и разбирается, иначе «отвергнуто» неотличимо от «разбор
+//     отвергает всё»;
+//   - значение ДОСТИЖИМО мимо Parse — числом, которое декодер кладёт прямо в
+//     целое поле, — и проверка старта Validate отвергает его наравне с любым
+//     другим числом вне словаря, отдельным от «не объявлено» текстом;
 //   - ИМЯ осталось: `External` — устаревшая константа прежнего типа и прежнего
 //     значения, с абзацем `Deprecated:`. Путь модуля без суффикса мажорной
 //     версии, и снятое экспортированное имя в минорном выпуске v1 ломало бы
@@ -17,6 +21,7 @@ package identityposture_test
 
 import (
 	"encoding/json"
+	"fmt"
 	"go/ast"
 	"go/parser"
 	"go/token"
@@ -24,6 +29,8 @@ import (
 	"slices"
 	"strings"
 	"testing"
+
+	"github.com/go-viper/mapstructure/v2"
 
 	"github.com/PRO-Robotech/corelib/identityposture"
 )
@@ -87,6 +94,88 @@ func TestDictionaryListsOnlyOwn(t *testing.T) {
 	}
 	if got, want := identityposture.Values(), []identityposture.Provider{identityposture.Own}; !slices.Equal(got, want) {
 		t.Errorf("Values() = %v; want %v", got, want)
+	}
+}
+
+// TestStartCheckRefusesEveryValueOutsideTheDictionary — проверка старта
+// различает ТРИ исхода: законное значение принято; поле не объявлено — отказ
+// NotDeclared; объявлено числом вне словаря — отдельный отказ, называющий
+// ручку, число и законный перечень. Снятая посадка идёт третьим исходом наравне
+// с любым другим числом вне словаря: «объявлено» не значит «законно».
+func TestStartCheckRefusesEveryValueOutsideTheDictionary(t *testing.T) {
+	if err := identityposture.Own.Validate(setting); err != nil {
+		t.Fatalf("законный близнец: Own.Validate = %v; want nil — проверка отвергает всё, отказы ниже ничего бы не значили", err)
+	}
+	if !identityposture.Own.IsLegal() {
+		t.Fatal("законный близнец: Own.IsLegal() = false")
+	}
+
+	err := identityposture.Unset.Validate(setting)
+	if err == nil || err.Error() != identityposture.NotDeclared(setting).Error() {
+		t.Errorf("Unset.Validate = %v; want ровно NotDeclared(%q) — незаданное поле отвергается тем же текстом, что прежде",
+			err, setting)
+	}
+	if identityposture.Unset.IsLegal() {
+		t.Error("Unset.IsLegal() = true — «не задано» законным значением не является")
+	}
+
+	for _, p := range []identityposture.Provider{identityposture.External, 7, -1} {
+		if !p.IsSet() {
+			t.Errorf("Provider(%d).IsSet() = false — поле объявлено, пусть и вне словаря", int(p))
+		}
+		if p.IsLegal() {
+			t.Errorf("Provider(%d).IsLegal() = true — число вне словаря объявлено законным", int(p))
+		}
+		err := p.Validate(setting)
+		if err == nil {
+			t.Errorf("Provider(%d).Validate = nil — значение вне словаря прошло проверку старта", int(p))
+			continue
+		}
+		want := fmt.Sprintf("%s=%d is outside the dictionary (allowed, verbatim: own)", setting, int(p))
+		if !strings.HasPrefix(err.Error(), want) {
+			t.Errorf("Provider(%d).Validate = %q; want начинающийся с %q", int(p), err, want)
+		}
+		if err.Error() == identityposture.NotDeclared(setting).Error() {
+			t.Errorf("Provider(%d).Validate отвечает «не объявлено» — оператор правил бы не то", int(p))
+		}
+	}
+}
+
+// TestANumberDecodedPastParseReachesTheFieldAndIsRefusedAtStart — путь мимо
+// Parse существует: декодер настройки, кладущий число прямо в целое поле, Parse
+// не зовёт, и снятое значение доезжает до поля. Поэтому «разбор её не
+// производит» не значит «значения не бывает», и отказ ему обязан дать проверка
+// старта. Законный близнец отличается одним фактом — числом законного
+// значения — и проверку проходит.
+func TestANumberDecodedPastParseReachesTheFieldAndIsRefusedAtStart(t *testing.T) {
+	decode := func(t *testing.T, n int) identityposture.Provider {
+		t.Helper()
+		var cfg struct {
+			Provider identityposture.Provider `mapstructure:"identity-provider"`
+		}
+		if err := mapstructure.Decode(map[string]any{identityposture.FieldName: n}, &cfg); err != nil {
+			t.Fatalf("NOT EXECUTED: декодер отверг число %d сам (%v) — пути мимо Parse в этой форме нет, "+
+				"проба ничего не утверждает", n, err)
+		}
+		return cfg.Provider
+	}
+
+	twin := decode(t, int(identityposture.Own))
+	if twin != identityposture.Own || twin.Validate(setting) != nil {
+		t.Fatalf("законный близнец: число %d → %v, Validate = %v; want own, nil",
+			int(identityposture.Own), twin, twin.Validate(setting))
+	}
+
+	got := decode(t, int(identityposture.External))
+	if got != identityposture.External {
+		t.Fatalf("число %d → %v; want External — декодер перестал класть число прямо, шапка пакета устарела",
+			int(identityposture.External), got)
+	}
+	if !got.IsSet() {
+		t.Error("снятое значение, доехавшее мимо Parse, IsSet считает необъявленным — отказ назвал бы не то")
+	}
+	if err := got.Validate(setting); err == nil {
+		t.Error("снятое значение, доехавшее мимо Parse, прошло проверку старта")
 	}
 }
 

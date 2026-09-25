@@ -19,6 +19,11 @@
 // слова, и обход всего дерева по ним считал бы находкой каждое поле «владелец»
 // и каждый «внешний адрес».
 //
+// Литерал судится в трёх формах: точный; в другом регистре (сверка без учёта
+// регистра с `External` принимает снятое значение так же, как точная с
+// `external`); собранный сложением литералов (`"ex" + "ternal"`). Форма и
+// порядок разбора — у CountCanonicalNames.
+//
 // СНЯТОЕ ИМЯ СЧИТАЕТСЯ ТОЖЕ, и законное число у него — ноль. Посадка
 // `external` снята со словаря (corelib#30), и Names() её больше не производит.
 // Гейт, считающий только выведенные имена, вернувшейся строки словаря не видит:
@@ -26,8 +31,9 @@
 // было с прежней редакцией: строка `{External, "external"}`, возвращённая в
 // provider.go, оставляла её зелёной с «канонических имён 2 (external, own)».
 // Поэтому снятые имена выписаны перечнем withdrawnNames, и у каждого две
-// находки: словарь снова его производит; его литерал стоит в файле, знающем о
-// посадке, — вернувшаяся строка словаря либо разбор значения мимо Parse.
+// находки: словарь снова его производит; его литерал — в любой из трёх форм —
+// стоит в файле, знающем о посадке: вернувшаяся строка словаря либо разбор
+// значения мимо Parse, сверяющий с этим литералом.
 //
 // ОБЛАСТЬ ГЕЙТА — ЭТОТ МОДУЛЬ, и она названа числом. Обход идёт от корня
 // модуля (каталог с go.mod), а не выше: вердикт, снятый за его пределами, есть
@@ -37,12 +43,22 @@
 // одного — 186 чужих копий этого же пакета. Корень модуля даёт 181 файл.
 // Держит это `walk_root_gate_test.go`.
 //
-// Чего гейт НЕ даёт — две границы, обе названы:
+// Чего гейт НЕ даёт — три границы, все названы:
 //
 //   - он не поймает третьего перечисления в файле, который о посадке нигде не
 //     упоминает и этот пакет не импортирует. Такой файл значений поля и не
 //     разбирает — разбирать их нечем; свойство держится тем, что разбор один,
 //     и обзором;
+//   - в файле, ЗНАЮЩЕМ о посадке, он не видит разбора мимо Parse, который
+//     снятого имени константой из литералов не несёт: строки, вычисленной во
+//     время исполнения или собранной из идентификаторов, сравнения по части
+//     строки (префикс, регулярное выражение) и значения, записанного в поле
+//     ЧИСЛОМ, — преобразованием типа или декодером настройки, кладущим число
+//     прямо. Последнее строки не несёт вовсе, и держит его не гейт, а проверка
+//     старта: Provider.Validate отвергает любое число вне словаря, и это
+//     закреплено поведением в withdrawn_external_test.go. Молчание гейта на
+//     вычисленной строке закреплено здесь же пробой
+//     TestF4d03_ARuntimeComputedNameIsTheNamedBoundary;
 //   - он не видит ПОТРЕБИТЕЛЕЙ. Словарь читают два процесса — служба прав и
 //     край, — и после выноса фундамента отдельным модулем оба живут в ДРУГИХ
 //     репозиториях: обход модуля до них не доходит by construction, а внутри
@@ -55,19 +71,26 @@
 // заводится. Основание — замер тем же распознавателем и тем же счётом
 // литералов, что ниже, приложенными к деревьям потребителей: непроверочных
 // файлов, знающих о посадке, у kacho main@1d42a6728b — 8, 2564@d68ef02a00 —
-// 6; у kaname main@cbbac984b7 — 10, 357@fc9f5aff19 — 11. Замер сделан, пока
-// словарь ещё производил оба имени (до #30), поэтому он покрывает и нынешнее
-// имя, и снятое: литералов `own` и `external` в этих файлах 0. Оба
-// читают словарь только выведенным: константами пакета (служба прав — их
+// 6; у kaname main@cbbac984b7 — 10, 357@fc9f5aff19 — 11. Счёт литералов
+// перемерен на тех же ревизиях после того, как распознаватель стал читать три
+// формы (corelib#29): литералов `own` и `external` — точных, в другом
+// регистре, собранных сложением — в этих файлах 0. Оба имени даны замеру
+// явно, поэтому он покрывает и нынешнее имя, и снятое. Оба потребителя
+// называют словарь только выведенным: константами пакета (служба прав — их
 // псевдонимами), Parse, Names, Values, NotDeclared. Положительный контроль
-// того же замера на этом модуле нашёл оба тогдашних имени в provider.go;
-// после #30 тот же контроль — этот гейт — находит там `own` один раз, а
-// литерала снятого имени — ни одного.
+// того же замера — этот модуль на ревизии до #30 (227ed2b) — нашёл оба
+// тогдашних имени в provider.go; на нынешней ревизии гейт находит там `own`
+// один раз, а литерала снятого имени — ни одного.
+//
+// Замер литералов говорит о ТЕКСТЕ и молчит о ПУТИ значения: проходит ли
+// значение поля у потребителя через Parse, он не показывает — это вторая
+// граница выше. Её держит не обзор, а проверка старта Validate, введённая тем
+// же изменением (corelib#29); перевод проверок старта потребителей на неё —
+// их изменение по графу сборки, а не этого модуля.
 //
 // Решение пересматривается, как только в непроверочном файле потребителя,
-// знающем о посадке, появится литерал имени словаря или снятого имени либо
-// разбор значения мимо Parse: тогда гейт того же класса заводится в ЕГО
-// дереве.
+// знающем о посадке, появится литерал имени словаря или снятого имени в любой
+// из трёх форм: тогда гейт того же класса заводится в ЕГО дереве.
 package identityposture_test
 
 import (
@@ -131,7 +154,8 @@ func TestF4d03_ValueNamesAreDeclaredOnceInTheWholeTree(t *testing.T) {
 	v := judgeDictionary(t, aware, names, withdrawnNames)
 
 	t.Logf("перепись: непроверочных файлов Go осмотрено %d; знающих о посадке %d; "+
-		"канонических имён %d (%s); снятых имён %d (%s)",
+		"канонических имён %d (%s); снятых имён %d (%s); форм литерала 3 "+
+		"(точный, другой регистр, сложение литералов)",
 		files, len(aware), len(names), strings.Join(names, ", "),
 		len(withdrawnNames), strings.Join(withdrawnNames, ", "))
 	for _, name := range names {
@@ -209,18 +233,102 @@ func TestF4d03Injection_AWithdrawnNameIsFoundAndTheLawfulDictionaryIsSilent(t *t
 			mustFind(t, v.findings, fmt.Sprintf("снятое имя %q снова производится словарём", w))
 			mustFind(t, v.findings, fmt.Sprintf("снятое имя %q стоит литералом 1 раз (declaring.go)", w))
 		})
-		t.Run("снятое "+w+" разобрано мимо Parse", func(t *testing.T) {
-			v := judgeDictionary(t, parseFixtures(t, map[string]string{
-				"declaring.go": declaringFixture(names),
-				"elsewhere.go": "package edge\n// Знает о посадке: называет поле по имени identity-provider.\n" +
-					"func legacy(s string) bool { return s == " + strconv.Quote(w) + " }\n",
-			}), names, withdrawnNames)
-			mustFind(t, v.findings, fmt.Sprintf("снятое имя %q стоит литералом 1 раз (elsewhere.go)", w))
-			if len(v.findings) != 1 {
-				t.Errorf("находок %d, want 1: %q", len(v.findings), v.findings)
-			}
-		})
+		// Разбор мимо Parse — в каждой форме, которую распознаватель читает.
+		// Законный близнец каждой формы — та же строка кода с посторонним словом
+		// вместо снятого имени: молчит. Дефект отличается от него одним фактом.
+		for _, form := range bypassForms(w) {
+			t.Run("снятое "+w+" разобрано мимо Parse: "+form.name, func(t *testing.T) {
+				twin := judgeDictionary(t, parseFixtures(t, map[string]string{
+					"declaring.go": declaringFixture(names),
+					"elsewhere.go": bypassFixture(form.twin),
+				}), names, withdrawnNames)
+				if len(twin.findings) != 0 {
+					t.Fatalf("законный близнец формы «%s» объявлен находкой: %q — отказ ниже ничего бы не значил",
+						form.name, twin.findings)
+				}
+				v := judgeDictionary(t, parseFixtures(t, map[string]string{
+					"declaring.go": declaringFixture(names),
+					"elsewhere.go": bypassFixture(form.defect),
+				}), names, withdrawnNames)
+				mustFind(t, v.findings, fmt.Sprintf("снятое имя %q стоит литералом 1 раз (elsewhere.go)", w))
+				if len(v.findings) != 1 {
+					t.Errorf("находок %d, want 1: %q", len(v.findings), v.findings)
+				}
+			})
+		}
 	}
+}
+
+// Второе перечисление имени словаря в ДРУГОМ регистре — тоже второе
+// перечисление: сверка без учёта регистра принимает `own` так же, как точная.
+func TestF4d03Injection_ASecondEnumerationInAnotherCaseIsFound(t *testing.T) {
+	names := identityposture.Names()
+	upper := make([]string, 0, len(names))
+	for _, n := range names {
+		upper = append(upper, strings.ToUpper(n))
+	}
+	v := judgeDictionary(t, parseFixtures(t, map[string]string{
+		"declaring.go": declaringFixture(names),
+		"elsewhere.go": "package edge\n// Знает о посадке: называет поле по имени identity-provider.\n" +
+			"var legal = []string{" + strings.Join(quoteAll(upper), ", ") + "}\n",
+	}), names, withdrawnNames)
+	for _, name := range names {
+		mustFind(t, v.findings, fmt.Sprintf("каноническое имя %q объявлено 2 раз (declaring.go, elsewhere.go)", name))
+	}
+	if len(v.findings) != len(names) {
+		t.Errorf("находок %d при %d именах: %q", len(v.findings), len(names), v.findings)
+	}
+}
+
+// Граница, названная в шапке, — в обе стороны. Строка, вычисленная во время
+// исполнения, литерала снятого имени не несёт, и гейт её НЕ видит: эта проба
+// утверждает молчание, чтобы шапка, называющая границу, не разошлась с тем,
+// что гейт делает. Литерал внутри того же вычисления гейт по-прежнему видит.
+func TestF4d03_ARuntimeComputedNameIsTheNamedBoundary(t *testing.T) {
+	names := identityposture.Names()
+	for _, w := range withdrawnNames {
+		half := len(w) / 2
+		unseen := judgeDictionary(t, parseFixtures(t, map[string]string{
+			"declaring.go": declaringFixture(names),
+			"elsewhere.go": bypassFixture(`strings.Join([]string{` + strconv.Quote(w[:half]) + `, ` +
+				strconv.Quote(w[half:]) + `}, "") == s`),
+		}), names, withdrawnNames)
+		if len(unseen.findings) != 0 {
+			t.Errorf("строка, собранная во время исполнения, найдена: %q — гейт видит больше, чем говорит "+
+				"его шапка; поправь шапку вместе с распознавателем", unseen.findings)
+		}
+		seen := judgeDictionary(t, parseFixtures(t, map[string]string{
+			"declaring.go": declaringFixture(names),
+			"elsewhere.go": bypassFixture(`strings.Join([]string{` + strconv.Quote(w) + `}, "") == s`),
+		}), names, withdrawnNames)
+		mustFind(t, seen.findings, fmt.Sprintf("снятое имя %q стоит литералом 1 раз (elsewhere.go)", w))
+	}
+}
+
+// bypassForm — одна форма разбора мимо Parse: дефект со снятым именем и
+// законный близнец той же формы с посторонним словом.
+type bypassForm struct{ name, defect, twin string }
+
+// bypassForms — формы, которые распознаватель обязан читать: точный литерал,
+// литерал в другом регистре под сверкой без учёта регистра, строка, собранная
+// сложением литералов.
+func bypassForms(w string) []bypassForm {
+	const other = "shared"
+	title := func(s string) string { return strings.ToUpper(s[:1]) + s[1:] }
+	half := len(w) / 2
+	return []bypassForm{
+		{"точный литерал", `s == ` + strconv.Quote(w), `s == ` + strconv.Quote(other)},
+		{"другой регистр", `strings.EqualFold(s, ` + strconv.Quote(title(w)) + `)`,
+			`strings.EqualFold(s, ` + strconv.Quote(title(other)) + `)`},
+		{"сложение литералов", `s == ` + strconv.Quote(w[:half]) + ` + ` + strconv.Quote(w[half:]),
+			`s == ` + strconv.Quote(other[:3]) + ` + ` + strconv.Quote(other[3:])},
+	}
+}
+
+// bypassFixture — файл, знающий о посадке, с одним сравнением cond.
+func bypassFixture(cond string) string {
+	return "package edge\n\nimport \"strings\"\n\n// Знает о посадке: называет поле по имени identity-provider.\n" +
+		"var _ = strings.EqualFold\n\nfunc legacy(s string) bool { return " + cond + " }\n"
 }
 
 // Законный близнец второго рода: ПРОЗА, называющая и значение словаря, и
@@ -324,8 +432,9 @@ func judgeDictionary(t *testing.T, files map[string]*ast.File, names, withdrawn 
 		if places := v.withdrawn[name]; len(places) > 0 {
 			sort.Strings(places)
 			v.findings = append(v.findings, fmt.Sprintf(
-				"снятое имя %q стоит литералом %d раз (%s) — снятая посадка вернулась в словарь "+
-					"либо её значение разбирается мимо Parse (corelib#30)",
+				"снятое имя %q стоит литералом %d раз (%s) — точным, в другом регистре либо сложением "+
+					"литералов: снятая посадка вернулась в словарь либо её значение разбирается мимо Parse "+
+					"(corelib#30)",
 				name, len(places), strings.Join(places, ", ")))
 		}
 	}
@@ -333,28 +442,84 @@ func judgeDictionary(t *testing.T, files map[string]*ast.File, names, withdrawn 
 }
 
 // CountCanonicalNames — где в файлах объявлены канонические имена значений.
+//
+// Имя считается объявленным строковой константой, собранной из ЛИТЕРАЛОВ:
+// одним литералом либо их сложением (скобки допустимы). Сверка идёт без учёта
+// регистра: сравнение `strings.EqualFold(s, "External")` принимает снятое
+// значение так же, как точный литерал, и читается тем же предметом. Сложение
+// сперва судится целиком — `"ex" + "ternal"` есть одно объявление снятого
+// имени, — а если целое не совпало ни с одним именем, судится каждый его
+// литерал, как у одиночного литерала: `"own" + "," + "external"` — два
+// объявления, а не ноль.
+//
+// Чего разбор не читает, названо в шапке файла третьей границей: строка,
+// вычисленная во время исполнения или собранная из идентификаторов, сравнение
+// по части строки и значение, записанное в поле числом.
 func CountCanonicalNames(t *testing.T, files map[string]*ast.File, names []string) map[string][]string {
 	t.Helper()
 	found := map[string][]string{}
+	record := func(file, v string) bool {
+		hit := false
+		for _, name := range names {
+			if strings.EqualFold(v, name) {
+				found[name] = append(found[name], file)
+				hit = true
+			}
+		}
+		return hit
+	}
 	for file, f := range files {
 		ast.Inspect(f, func(n ast.Node) bool {
-			lit, ok := n.(*ast.BasicLit)
-			if !ok || lit.Kind != token.STRING {
+			e, ok := n.(ast.Expr)
+			if !ok {
 				return true
 			}
-			v, err := strconv.Unquote(lit.Value)
-			if err != nil {
+			leaves, whole, ok := literalString(e)
+			if !ok {
 				return true
 			}
-			for _, name := range names {
-				if v == name {
-					found[name] = append(found[name], file)
+			if !record(file, whole) {
+				for _, leaf := range leaves {
+					record(file, leaf)
 				}
 			}
-			return true
+			return false
 		})
 	}
 	return found
+}
+
+// literalString — значение строковой константы, собранной из литералов
+// сложением, и значения её литералов по порядку. Любой иной узел — не такая
+// константа (ok == false), и обход спускается в него за литералами.
+func literalString(e ast.Expr) (leaves []string, whole string, ok bool) {
+	switch x := e.(type) {
+	case *ast.BasicLit:
+		if x.Kind != token.STRING {
+			return nil, "", false
+		}
+		v, err := strconv.Unquote(x.Value)
+		if err != nil {
+			return nil, "", false
+		}
+		return []string{v}, v, true
+	case *ast.ParenExpr:
+		return literalString(x.X)
+	case *ast.BinaryExpr:
+		if x.Op != token.ADD {
+			return nil, "", false
+		}
+		l, lw, lok := literalString(x.X)
+		if !lok {
+			return nil, "", false
+		}
+		r, rw, rok := literalString(x.Y)
+		if !rok {
+			return nil, "", false
+		}
+		return append(l, r...), lw + rw, true
+	}
+	return nil, "", false
 }
 
 // postureAwareFiles обходит дерево и возвращает число осмотренных файлов и те

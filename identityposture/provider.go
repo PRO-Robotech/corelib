@@ -14,19 +14,29 @@
 //
 // Посадка `external` из словаря снята (corelib#30): законное значение одно —
 // `own`. Поле при этом остаётся обязательным. Профиль, который всё ещё объявляет
-// снятую посадку, получает отказ старта с именем настройки тем же текстом, что
-// любое незнакомое значение, а не поднимается в посадке, которую никто не
-// выбирал.
+// снятую посадку, получает отказ с именем настройки, а не поднимается в
+// посадке, которую никто не выбирал: объявивший её строкой — от Parse, тем же
+// текстом, что любое незнакомое имя; числом мимо Parse — от проверки старта
+// Validate, тем же текстом, что любое число вне словаря.
 //
 // ─────────────────────────────────────────────────────────────────────────────
-// ИМЯ `External` ОСТАЛОСЬ, ЗНАЧЕНИЯ НЕТ
+// ИМЯ `External` ОСТАЛОСЬ, ЗНАЧЕНИЕ — ВНЕ СЛОВАРЯ
 //
 // Путь модуля — без суффикса мажорной версии, и снятое экспортированное имя в
 // минорном выпуске v1 ломало бы сборку потребителя, поднявшего пин. Поэтому
 // `External` — устаревшая константа прежнего типа и прежнего числа с абзацем
-// `Deprecated:`. Значением поля она не бывает: разбор её не производит, перечни
-// её не называют, печатается она как величина вне словаря. Имя снимается только
-// мажорным выпуском модуля.
+// `Deprecated:`. Разбор её не производит, перечни её не называют, печатается
+// она как величина вне словаря. Имя снимается только мажорным выпуском модуля.
+//
+// «Вне словаря» не значит «недостижимо». Тип — целое, и число снятой посадки
+// записывает в поле всякий, кто идёт мимо Parse: преобразование типа, декодер
+// настройки, кладущий число прямо в целое поле. Такое значение IsSet называет
+// объявленным — и это правда: профиль поле объявил. Законным его называет
+// только словарь — IsLegal, а на старте Validate, который различает три исхода
+// (не объявлено · объявлено вне словаря · законно) и отвергает снятую посадку
+// наравне с любым другим числом вне словаря. Поэтому ветку потребителя,
+// читающую External, снимают не раньше, чем перед ней встанет Validate: до
+// того она может оказаться единственным, что за этим значением стоит.
 //
 // ─────────────────────────────────────────────────────────────────────────────
 // ПОЧЕМУ УМОЛЧАНИЯ В КОДЕ НЕТ
@@ -82,13 +92,17 @@ const (
 	Unset Provider = iota
 	// External — прежняя посадка «личность проверяет внешний поставщик». Из
 	// словаря снята (corelib#30): разбор её не производит, перечни её не
-	// называют. Число прежнее — значение константы в v1 не меняется.
+	// называют, проверка старта Validate её отвергает. Число прежнее — значение
+	// константы в v1 не меняется.
 	//
-	// Deprecated: the external identity posture is withdrawn. Parse refuses it,
-	// Values and Names do not list it, and no configuration yields it, so a
-	// branch that reads it is dead — remove the branch rather than rename it.
-	// The name is kept for consumers that raise their pin within v1 and is
-	// removed only with a major release of the module.
+	// Deprecated: the external identity posture is withdrawn. Parse refuses it
+	// and Values and Names do not list it, but the type is an integer, so a
+	// conversion or a decoder that writes a number into the field still yields
+	// it past Parse. Refuse it at the start check with Validate, which rejects it
+	// together with every other value outside the dictionary, and remove a
+	// branch that reads External only once Validate stands in front of it. The
+	// name is kept for consumers that raise their pin within v1 and is removed
+	// only with a major release of the module.
 	External
 	// Own — личность проверяем мы сами; адреса поставщика не
 	// требуются, вместо них обязательна своя чеканка и свой вход человека.
@@ -111,8 +125,9 @@ const (
 //
 // Строки для External здесь нет: посадка снята со словаря (corelib#30), а имя
 // осталось устаревшей константой — значение не разбирается и не печатается
-// своим прежним именем. Литерал снятого имени в файле, знающем о посадке, —
-// находка того же гейта, и здесь тоже: вернувшаяся строка краснеет.
+// своим прежним именем. Литерал снятого имени — точный, в другом регистре либо
+// собранный сложением литералов — в файле, знающем о посадке, находка того же
+// гейта, и здесь тоже: вернувшаяся строка краснеет.
 var providerNames = []struct {
 	value Provider
 	name  string
@@ -163,8 +178,41 @@ func (p Provider) String() string {
 	return fmt.Sprintf("identity-provider(%d)", int(p))
 }
 
-// IsSet сообщает, объявил ли профиль поле.
+// IsSet сообщает, объявил ли профиль поле — каким угодно значением, в том
+// числе вне словаря. Объявлено не значит законно: число, записанное в поле мимо
+// Parse, IsSet считает объявленным. Проверка старта зовёт Validate.
 func (p Provider) IsSet() bool { return p != Unset }
+
+// IsLegal сообщает, стоит ли значение в словаре. Unset и любое число вне
+// словаря, в том числе снятое External, законными не являются.
+func (p Provider) IsLegal() bool {
+	for _, e := range providerNames {
+		if e.value == p {
+			return true
+		}
+	}
+	return false
+}
+
+// Validate — проверка старта. Исходов три, и у каждого свой ответ: законное
+// значение — nil; поле не объявлено — NotDeclared(setting); объявлено числом
+// вне словаря — отказ, называющий ручку вызывающего, это число и законный
+// перечень. Последний исход отдельный намеренно: «не объявлено» послало бы
+// оператора дописывать поле, которое он уже написал.
+func (p Provider) Validate(setting string) error {
+	if !p.IsSet() {
+		return NotDeclared(setting)
+	}
+	if p.IsLegal() {
+		return nil
+	}
+	return fmt.Errorf(
+		"%s=%d is outside the dictionary (allowed, verbatim: %s) — no allowed name parses to this "+
+			"number, so it did not come through Parse: a type conversion or a decoder that writes the "+
+			"number itself put it into the field. A withdrawn posture is refused here like any other "+
+			"value outside the dictionary; declare one of the allowed names",
+		setting, int(p), strings.Join(Names(), ", "))
+}
 
 // Parse — поточечно обратная String() для законных значений.
 //
