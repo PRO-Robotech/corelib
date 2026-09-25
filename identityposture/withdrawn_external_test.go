@@ -179,8 +179,15 @@ func TestANumberDecodedPastParseReachesTheFieldAndIsRefusedAtStart(t *testing.T)
 	}
 }
 
-// Прежний тип: объявление другого типа не скомпилируется здесь.
-var _ identityposture.Provider = identityposture.External
+// Прежний тип — две строки, потому что форм отступления две. Присваивание не
+// скомпилируется, если External объявят константой другого именованного типа,
+// но нетипизированную константу пропустит: она присваивается любому целому
+// типу. Её не пропустит взятие метода: у нетипизированной константы методов
+// нет, а у константы Provider — есть.
+var (
+	_ identityposture.Provider = identityposture.External
+	_                          = identityposture.External.IsSet
+)
 
 // TestExternalKeepsItsV1Value — имя сохраняет значение выпусков v1.9.0 и
 // v1.10.0-rc.2 и не совпадает ни с одним другим: псевдоним `Unset` сделал бы
