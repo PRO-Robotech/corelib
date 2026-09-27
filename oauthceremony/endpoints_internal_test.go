@@ -84,7 +84,7 @@ func (r *requestAddressRecorder) NewRevocationRequest(_ context.Context, req *ht
 // синтезированных запросов равны значениям из Config, какими бы они ни были.
 //
 // Случаи различаются тем, чего церемония не вправе подставить сама: путём
-// (`/oauth2/...` и `/iam/v1/...` — последний служба доступа публикует на
+// (корень хоста и `/iam/v1/...` — последний служба доступа публикует на
 // деле), хостом и портом (точки на разных хостах) и написанием (экранированные
 // знаки уезжают движку как названы, а не раскрытыми). Константа, вывод из
 // одного поля или из хоста совпали бы самое большее с одним из них.
@@ -93,8 +93,8 @@ func TestEndpointsReachTheEngineAsNamedInConfig(t *testing.T) {
 		authorize, token string
 	}{
 		"на корне хоста": {
-			authorize: "https://iam.example.net/oauth2/authorize",
-			token:     "https://iam.example.net/oauth2/token",
+			authorize: "https://iam.example.net/authorize",
+			token:     "https://iam.example.net/token",
 		},
 		"под путём службы доступа": {
 			authorize: "https://iam.example.net/iam/v1/authorize",
