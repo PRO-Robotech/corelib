@@ -775,12 +775,21 @@ func (b *storageBridge) RevokeAccessToken(ctx context.Context, grantID string) e
 // дефект провязки церемонии, а не отказ хранилища и не отказ протокола:
 // каждая операция, в которой движок отзывает, причину называет (Revoke) либо
 // замечает повтор раньше отзыва (Exchange).
+//
+// Отказ заносится в ведомость операции здесь же, мимо перечня coarsenable:
+// движок отвечает на всякий отказ отзыва «временно недоступно»
+// (storeErrorsToRevocationError), и без записи дефект провязки стал бы
+// ответом, который клиент повторяет. Перечень остаётся закрытым: этот случай в
+// ведомость заносит только это место.
 func revocationReasonFor(ctx context.Context, op string) (RevocationReason, *ProtocolError) {
-	reason, named := notesFrom(ctx).revocationReason()
+	notes := notesFrom(ctx)
+	reason, named := notes.revocationReason()
 	if !named {
-		return "", failf(CodeCeremonyMisuse, nil,
+		refusal := failf(CodeCeremonyMisuse, nil,
 			"The authorization server was about to revoke a grant without knowing why.", "",
 			op+": the operation names no revocation reason and noticed no replay; the port was not called")
+		notes.record(refusal)
+		return "", refusal
 	}
 	return reason, nil
 }
