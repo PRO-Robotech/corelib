@@ -1,131 +1,122 @@
 // Copyright (c) PRO-Robotech
 // SPDX-License-Identifier: Apache-2.0
 
-// coverage_test.go — СОСТАВНАЯ половина держателя выреза телеметрии.
-//
-// Поведенческая половина (enginespan_test.go) судит перечень путей, записанный
-// в ней самой. Перечень, который никто не сверяет с деревом, — обещание: путь,
-// приехавший со следующей версией апстрима, в него не попадёт, и трассировка
-// исчезнет на нём молча. Здесь перечень сверяется с ФАКТИЧЕСКИМ составом
-// открытий спанов в поддереве.
+// coverage_test.go — СОСТАВНАЯ половина держателя выреза телеметрии, по
+// живому поддереву.
 //
 // Судятся два утверждения о КЛАССЕ, а не о перечне форм:
 //
 //  1. каждое открытие спана в поддереве закрывается через обёртку ФУНДАМЕНТА;
 //  2. множество имён спанов в поддереве РАВНО множеству, которое гоняет
-//     поведенческая половина, — в обе стороны.
+//     поведенческая половина (enginespan_test.go), — в обе стороны.
 //
-// Вторая сторона равенства нужна не меньше первой: путь, выпавший из
-// поддерева, но оставшийся в перечне, означает, что проба гоняет то, чего в
-// дереве уже нет.
+// Способность суда упасть и смолчать доказана на синтетике рядом
+// (judge_injection_test.go); здесь — правило этого дерева и сверка переписи
+// со знаменателем.
 package tracecut_test
 
 import (
 	"os"
 	"sort"
+	"strings"
 	"testing"
 
+	"github.com/PRO-Robotech/corelib/gitenv"
 	"github.com/PRO-Robotech/corelib/internal/tracecut"
 	"github.com/PRO-Robotech/corelib/treecorpus"
 )
 
-// поддерево — каталог внесённого движка относительно этого пакета.
-const поддерево = "../oauth2"
+// subtreeDir — каталог внесённого движка относительно этого пакета.
+const subtreeDir = "../oauth2"
 
-// обёрткаФундамента — единственный законный путь импорта закрывающего пакета.
-//
-// Имя пакета к делу не относится: наша обёртка зовётся `otelx` ровно так же,
-// как заменённая `github.com/ory/x/otelx`, — именно поэтому места вызова в
-// поддереве остались побайтово апстримными. Различить их можно только так.
-const обёрткаФундамента = "github.com/PRO-Robotech/corelib/internal/otelx"
-
-// открытияПоддерева снимает все открытия спанов с отслеживаемых файлов Go
-// внесённого поддерева.
-func открытияПоддерева(t *testing.T) []tracecut.Opening {
+// judgeSubtree судит отслеживаемые файлы Go внесённого поддерева.
+func judgeSubtree(t *testing.T) tracecut.Report {
 	t.Helper()
-	files, err := treecorpus.UnderWithSuffix(поддерево, ".go")
+	files, err := treecorpus.UnderWithSuffix(subtreeDir, ".go")
 	if err != nil {
-		t.Fatalf("проба НЕ ИСПОЛНЯЛАСЬ: состав %s не снялся: %v", поддерево, err)
+		t.Fatalf("НЕ ВЫПОЛНИЛОСЬ: состав %s не снялся: %v", subtreeDir, err)
 	}
-	var out []tracecut.Opening
+	sources := make([]tracecut.Source, 0, len(files))
 	for _, f := range files {
 		src, err := os.ReadFile(f)
 		if err != nil {
-			t.Fatalf("проба НЕ ИСПОЛНЯЛАСЬ: %s не прочитался: %v", f, err)
+			t.Fatalf("НЕ ВЫПОЛНИЛОСЬ: %s не прочитался: %v", f, err)
 		}
-		found, err := tracecut.ScanSpanOpenings(f, src)
-		if err != nil {
-			t.Fatalf("проба НЕ ИСПОЛНЯЛАСЬ: %v", err)
-		}
-		out = append(out, found...)
+		sources = append(sources, tracecut.Source{Path: f, Src: src})
 	}
-	if len(out) == 0 {
-		t.Fatalf("в %s не найдено НИ ОДНОГО открытия спана. Либо вырез телеметрии "+
-			"снят целиком, либо разбор перестал видеть свой предмет — и то и другое "+
-			"отказ, а не пустой успех", поддерево)
+	rep, err := tracecut.Judge(sources, wrapper)
+	if err != nil {
+		t.Fatalf("НЕ ВЫПОЛНИЛОСЬ: %v", err)
 	}
-	return out
+	return rep
 }
 
-// TestКаждоеОткрытиеСпанаЗакрытоОбёрткойФундамента — вырез НЕ РАЗЪЕХАЛСЯ.
-//
-// Ловит два разных отказа одним предикатом: спан, открытый и брошенный
-// (закрывающего вызова в функции нет), и спан, закрытый ЗАМЕНЁННОЙ обвязкой
-// апстрима — то есть вырез, отменённый очередным подъёмом версии.
-func TestКаждоеОткрытиеСпанаЗакрытоОбёрткойФундамента(t *testing.T) {
-	открытия := открытияПоддерева(t)
-	for _, o := range открытия {
-		switch {
-		case !o.Closed():
-			t.Errorf("%s:%d %s открывает спан %q и НЕ ЗАКРЫВАЕТ его: отложенного "+
-				"вызова End в функции нет", o.File, o.Line, o.Func, o.Name)
-		case o.CloserImport != обёрткаФундамента:
-			t.Errorf("%s:%d %s закрывает спан %q через %q, а обязан через %q: "+
-				"вырез телеметрии отменён", o.File, o.Line, o.Func, o.Name,
-				o.CloserImport, обёрткаФундамента)
+// trackedGoFiles — знаменатель ДРУГИМ выражением: отбор образцом git, а не
+// суффиксом после обхода.
+func trackedGoFiles(t *testing.T) int {
+	t.Helper()
+	out, err := gitenv.Command(subtreeDir, "ls-files", "-z", "--", "*.go").Output()
+	if err != nil {
+		t.Fatalf("НЕ ВЫПОЛНИЛОСЬ: git ls-files в %s: %v", subtreeDir, err)
+	}
+	n := 0
+	for _, rel := range strings.Split(string(out), "\x00") {
+		if rel != "" {
+			n++
 		}
 	}
-	t.Logf("осмотрено открытий спанов в %s: %d", поддерево, len(открытия))
+	return n
 }
 
-// TestПереченьПоведенческойПробыРавенСоставуПоддерева — перечень НЕ ОТСТАЁТ.
+// TestEverySubtreeSpanIsClosedByTheFoundationWrapper — вырез НЕ РАЗЪЕХАЛСЯ.
+func TestEverySubtreeSpanIsClosedByTheFoundationWrapper(t *testing.T) {
+	rep := judgeSubtree(t)
+	t.Logf("%s: %s", subtreeDir, rep.Census)
+	if want := trackedGoFiles(t); rep.Census.Files != want {
+		t.Errorf("суд прочитал файлов .go %d, а в индексе их %d — перепись разошлась со знаменателем",
+			rep.Census.Files, want)
+	}
+	for _, f := range rep.Findings {
+		t.Errorf("%s", f)
+	}
+}
+
+// TestBehaviouralPathListEqualsTheSubtreeComposition — перечень НЕ ОТСТАЁТ.
 //
-// Равенство сверяется в обе стороны и печатает расхождение поимённо: лишнее
-// имя и недостающее имя — разные отказы с разной починкой.
-func TestПереченьПоведенческойПробыРавенСоставуПоддерева(t *testing.T) {
-	вДереве := map[string]bool{}
-	for _, o := range открытияПоддерева(t) {
-		вДереве[o.Name] = true
+// Лишнее имя и недостающее имя — разные отказы с разной починкой, поэтому
+// печатаются поимённо и порознь.
+func TestBehaviouralPathListEqualsTheSubtreeComposition(t *testing.T) {
+	inTree := map[string]bool{}
+	for _, o := range judgeSubtree(t).Openings {
+		inTree[o.Name] = true
 	}
-	вПробе := map[string]bool{}
-	for _, п := range путиДвижка() {
-		вПробе[п.спан] = true
+	inProbe := map[string]bool{}
+	for _, p := range enginePaths() {
+		inProbe[p.span] = true
 	}
 
-	var неСудятся, лишние []string
-	for имя := range вДереве {
-		if !вПробе[имя] {
-			неСудятся = append(неСудятся, имя)
+	var undriven, stale []string
+	for name := range inTree {
+		if !inProbe[name] {
+			undriven = append(undriven, name)
 		}
 	}
-	for имя := range вПробе {
-		if !вДереве[имя] {
-			лишние = append(лишние, имя)
+	for name := range inProbe {
+		if !inTree[name] {
+			stale = append(stale, name)
 		}
 	}
-	sort.Strings(неСудятся)
-	sort.Strings(лишние)
+	sort.Strings(undriven)
+	sort.Strings(stale)
 
-	if len(неСудятся) != 0 {
-		t.Errorf("движок открывает спаны, которых поведенческая проба НЕ ГОНЯЕТ: %v. "+
+	if len(undriven) != 0 {
+		t.Errorf("движок открывает спаны, которых поведенческая проба НЕ ГОНЯЕТ: %q. "+
 			"Пустая обёртка на этих путях осталась бы зелёной — заведи им случай в "+
-			"путиДвижка (enginespan_test.go)", неСудятся)
+			"enginePaths (enginespan_test.go)", undriven)
 	}
-	if len(лишние) != 0 {
-		t.Errorf("поведенческая проба гоняет спаны, которых в %s больше НЕТ: %v. "+
-			"Либо путь переименован, либо удалён — перечень обязан догнать дерево",
-			поддерево, лишние)
+	if len(stale) != 0 {
+		t.Errorf("поведенческая проба гоняет спаны, которых в %s больше НЕТ: %q — "+
+			"перечень обязан догнать дерево", subtreeDir, stale)
 	}
-	t.Logf("путей со спанами в дереве: %d; судится поведенческой пробой: %d",
-		len(вДереве), len(вПробе))
+	t.Logf("имён спанов в дереве: %d; гоняет поведенческая проба: %d", len(inTree), len(inProbe))
 }

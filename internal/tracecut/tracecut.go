@@ -9,51 +9,70 @@
 // `github.com/ory/x/otelx`. При внесении поддерева эта обвязка заменена своей —
 // `github.com/PRO-Robotech/corelib/internal/otelx` (зачем именно — там же в
 // документации пакета). Замена создаёт класс отказа, которого у апстрима нет:
-//
-//	обёртка оказывается ПУСТЫШКОЙ, трассировка исчезает,
-//	а поведение движка не меняется НИ В ЧЁМ.
+// обёртка оказывается пустышкой либо путь закрывает спан мимо неё —
+// трассировка исчезает, а поведение движка не меняется НИ В ЧЁМ.
 //
 // Пробы апстрима этот отказ не видят ПО ПОСТРОЕНИЮ: они судят, какой ответ
-// движок отдал на какой запрос, а не открылся ли при этом спан. Пустая обёртка
-// прошла бы их все до одной.
+// движок отдал на какой запрос, а не открылся ли при этом спан.
 //
 // # Чем предмет держится
 //
 // Двумя половинами, и ни одна не заменяет другую.
 //
-//	ПОВЕДЕНИЕ   internal/tracecut/enginespan_test.go — подставляет живой
-//	            провайдер трассировки, гоняет КАЖДЫЙ путь движка, на котором
-//	            апстрим открывал спан, и требует, чтобы спан был ДЕЙСТВИТЕЛЬНО
-//	            создан, закрыт и нёс признаки ошибки: статус и теги.
+//	ПОВЕДЕНИЕ   enginespan_test.go — подставляет живой провайдер трассировки,
+//	            гоняет КАЖДЫЙ путь движка, на котором апстрим открывал спан, и
+//	            требует, чтобы спан был создан, закрыт ровно однажды и отмечен
+//	            исходом так, как отмечает его текущая обёртка.
 //
-//	СОСТАВ      internal/tracecut/coverage_test.go — сверяет ПЕРЕЧЕНЬ путей,
-//	            которые гоняет поведенческая половина, с ФАКТИЧЕСКИМ составом
-//	            открытий спанов в поддереве, снятым этим разбором. Без неё
-//	            поведенческая половина судила бы перечень, а не класс: десятый
-//	            путь, приехавший со следующей версией апстрима, остался бы вне
-//	            суда молча.
+//	СОСТАВ      coverage_test.go — судит этим разбором ФАКТИЧЕСКИЙ состав
+//	            открытий спанов в поддереве: каждое закрыто обёрткой
+//	            фундамента, и перечень поведенческой половины равен составу.
+//	            Без неё поведенческая половина судила бы перечень, а не класс.
 //
 // # Что именно считает разбор
 //
-// ОТКРЫТИЕ — вызов `….Start(ctx, "имя")` со строковым литералом вторым
-// доводом. ЗАКРЫТИЕ — отложенный вызов `End` из пакета, чей путь импорта
-// разбор возвращает ДОСЛОВНО. Путь возвращается, а не сверяется здесь,
-// намеренно: разбор отвечает на вопрос «чем закрыто», а решение «чем закрывать
-// законно» принимает проверка дерева. Иначе тот же список лежал бы в двух
-// местах.
+// ОТКРЫТИЕ — вызов `….Start(ctx, имя, …)`, то есть селектор Start не меньше
+// чем с двумя доводами; имя-литерал разбор достаёт, иное открытие не
+// отбрасывает, а отдаёт с пустым именем. ЗАКРЫТИЕ — отложенный вызов
+// `….End(…)` в той же области: функции либо функционального литерала, потому
+// что отложенный вызов исполняется при выходе из СВОЕЙ функции. Закрытие
+// через функцию пакета разбор отдаёт с ДОСЛОВНЫМ путём импорта, закрытие
+// методом значения — с пустым путём.
 //
 // Имя пакета к делу не относится: наша обёртка зовётся `otelx` ровно так же,
 // как заменённая, — благодаря этому места вызова в поддереве остаются
 // побайтово апстримными. Различить их можно ТОЛЬКО по пути импорта.
+//
+// Обёртка законна только ОТЛОЖЕННОЙ НАПРЯМУЮ (`defer otelx.End(span, &err)`):
+// её recover работает лишь тогда, когда отложенная функция — она сама. Форма
+// `defer func() { otelx.End(span, &err) }()` поэтому законной не считается —
+// закрытие во вложенном литерале принадлежит литералу.
 package tracecut
 
 import (
+	"bytes"
+	"errors"
 	"fmt"
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"go/types"
 	"strconv"
+	"strings"
 )
+
+// Closer — один отложенный вызов End в области открытия.
+type Closer struct {
+	// Import — путь импорта пакета, чья функция End отложена. Пусто, если End —
+	// метод значения (`defer span.End()`), а не функция пакета.
+	Import string
+
+	// Receiver — выражение слева от `.End`: местное имя пакета либо значение.
+	Receiver string
+
+	// Line — строка отложенного вызова.
+	Line int
+}
 
 // Opening — одно открытие спана вместе с тем, чем оно закрывается.
 type Opening struct {
@@ -61,20 +80,21 @@ type Opening struct {
 	File string
 	Line int
 
-	// Func — имя объемлющей функции; для метода — «Тип.Метод».
+	// Func — область открытия: «Функция», «Тип.Метод», для литерала —
+	// «<объемлющая>.funcN», вне функций — «<пакет>».
 	Func string
 
-	// Name — имя спана из строкового литерала.
+	// Name — имя спана из строкового литерала; пусто, если второй довод не
+	// литерал.
 	Name string
 
-	// CloserImport — ПУТЬ ИМПОРТА пакета, через который спан закрывается
-	// отложенным вызовом `End` в той же функции. Пусто означает, что такого
-	// вызова в функции НЕТ, — то есть спан открыт и брошен.
-	CloserImport string
+	// Closers — отложенные вызовы End в той же области. Пусто означает, что
+	// спан открыт и брошен.
+	Closers []Closer
 }
 
 // Closed сообщает, закрывается ли спан вообще.
-func (o Opening) Closed() bool { return o.CloserImport != "" }
+func (o Opening) Closed() bool { return len(o.Closers) > 0 }
 
 // ScanSpanOpenings возвращает все открытия спанов в одном файле Go.
 //
@@ -83,35 +103,88 @@ func (o Opening) Closed() bool { return o.CloserImport != "" }
 // становилось бы неотличимо от «открытий нет».
 //
 // Ошибка возвращается только на неразобравшемся файле. Файл без открытий —
-// законный ПУСТОЙ ответ: смотреть было на что, просто нечего было найти.
+// законный ПУСТОЙ ответ.
 func ScanSpanOpenings(path string, src []byte) ([]Opening, error) {
 	fset := token.NewFileSet()
 	file, err := parser.ParseFile(fset, path, src, parser.SkipObjectResolution)
 	if err != nil {
 		return nil, fmt.Errorf("tracecut: %s не разобрался: %w", path, err)
 	}
-
-	imports := importsByLocalName(file)
-
-	var out []Opening
+	s := &scanner{fset: fset, path: path, imports: importsByLocalName(file)}
 	for _, decl := range file.Decls {
-		fn, ok := decl.(*ast.FuncDecl)
-		if !ok || fn.Body == nil {
-			continue
-		}
-		closer := deferredCloserImport(fn.Body, imports)
-		name := funcName(fn)
-		for _, open := range spanStarts(fn.Body) {
-			out = append(out, Opening{
-				File:         path,
-				Line:         fset.Position(open.Pos()).Line,
-				Func:         name,
-				Name:         literalSpanName(open),
-				CloserImport: closer,
-			})
+		switch d := decl.(type) {
+		case *ast.FuncDecl:
+			if d.Body != nil {
+				s.scope(funcName(d), d.Body)
+			}
+		case *ast.GenDecl:
+			s.scope("<пакет>", d)
 		}
 	}
-	return out, nil
+	return s.out, nil
+}
+
+type scanner struct {
+	fset    *token.FileSet
+	path    string
+	imports map[string]string
+	out     []Opening
+}
+
+// scope разбирает одну область: открытия и отложенные End, не заходя во
+// вложенные функциональные литералы — у каждого из них своя область.
+func (s *scanner) scope(name string, root ast.Node) {
+	var (
+		starts  []*ast.CallExpr
+		closers []Closer
+		lits    []*ast.FuncLit
+	)
+	ast.Inspect(root, func(n ast.Node) bool {
+		switch n := n.(type) {
+		case *ast.FuncLit:
+			lits = append(lits, n)
+			return false
+		case *ast.DeferStmt:
+			if c, ok := s.closer(n); ok {
+				closers = append(closers, c)
+			}
+		case *ast.CallExpr:
+			if isSpanStart(n) {
+				starts = append(starts, n)
+			}
+		}
+		return true
+	})
+	for _, call := range starts {
+		s.out = append(s.out, Opening{
+			File:    s.path,
+			Line:    s.fset.Position(call.Pos()).Line,
+			Func:    name,
+			Name:    literalSpanName(call),
+			Closers: append([]Closer(nil), closers...),
+		})
+	}
+	for i, lit := range lits {
+		s.scope(fmt.Sprintf("%s.func%d", name, i+1), lit.Body)
+	}
+}
+
+// closer распознаёт отложенный вызов `….End(…)`.
+//
+// Местное имя пакета сопоставляется с импортом без разрешения типов: значение,
+// названное так же, как импортированный пакет, разбор примет за пакет. Для
+// предмета это безопасно в одну сторону — такое затенение дало бы закрытию
+// путь обёртки только в файле, где обёртка и импортирована.
+func (s *scanner) closer(d *ast.DeferStmt) (Closer, bool) {
+	sel, ok := d.Call.Fun.(*ast.SelectorExpr)
+	if !ok || sel.Sel.Name != "End" {
+		return Closer{}, false
+	}
+	c := Closer{Receiver: types.ExprString(sel.X), Line: s.fset.Position(d.Pos()).Line}
+	if id, ok := sel.X.(*ast.Ident); ok {
+		c.Import = s.imports[id.Name]
+	}
+	return c, true
 }
 
 // importsByLocalName сопоставляет местное имя пакета его пути импорта.
@@ -120,8 +193,7 @@ func ScanSpanOpenings(path string, src []byte) ([]Opening, error) {
 // элемента пути. Это догадка, и она названа: настоящее имя пакета лежит в его
 // исходниках, которых разбор по тексту не читает. Для предмета догадка точна —
 // обе стороны выреза зовутся `otelx` и лежат в каталогах `otelx`; разойдись
-// они, проверка состава увидела бы пустой путь закрытия и покраснела, а не
-// промолчала.
+// они, закрытие получило бы пустой путь, и суд покраснел бы, а не промолчал.
 func importsByLocalName(file *ast.File) map[string]string {
 	out := make(map[string]string, len(file.Imports))
 	for _, spec := range file.Imports {
@@ -129,7 +201,7 @@ func importsByLocalName(file *ast.File) map[string]string {
 		if err != nil {
 			continue
 		}
-		local := lastPathElement(path)
+		local := path[strings.LastIndex(path, "/")+1:]
 		if spec.Name != nil {
 			if spec.Name.Name == "_" || spec.Name.Name == "." {
 				continue
@@ -141,70 +213,15 @@ func importsByLocalName(file *ast.File) map[string]string {
 	return out
 }
 
-func lastPathElement(path string) string {
-	for i := len(path) - 1; i >= 0; i-- {
-		if path[i] == '/' {
-			return path[i+1:]
-		}
-	}
-	return path
-}
-
-// deferredCloserImport возвращает путь импорта пакета, чей `End` отложен в теле
-// функции. Пусто — отложенного `End` нет.
-func deferredCloserImport(body *ast.BlockStmt, imports map[string]string) string {
-	var found string
-	ast.Inspect(body, func(n ast.Node) bool {
-		if found != "" {
-			return false
-		}
-		stmt, ok := n.(*ast.DeferStmt)
-		if !ok {
-			return true
-		}
-		sel, ok := stmt.Call.Fun.(*ast.SelectorExpr)
-		if !ok || sel.Sel.Name != "End" {
-			return true
-		}
-		pkg, ok := sel.X.(*ast.Ident)
-		if !ok {
-			return true
-		}
-		if path, ok := imports[pkg.Name]; ok {
-			found = path
-		}
-		return true
-	})
-	return found
-}
-
-// spanStarts возвращает вызовы `….Start(ctx, "имя")` в теле функции.
-func spanStarts(body *ast.BlockStmt) []*ast.CallExpr {
-	var out []*ast.CallExpr
-	ast.Inspect(body, func(n ast.Node) bool {
-		call, ok := n.(*ast.CallExpr)
-		if !ok {
-			return true
-		}
-		sel, ok := call.Fun.(*ast.SelectorExpr)
-		if !ok || sel.Sel.Name != "Start" || len(call.Args) < 2 {
-			return true
-		}
-		if literalSpanName(call) == "" {
-			return true
-		}
-		out = append(out, call)
-		return true
-	})
-	return out
+// isSpanStart — вызов селектора Start не меньше чем с двумя доводами.
+func isSpanStart(call *ast.CallExpr) bool {
+	sel, ok := call.Fun.(*ast.SelectorExpr)
+	return ok && sel.Sel.Name == "Start" && len(call.Args) >= 2
 }
 
 // literalSpanName достаёт имя спана из второго довода. Пусто означает, что
 // второй довод не строковый литерал.
 func literalSpanName(call *ast.CallExpr) string {
-	if len(call.Args) < 2 {
-		return ""
-	}
 	lit, ok := call.Args[1].(*ast.BasicLit)
 	if !ok || lit.Kind != token.STRING {
 		return ""
@@ -235,6 +252,116 @@ func receiverTypeName(expr ast.Expr) string {
 	case *ast.IndexListExpr:
 		return receiverTypeName(t.X)
 	default:
-		return "?"
+		return types.ExprString(expr)
 	}
+}
+
+// Source — один файл поддерева с содержимым.
+type Source struct {
+	Path string
+	Src  []byte
+}
+
+// Census — объём осмотренного: без него «ноль находок» неотличимо от «ноль
+// прочитанного».
+type Census struct {
+	Files    int
+	Lines    int
+	Openings int
+}
+
+func (c Census) String() string {
+	return fmt.Sprintf("осмотрено файлов %d · строк %d · открытий спанов %d", c.Files, c.Lines, c.Openings)
+}
+
+// Finding — открытие спана, которого вырез не держит.
+type Finding struct {
+	Opening Opening
+	Reason  string
+}
+
+func (f Finding) String() string {
+	return fmt.Sprintf("%s:%d %s: спан %q — %s", f.Opening.File, f.Opening.Line, f.Opening.Func, f.Opening.Name, f.Reason)
+}
+
+// Report — исход суда над поддеревом.
+type Report struct {
+	Census   Census
+	Openings []Opening
+	Findings []Finding
+}
+
+var (
+	// ErrEmptyWalk — суду не подали ни одного файла.
+	ErrEmptyWalk = errors.New("tracecut: обход поддерева не прочитал ни одного файла")
+
+	// ErrNoOpenings — файлы прочитаны, а открытий спанов в них нет: вырез снят
+	// целиком либо разбор перестал видеть свой предмет.
+	ErrNoOpenings = errors.New("tracecut: в поддереве не найдено ни одного открытия спана")
+)
+
+// Judge судит поддерево: каждое открытие спана обязано закрываться ровно одним
+// отложенным вызовом End пакета wrapper.
+//
+// Пустой обход и поддерево без открытий — ОТКАЗ, а не пустой успех; отказ
+// несёт объём осмотренного. Неразобравшийся файл роняет суд целиком: открытие
+// в нём выпало бы из переписи молча.
+func Judge(sources []Source, wrapper string) (Report, error) {
+	var rep Report
+	if wrapper == "" {
+		return rep, errors.New("tracecut: путь импорта обёртки не задан, судить не с чем")
+	}
+	if len(sources) == 0 {
+		return rep, ErrEmptyWalk
+	}
+	for _, src := range sources {
+		openings, err := ScanSpanOpenings(src.Path, src.Src)
+		if err != nil {
+			return Report{}, err
+		}
+		rep.Census.Files++
+		rep.Census.Lines += lineCount(src.Src)
+		rep.Census.Openings += len(openings)
+		rep.Openings = append(rep.Openings, openings...)
+		for _, o := range openings {
+			if reason := verdict(o, wrapper); reason != "" {
+				rep.Findings = append(rep.Findings, Finding{Opening: o, Reason: reason})
+			}
+		}
+	}
+	if rep.Census.Openings == 0 {
+		return Report{Census: rep.Census}, fmt.Errorf("%w (%s)", ErrNoOpenings, rep.Census)
+	}
+	return rep, nil
+}
+
+func verdict(o Opening, wrapper string) string {
+	switch {
+	case len(o.Closers) == 0:
+		return "не закрыт: отложенного вызова End в области открытия нет"
+	case len(o.Closers) > 1:
+		lines := make([]string, len(o.Closers))
+		for i, c := range o.Closers {
+			lines[i] = strconv.Itoa(c.Line)
+		}
+		return fmt.Sprintf("закрыт %d отложенными вызовами End (строки %s), а обязан ровно один раз",
+			len(o.Closers), strings.Join(lines, ", "))
+	case o.Closers[0].Import == "":
+		return fmt.Sprintf("закрыт методом %s.End (строка %d) мимо обёртки %s: исход операции на спане не отмечается",
+			o.Closers[0].Receiver, o.Closers[0].Line, wrapper)
+	case o.Closers[0].Import != wrapper:
+		return fmt.Sprintf("закрыт через %s (строка %d), а обязан через %s: вырез телеметрии отменён",
+			o.Closers[0].Import, o.Closers[0].Line, wrapper)
+	case o.Name == "":
+		return "имя спана не строковый литерал: поведенческая проба не сопоставит путь с составом"
+	}
+	return ""
+}
+
+func lineCount(src []byte) int {
+	n := bytes.Count(src, []byte("\n"))
+	if len(src) > 0 && src[len(src)-1] != '\n' {
+		n++
+	}
+	return n
 }
