@@ -25,8 +25,10 @@
 #     worktree, command (-c); author.* и committer.* любого уровня, кроме
 #     корня (у git они старше user.* и на уровне system); GIT_COMMITTER_*;
 #     GIT_CONFIG_GLOBAL;
-#   · атрибуции нет: трейлер Co-Authored-By с Claude/anthropic, трейлер
+#   · атрибуции нет: трейлер Co-Authored-By с ЛЮБЫМ значением, трейлер
 #     Claude-Session:, «Generated with [Claude Code]», ссылка claude.ai/code.
+#     Правило запрещает ключ, а не значение (kacho-workspace#861): соавтор-
+#     человек — тоже трейлер атрибуции, и предикат у четырёх деревьев один.
 #
 # НОМЕР ОБЫЧНОГО КОММИТА С ИМЕНЕМ ВЕТКИ НЕ СВЕРЯЕТСЯ — решение T1, записано в
 # PRO-Robotech/corelib#25 (комментарий «Решение T1», 2026-09-24). Форма пачки
@@ -274,7 +276,7 @@ git_rule_howto() {
     case "$class" in
         form) printf '%s\n' "сообщение: git commit -m \"#<N> <одно утверждение>\" -m \"<тело>\" — первая строка начинается с «#<N> » (<N> — номер задачи этого репозитория), не длиннее $GIT_RULE_SUBJECT_MAX символов, без «;» и без точки в конце; тело — после пустой строки, не длиннее $GIT_RULE_BODY_MAX строк" ;;
         merge) printf '%s\n' "слияние: git merge --no-ff <ветка> -m \"#$b merge #<M>: <что влито>\" либо -m \"#$b merge main: <что влито>\" — номер слияния — номер этой ветки; первая строка не длиннее $GIT_RULE_SUBJECT_MAX символов, тело — не длиннее $GIT_RULE_BODY_MAX строк" ;;
-        attribution) printf '%s\n' "атрибуция: удалите строку «$attr» — трейлеры Co-Authored-By с Claude/anthropic, Claude-Session:, «Generated with Claude Code» и ссылки claude.ai/code в сообщение не пишутся; соавтор-человек законен" ;;
+        attribution) printf '%s\n' "атрибуция: удалите строку «$attr» — трейлеры Co-Authored-By с любым значением, Claude-Session:, «Generated with Claude Code» и ссылки claude.ai/code в сообщение не пишутся" ;;
         ident) printf '%s\n' "подпись: коммит без --author, -c user.*/author.*/committer.*, GIT_COMMITTER_* и GIT_CONFIG_GLOBAL; настройку подписи уровня local/worktree снимите (git config --local --unset <ключ>); подпись задаётся один раз — git config --global user.name / user.email" ;;
         branch) printf '%s\n' "ветка: git branch -m <N> — ветка называется номером задачи этого репозитория (^[0-9]+\$), исключение одно — main" ;;
         editor) printf '%s\n' "сообщение — через -m или -F, без редактора: git commit -m \"#<N> …\" — строку «#…» git вырезает как комментарий" ;;
@@ -285,13 +287,13 @@ git_rule_howto() {
 # git_rule_attribution <текст> — печатает первую строку атрибуции; 1 — её нет.
 # Регистр не различается. Трейлер — строка, НАЧАТАЯ его именем: то же имя в
 # середине строки — упоминание (так пишут, снимая шаблон), а не трейлер.
-# Co-Authored-By без Claude/anthropic — законный соавтор.
+# Co-Authored-By судится по ключу, значение не читается (#861).
 git_rule_attribution() {
     local line found=1 restore
     restore="$(shopt -p nocasematch)"
     shopt -s nocasematch
     while IFS= read -r line; do
-        if [[ "$line" =~ ^[[:space:]]*co-authored-by:.*(claude|anthropic) ]] ||
+        if [[ "$line" =~ ^[[:space:]]*co-authored-by: ]] ||
             [[ "$line" =~ ^[[:space:]]*claude-session: ]] ||
             [[ "$line" =~ generated[[:space:]]+with[[:space:]]+\[?claude[[:space:]]+code ]] ||
             [[ "$line" =~ claude\.ai/code ]]; then
