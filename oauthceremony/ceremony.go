@@ -325,15 +325,17 @@ func New(cfg Config, ports Ports) (*Ceremony, error) {
 	// как код выпущен, — обработчик PKCE читает уже выданный код из
 	// ответа. Поставь его первым, и он не нашёл бы кода и отказал бы
 	// «обработчик PKCE обязан быть загружен после обработчика кода».
-	engineCfg.AuthorizeEndpointHandlers.Append(explicitGrant)
-	engineCfg.AuthorizeEndpointHandlers.Append(proofKey)
-
-	engineCfg.TokenEndpointHandlers.Append(explicitGrant)
-	engineCfg.TokenEndpointHandlers.Append(refreshGrant)
-	engineCfg.TokenEndpointHandlers.Append(proofKey)
-
-	engineCfg.TokenIntrospectionHandlers.Append(introspector)
-	engineCfg.RevocationHandlers.Append(revoker)
+	//
+	// Перечни — литералы, а не Append: у литерала ёмкость равна длине, а
+	// Append растит массив с запасом (три обработчика — ёмкость четыре).
+	// Настройки делят все одновременные обмены, и запас — общий для них
+	// незанятый элемент, в который пишет любой append на пути запроса. Каждый
+	// срез настроек без запаса — предикат пробы
+	// TestEngineSettingsSlicesBuiltByNewHaveNoSpareCapacity.
+	engineCfg.AuthorizeEndpointHandlers = engine.AuthorizeEndpointHandlers{explicitGrant, proofKey}
+	engineCfg.TokenEndpointHandlers = engine.TokenEndpointHandlers{explicitGrant, refreshGrant, proofKey}
+	engineCfg.TokenIntrospectionHandlers = engine.TokenIntrospectionHandlers{introspector}
+	engineCfg.RevocationHandlers = engine.RevocationHandlers{revoker}
 
 	return &Ceremony{
 		provider: engine.NewOAuth2Provider(clientStore, engineCfg),
