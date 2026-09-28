@@ -409,6 +409,88 @@ func TestFailedIdentificationFailsTheOperation(t *testing.T) {
 	}
 }
 
+// textPortContractHint — подсказка отказа «порт нарушил контракт».
+const textPortContractHint = "Fix the port implementation; this is not a protocol failure."
+
+// TestFailedIdentificationKeepsTheCeremonyTexts — предъявленное значение
+// вырезается из текста, который принёс ПОРТ, а свои тексты церемонии остаются
+// побайтно: значение выбирает клиент, и значение в один знак не вправе портить
+// постоянный текст отказа.
+//
+// Предъявленное "e" входит в каждый постоянный текст ниже и в имя вызова порта.
+// Текст самого порта знака "e" не несёт, кроме текста часового срока
+// стандартной библиотеки, — его подробности сверяются только до имени вызова.
+// Близнец — значение, которое порт вписал в свой текст, вырезано из Error,
+// Description, Hint и Debug (TestFailedIdentificationFailsTheOperation).
+func TestFailedIdentificationKeepsTheCeremonyTexts(t *testing.T) {
+	const presented = "e"
+	const op = "AccessTokenIssuer.IdentifyAccessToken"
+	for _, tc := range []struct {
+		name     string
+		failure  error
+		want     error
+		wantText string
+		wantHint string
+		// wantDebug — начало подробностей: имя вызова и то, что церемония
+		// дописала к нему своим текстом.
+		wantDebug string
+	}{
+		{name: "порт отказал", failure: errors.New("jwks down"),
+			want: oauthceremony.ErrServerError, wantText: textPortFailed, wantDebug: op + ": jwks down"},
+		{name: "срок вызова истёк", failure: fmt.Errorf("jwks: %w", context.DeadlineExceeded),
+			want: oauthceremony.ErrPortDeadline, wantText: textPortDeadline, wantDebug: op + ": jwks: "},
+		{name: "порт ответил вердиктом о токене", failure: oauthceremony.ErrTokenExpired,
+			want: oauthceremony.ErrPortContract, wantText: textPortContract, wantHint: textPortContractHint,
+			wantDebug: op + ": the issuer answered case " + oauthceremony.CodeTokenExpired.String() +
+				", which is none of its outcomes: an authentic token, expired included, is answered with its jti"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if !strings.Contains(tc.wantText, presented) || !strings.Contains(op, presented) {
+				t.Fatalf("НЕ ВЫПОЛНИЛОСЬ: %q не входит в постоянный текст %q или в имя вызова %q — "+
+					"проба не создала своего условия", presented, tc.wantText, op)
+			}
+			store := newMemoryPorts()
+			registerTestClient(t, store)
+			ceremony := newTestCeremony(t, store.ports())
+			store.issuer.setIdentifyFailure(tc.failure)
+
+			_, introspectErr := ceremony.Introspect(context.Background(), oauthceremony.IntrospectionRequest{
+				Token:        presented,
+				KindHint:     oauthceremony.TokenKindAccess,
+				ClientID:     testClientID,
+				ClientSecret: testSecret,
+				AuthMethod:   oauthceremony.ClientAuthBasic,
+			})
+			revokeErr := ceremony.Revoke(context.Background(), oauthceremony.RevocationRequest{
+				Token:        presented,
+				KindHint:     oauthceremony.TokenKindAccess,
+				ClientID:     testClientID,
+				ClientSecret: testSecret,
+				AuthMethod:   oauthceremony.ClientAuthBasic,
+			})
+			for step, err := range map[string]error{"интроспекция": introspectErr, "отзыв": revokeErr} {
+				var failure *oauthceremony.ProtocolError
+				if !errors.As(err, &failure) {
+					t.Errorf("%s при отказе опознания: отказ не нашего вида: %v", step, err)
+					continue
+				}
+				if !errors.Is(err, tc.want) {
+					t.Errorf("%s: случай %v, ожидался %v", step, oauthceremony.CodeOf(err), oauthceremony.CodeOf(tc.want))
+				}
+				if failure.Description != tc.wantText {
+					t.Errorf("%s: Description %q, ожидался постоянный текст %q", step, failure.Description, tc.wantText)
+				}
+				if failure.Hint != tc.wantHint {
+					t.Errorf("%s: Hint %q, ожидался постоянный текст %q", step, failure.Hint, tc.wantHint)
+				}
+				if !strings.HasPrefix(failure.Debug, tc.wantDebug) {
+					t.Errorf("%s: Debug %q, ожидалось начало %q", step, failure.Debug, tc.wantDebug)
+				}
+			}
+		})
+	}
+}
+
 // expireAccessRecord переводит срок токена доступа в записи гранта в прошлое:
 // так токен истекает, пока проба не ждёт его срока.
 func expireAccessRecord(t *testing.T, store *memoryPorts, jti string) {

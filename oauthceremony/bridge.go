@@ -92,17 +92,27 @@ func portDebug(op, detail string) string {
 
 // fromPort переводит отказ порта в наш отказ, приписывая имя вызова.
 func fromPort(op string, err error) *ProtocolError {
+	return fromPortWithout(op, err, "")
+}
+
+// fromPortWithout — fromPort, который вырезает предъявленное значение
+// presented из текстов ПОРТА до того, как они лягут рядом с текстами
+// церемонии. Вырезать из готового отказа нельзя: там текст порта уже склеен с
+// постоянным текстом и именем вызова, и значение, которое выбирает клиент,
+// нашлось бы и в них. Пустое presented — вырезать нечего.
+func fromPortWithout(op string, err error, presented string) *ProtocolError {
+	port := func(text string) string { return withoutPresented(text, presented) }
 	var ours *ProtocolError
 	if errors.As(err, &ours) {
-		return failf(ours.Code, err, ours.Description, ours.Hint, portDebug(op, ours.Debug))
+		return failf(ours.Code, err, port(ours.Description), port(ours.Hint), portDebug(op, port(ours.Debug)))
 	}
 	switch {
 	case errors.Is(err, context.DeadlineExceeded):
-		return failf(CodePortDeadline, err, textPortDeadline, "", portDebug(op, err.Error()))
+		return failf(CodePortDeadline, err, textPortDeadline, "", portDebug(op, port(err.Error())))
 	case errors.Is(err, context.Canceled):
-		return failf(CodePortCanceled, err, textPortCanceled, "", portDebug(op, err.Error()))
+		return failf(CodePortCanceled, err, textPortCanceled, "", portDebug(op, port(err.Error())))
 	}
-	return failf(CodeServerError, err, textPortFailed, "", portDebug(op, err.Error()))
+	return failf(CodeServerError, err, textPortFailed, "", portDebug(op, port(err.Error())))
 }
 
 // contractBreach — порт нарушил контракт. Отдельный конструктор, чтобы
