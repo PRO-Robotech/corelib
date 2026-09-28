@@ -22,27 +22,29 @@
 // drive each REAL enforcement entrypoint — including the machine branch —
 // against this function.
 //
-// WHY HERE: `gateway/internal/...` and `services/iam/internal/...` cannot import
-// each other (Go internal-package rule), so the shared rule has to live under
-// pkg/. It belongs in grpcsrv specifically because grpcsrv already owns every
-// INPUT of the decision — the ACR ranking (ACRRank/ACRSatisfies), the trusted
-// carriers the iam side reads (TrustedACRFromContext / TrustedPrincipalFromContext)
-// and the metadata key contract (MDKeyTokenACR / MDKeyPrincipalType). Putting
-// the rule anywhere else would split the decision from its own inputs, i.e.
-// re-create the very second home this consolidation removes.
+// WHY HERE: the gateway and the access service are different modules and cannot
+// import each other, so the shared rule has to live in the foundation. It
+// belongs in grpcsrv because grpcsrv owns the TRANSPORT inputs of the decision —
+// the trusted carriers the listener side reads (TrustedACRFromContext /
+// TrustedPrincipalFromContext) and the metadata key contract (MDKeyTokenACR /
+// MDKeyPrincipalType).
 //
-// ACR ordering (normative):
-//
-//	"" / "0" (anonymous)  <  "1" (password-only, AAL1)  <
-//	"2" (phishing-resistant / MFA, AAL2)  <  "3" (hardware-bound UV passkey, AAL3)
-//
-// An unknown value ranks 0 (fail-closed). `required==""` (or "0") means NO
-// requirement.
+// The ACR ranking itself is NOT here. It is a pure function whose readers
+// include layers with no transport at all (deployment-config validation, access
+// service use-cases), so it lives in the transport-free package `acrlevel`
+// (acrlevel.Rank / acrlevel.Satisfies, with the normative ordering), and this
+// rule takes it from there. That is one table, not a second home: grpcsrv keeps
+// no ranking of its own. ACRRank and ACRSatisfies below are the address the
+// ranking had in v1.9.0, kept as deprecated forwarders to acrlevel — the module
+// path carries no major-version suffix, so removing them in a v1 minor release
+// would break every consumer that raises its pin. They go away only with a
+// major release of the module.
 package grpcsrv
 
 import (
 	"time"
 
+	"github.com/PRO-Robotech/corelib/acrlevel"
 	"github.com/PRO-Robotech/corelib/principalwire"
 )
 
@@ -65,43 +67,24 @@ const MDKeyTokenACR = principalwire.MetaTokenACR
 // are NOT exempt (fail-closed).
 const PrincipalTypeServiceAccount = "service_account"
 
-// ACRRank maps an ACR string to a comparable integer. Unknown / malformed
-// values resolve to 0 (anonymous) — fail-closed when policy expects ≥ 1.
+// ACRRank maps an ACR string to a comparable integer — the pre-acrlevel address
+// of the ranking, answering exactly what acrlevel.Rank answers. It holds no
+// table: the body forwards.
 //
-// This is the single ranking table for the whole platform: both enforcement
-// points reach it through EvaluateStepUp.
+// Deprecated: use acrlevel.Rank. This address is kept for consumers pinned to
+// v1.9.0 and is removed only with a major release of the module.
 func ACRRank(acr string) int {
-	switch acr {
-	case "3":
-		return 3
-	case "2":
-		return 2
-	case "1":
-		return 1
-	case "0", "":
-		return 0
-	default:
-		return 0
-	}
+	return acrlevel.Rank(acr)
 }
 
-// ACRSatisfies reports whether a presented acr meets a required floor.
+// ACRSatisfies reports whether a presented acr meets a required floor — the
+// pre-acrlevel address of the check, answering exactly what acrlevel.Satisfies
+// answers. Enforcement points call EvaluateStepUp, not this.
 //
-//   - required == "" or "0" → no requirement → always true (no-op floor).
-//   - otherwise → ACRRank(presented) >= ACRRank(required).
-//
-// An absent / unknown presented acr ranks 0, so it fails any positive floor
-// (fail-closed).
-//
-// This is the ACR arm ONLY. Enforcement points must call EvaluateStepUp, which
-// additionally applies the machine-principal exemption and the MFA-freshness
-// arm; calling ACRSatisfies directly from an enforcement path re-creates half of
-// the rule and is what the parity guards exist to catch.
+// Deprecated: use acrlevel.Satisfies. This address is kept for consumers pinned
+// to v1.9.0 and is removed only with a major release of the module.
 func ACRSatisfies(presented, required string) bool {
-	if ACRRank(required) == 0 {
-		return true
-	}
-	return ACRRank(presented) >= ACRRank(required)
+	return acrlevel.Satisfies(presented, required)
 }
 
 // StepUpInput — every input of the step-up decision. Both enforcement points
@@ -177,7 +160,7 @@ const (
 //     `system` principal, an empty/absent type (which is also what a caller must
 //     pass for an untrusted peer) and any unknown value are NOT exempt.
 //
-//  2. ACR FLOOR — ACRSatisfies(PresentedACR, RequiredACR).
+//  2. ACR FLOOR — acrlevel.Satisfies(PresentedACR, RequiredACR).
 //
 //  3. MFA FRESHNESS — when MFAMaxAge > 0, AuthTime must exist and be within the
 //     window.
@@ -188,7 +171,7 @@ func EvaluateStepUp(in StepUpInput) StepUpVerdict {
 	}
 
 	// 2. ACR floor.
-	if !ACRSatisfies(in.PresentedACR, in.RequiredACR) {
+	if !acrlevel.Satisfies(in.PresentedACR, in.RequiredACR) {
 		return StepUpDenyACR
 	}
 

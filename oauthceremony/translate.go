@@ -142,9 +142,9 @@ func fromEngine(err error) error {
 
 	switch {
 	case errors.Is(err, context.DeadlineExceeded):
-		return failf(CodePortDeadline, err, "A storage call did not finish in time.", "", err.Error())
+		return failf(CodePortDeadline, err, textPortDeadline, "", err.Error())
 	case errors.Is(err, context.Canceled):
-		return failf(CodePortCanceled, err, "A storage call was canceled.", "", err.Error())
+		return failf(CodePortCanceled, err, textPortCanceled, "", err.Error())
 	}
 
 	var rfcErr *engine.RFC6749Error
@@ -219,11 +219,16 @@ type clientView struct {
 	reg ClientRegistration
 }
 
-func (c *clientView) GetID() string              { return c.reg.ClientID }
-func (c *clientView) GetHashedSecret() []byte    { return c.reg.HashedSecret }
-func (c *clientView) GetRotatedHashes() [][]byte { return c.reg.RotatedHashedSecrets }
-func (c *clientView) GetRedirectURIs() []string  { return c.reg.RedirectURIs }
-func (c *clientView) IsPublic() bool             { return c.reg.Public }
+func (c *clientView) GetID() string             { return c.reg.ClientID }
+func (c *clientView) GetRedirectURIs() []string { return c.reg.RedirectURIs }
+func (c *clientView) IsPublic() bool            { return c.reg.Public }
+
+// GetHashedSecret — проверочного значения секрета у церемонии нет: его держит и
+// сверяет служба (Ports.ClientSecrets), а хешер настроек движка — порт
+// (clientSecretHasher). Прежних значений на время оборота нет тоже:
+// представление не реализует интерфейса оборота секретов движка, и сверка на
+// клиента одна.
+func (*clientView) GetHashedSecret() []byte { return nil }
 func (c *clientView) GetAudience() engine.Arguments {
 	return engine.Arguments(c.reg.Audiences)
 }
@@ -266,6 +271,30 @@ func clientViewOf(reg ClientRegistration) engine.Client {
 	return &clientView{reg: reg}
 }
 
+// unregisteredClient — клиент, которого справочник не знает, в операции, где
+// клиент доказывает себя (см. storageBridge.GetClient).
+//
+// У него нет НИЧЕГО, кроме названного идентификатора: ни адресов возврата, ни
+// видов гранта, ни областей, ни получателей. Он не публичный — движок ведёт
+// его к сверке секрета, как конфиденциального, — и выйти из сверки доказанным
+// не может: «совпал» о нём порт сказать не вправе, и такой вердикт —
+// нарушение контракта, а не доказательство (verifyClientSecret).
+type unregisteredClient struct {
+	id string
+}
+
+// unregisteredClientOf собирает представление неизвестного клиента.
+func unregisteredClientOf(id string) engine.Client { return unregisteredClient{id: id} }
+
+func (c unregisteredClient) GetID() string                    { return c.id }
+func (unregisteredClient) GetHashedSecret() []byte            { return nil }
+func (unregisteredClient) GetRedirectURIs() []string          { return nil }
+func (unregisteredClient) GetGrantTypes() engine.Arguments    { return nil }
+func (unregisteredClient) GetResponseTypes() engine.Arguments { return nil }
+func (unregisteredClient) GetScopes() engine.Arguments        { return nil }
+func (unregisteredClient) IsPublic() bool                     { return false }
+func (unregisteredClient) GetAudience() engine.Arguments      { return nil }
+
 // ── Перевод гранта ──────────────────────────────────────────────────────────
 
 // grantFromRequester снимает с запроса движка нашу запись гранта.
@@ -286,12 +315,75 @@ func grantFromRequester(r engine.Requester) GrantRecord {
 	return rec
 }
 
+// codeRecordFromRequester снимает с запроса движка запись кода авторизации:
+// грант и привязку к доказательству владения ключом.
+//
+// Привязка переезжает из протокольных полей в поле записи и из полей
+// снимается: у значения одно место. Негодная привязка — отказ, и код без неё в
+// хранилище не уезжает.
+func codeRecordFromRequester(r engine.Requester) (AuthorizationCodeRecord, *ProtocolError) {
+	grant := grantFromRequester(r)
+	binding, bad := proofKeyBindingOf(grant.Form)
+	if bad != nil {
+		return AuthorizationCodeRecord{}, bad
+	}
+	delete(grant.Form, formCodeChallenge)
+	delete(grant.Form, formCodeChallengeMethod)
+	return AuthorizationCodeRecord{Grant: grant, ProofKey: binding}, nil
+}
+
+// requesterFromCode собирает запрос движка из записи кода: привязка
+// возвращается в протокольные поля, где её читает обработчик PKCE движка.
+//
+// Поля привязки в Form самой записи не читаются — их там не кладёт церемония,
+// и значение привязки решает только ProofKey. Годность привязки проверяет
+// вызывающий: здесь запись уже принята.
+func requesterFromCode(ctx context.Context, clients func(context.Context, string) (ClientRegistration, error), rec AuthorizationCodeRecord, session engine.Session) (engine.Requester, error) {
+	grant := rec.Grant
+	grant.Form = copyValues(rec.Grant.Form)
+	if grant.Form == nil {
+		grant.Form = map[string][]string{}
+	}
+	grant.Form[formCodeChallenge] = []string{rec.ProofKey.Challenge}
+	grant.Form[formCodeChallengeMethod] = []string{string(rec.ProofKey.Method)}
+	return requesterFromGrant(ctx, clients, grant, session)
+}
+
 // requesterFromGrant собирает запрос движка из нашей записи.
 //
 // Клиент берётся из справочника ЗАНОВО, а не из записи: между выдачей кода и
 // его обменом клиента могли снять, сделать публичным или сузить ему права, и
-// решение обязано приниматься по нынешней записи, а не по слепку.
+// решение обязано приниматься по нынешней записи, а не по слепку. Отказ
+// справочника clients отдаёт уже переведённым для движка
+// (storageBridge.grantClient), и здесь он возвращается как есть.
+//
+// # Запись без идентификатора гранта — нарушение контракта порта
+//
+// Идентификатор каждой записи ставит церемония (Config.NewGrantID), так что
+// живая запись без него — порча на стороне службы. Принять её значило бы
+// отдать движку запрос с пустым идентификатором, а движок на пустом чеканит
+// свой: выпущенное под таким ключом не принадлежало бы ни одному семейству,
+// оборот сверял бы токен с чужим грантом и читал бы законный оборот как
+// повтор, а отзыв отвечал бы успехом, не сняв ничего. Случай заносится в
+// ведомость операции: движок вправе заменить отказ хранилища своим, более
+// грубым, — на пути отзыва это «временно недоступно», и без ведомости точный
+// случай до вызывающего не доехал бы.
 func requesterFromGrant(ctx context.Context, clients func(context.Context, string) (ClientRegistration, error), rec GrantRecord, session engine.Session) (engine.Requester, error) {
+	if rec.GrantID == "" {
+		return nil, note(ctx, contractBreach("GrantRecord.GrantID", "a stored grant carries no identifier; "+
+			"the engine would mint one of its own, and what is issued or revoked under it would belong to no family"))
+	}
+	// Выданная область записи — `scope-token`: иной церемония на хранение не
+	// отдаёт (checkGrantWithinRequest), а по записи обмен кода и оборот выдают
+	// области заново, без сверки движком.
+	for _, scope := range rec.GrantedScopes {
+		if defect := scopeTokenDefect(scope); defect != "" {
+			return nil, note(ctx, contractBreach("GrantRecord.GrantedScopes", strconv.Quote(scope)+
+				" is not a scope-token (RFC 6749 §3.3): "+defect+
+				"; the ceremony stores scope-tokens only, and the exchange would issue the stored scope again"))
+		}
+	}
+
 	reg, err := clients(ctx, rec.ClientID)
 	if err != nil {
 		return nil, err
@@ -305,8 +397,13 @@ func requesterFromGrant(ctx context.Context, clients func(context.Context, strin
 	if session == nil {
 		session = newSession()
 	}
-	if err := hydrateSession(session, rec.Session); err != nil {
-		return nil, err
+	// Порча записи сеанса заносится в ведомость по той же причине, что и
+	// запись без идентификатора: движок вправе огрубить отказ хранилища, и на
+	// интроспекции порченая запись читалась бы «токен неактивен». На путях
+	// повтора случай повтора уже в ведомости (markReplayedFamily), и порча
+	// записи повторённого артефакта его не вытесняет: ведомость хранит первый.
+	if bad := hydrateSession(session, rec.Session); bad != nil {
+		return nil, note(ctx, bad)
 	}
 
 	return &engine.Request{
@@ -333,7 +430,6 @@ var engineTokenTypes = map[TokenKind]engine.TokenType{
 	TokenKindAccess:            engine.AccessToken,
 	TokenKindRefresh:           engine.RefreshToken,
 	TokenKindAuthorizationCode: engine.AuthorizeCode,
-	TokenKindIdentity:          engine.IDToken,
 }
 
 // engineTypeOf переводит наш вид в вид движка. Вид вне словаря — вид,
@@ -374,6 +470,20 @@ type ceremonySession struct {
 	// бывает: его отвергают при выдаче (checkGrantBounds) и при наполнении из
 	// хранилища (hydrateSession).
 	notAfter map[engine.TokenType]time.Time
+
+	// login — контекст входа, снятый на выдаче кода. Движок о нём не знает и
+	// его не пересчитывает: сеанс семейства переезжает от кода к паре и от
+	// пары к паре оборота, и контекст едет вместе с ним (Clone).
+	login loginContext
+}
+
+// loginContext — контекст входа в сеансе движка: сессия, уровень и момент
+// аутентификации. Одно значение, а не три поля сеанса: Clone копирует его
+// целиком, и поле, добавленное сюда, копию не минует.
+type loginContext struct {
+	sessionID string
+	acr       string
+	authTime  time.Time
 }
 
 // SetExpiresAt назначает срок, не позже границы семейства, и НИКОГДА не пишет
@@ -395,9 +505,9 @@ func (s *ceremonySession) SetExpiresAt(key engine.TokenType, exp time.Time) {
 	s.DefaultSession.SetExpiresAt(key, exp)
 }
 
-// Clone — копия вместе с границей. Унаследованная Clone копировала бы только
-// сеанс движка, и оборот, работающий на копии (`flow_refresh.go`), шёл бы
-// уже без границы.
+// Clone — копия вместе с границей и контекстом входа. Унаследованная Clone
+// копировала бы только сеанс движка, и оборот, работающий на копии
+// (`flow_refresh.go`), шёл бы уже без границы и без контекста входа.
 func (s *ceremonySession) Clone() engine.Session {
 	if s == nil {
 		return nil
@@ -406,7 +516,11 @@ func (s *ceremonySession) Clone() engine.Session {
 	if !ours || inner == nil {
 		inner = &engine.DefaultSession{}
 	}
-	out := &ceremonySession{DefaultSession: *inner, notAfter: make(map[engine.TokenType]time.Time, len(s.notAfter))}
+	out := &ceremonySession{
+		DefaultSession: *inner,
+		notAfter:       make(map[engine.TokenType]time.Time, len(s.notAfter)),
+		login:          s.login,
+	}
 	for k, v := range s.notAfter {
 		out.notAfter[k] = v
 	}
@@ -430,6 +544,9 @@ func sessionRecordOf(s engine.Session) SessionRecord {
 	if !ours {
 		return rec
 	}
+	rec.SessionID = cs.login.sessionID
+	rec.ACR = cs.login.acr
+	rec.AuthTime = cs.login.authTime
 	for kind, at := range cs.ExpiresAt {
 		rec.ExpiresAt[tokenKindOf(kind)] = at
 	}
@@ -452,8 +569,9 @@ func sessionRecordOf(s engine.Session) SessionRecord {
 // # Сроки СЛИВАЮТСЯ, а не заменяются
 //
 // Движок наполняет ОДИН И ТОТ ЖЕ сеанс несколько раз за операцию: при обмене
-// кода — выборкой кода, затем выборкой PKCE, затем снова выборкой кода перед
-// выпуском, и между первой и последней назначает сроки выпускаемой пары.
+// кода — выборкой кода, затем запросом привязки PKCE (её мост собирает из той
+// же записи кода), затем снова выборкой кода перед выпуском, и между первой и
+// последней назначает сроки выпускаемой пары.
 // Замена карты сроков записью кода стирала бы их: пара уезжала в хранилище без
 // своих сроков, и токен обновления без срока движок считает бессрочным.
 // Слияние — ключ записи перекрывает ключ сеанса, прочие остаются — то, чего
@@ -471,20 +589,33 @@ func sessionRecordOf(s engine.Session) SessionRecord {
 // предъявленный — движок читает нулевой срок токена обновления как «без
 // срока». Трактовать ноль как «ключа нет» значило бы молча чинить чужую запись
 // в сторону меньшей строгости.
-func hydrateSession(s engine.Session, rec SessionRecord) error {
+//
+// # Контекст входа — из записи целиком, и без него записи нет
+//
+// Сессия, уровень и момент аутентификации — снимок выдачи кода, и сеанс берёт
+// их из записи как есть, ничего не пересчитывая. Запись без сессии, с уровнем
+// вне словаря, без момента или с ключом контекста входа в карте Claims такой
+// церемония не отдавала на хранение (loginContextDefect судит и выдачу), и она
+// — нарушение контракта порта, а не «контекста нет»: подставить его нечем, а
+// выданное без него несло бы в токене уровень, которого у входа не было.
+func hydrateSession(s engine.Session, rec SessionRecord) *ProtocolError {
 	cs, ours := s.(*ceremonySession)
 	if !ours {
 		return failf(CodeCeremonyMisuse, nil,
 			"The authorization engine asked to hydrate a session this package did not create.", "", "")
 	}
-	if err := checkStoredInstants("SessionRecord.NotAfter", rec.NotAfter); err != nil {
-		return err
+	if bad := checkStoredInstants("SessionRecord.NotAfter", rec.NotAfter); bad != nil {
+		return bad
 	}
-	if err := checkStoredInstants("SessionRecord.ExpiresAt", rec.ExpiresAt); err != nil {
-		return err
+	if bad := checkStoredInstants("SessionRecord.ExpiresAt", rec.ExpiresAt); bad != nil {
+		return bad
+	}
+	if field, why := loginContextDefect(rec.SessionID, rec.ACR, rec.AuthTime, rec.Claims); field != "" {
+		return contractBreach("SessionRecord."+field, why)
 	}
 	cs.Subject = rec.Subject
 	cs.Username = rec.Username
+	cs.login = loginContext{sessionID: rec.SessionID, acr: rec.ACR, authTime: rec.AuthTime}
 	cs.notAfter = make(map[engine.TokenType]time.Time, len(rec.NotAfter))
 	for kind, at := range rec.NotAfter {
 		cs.notAfter[engineTypeOf(kind)] = at
@@ -504,7 +635,7 @@ func hydrateSession(s engine.Session, rec SessionRecord) error {
 
 // checkStoredInstants отвергает нулевое время в карте сроков записи. Вид —
 // первый по порядку имени, чтобы текст отказа не зависел от порядка обхода.
-func checkStoredInstants(field string, instants map[TokenKind]time.Time) error {
+func checkStoredInstants(field string, instants map[TokenKind]time.Time) *ProtocolError {
 	for _, kind := range slices.Sorted(maps.Keys(instants)) {
 		if instants[kind].IsZero() {
 			return contractBreach(field, strconv.Quote(string(kind))+" is the zero time; "+

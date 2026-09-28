@@ -16,7 +16,7 @@ import (
 	engine "github.com/PRO-Robotech/corelib/internal/oauth2"
 	enginehandler "github.com/PRO-Robotech/corelib/internal/oauth2/handler/oauth2"
 	engineproofkey "github.com/PRO-Robotech/corelib/internal/oauth2/handler/pkce"
-	enginehmac "github.com/PRO-Robotech/corelib/internal/oauth2/token/hmac"
+	"github.com/PRO-Robotech/corelib/tokenpolicy"
 )
 
 // ── Настройки ───────────────────────────────────────────────────────────────
@@ -45,21 +45,64 @@ const (
 // решение, принятое за того, кто его не принимал; здесь такие решения
 // касаются сроков жизни токенов и строгости сопоставления областей.
 type Config struct {
-	// Issuer — кем выпущены артефакты. Обязан быть абсолютным адресом
-	// (`https://iam.example.net`). Из него выводятся адреса точек,
-	// которые церемония подставляет в синтезированные запросы.
-	Issuer string
-
-	// SigningSecret — ключ подписи артефактов. Не короче 32 байт: подпись
-	// HMAC-SHA256 на более коротком ключе не даёт заявленной стойкости.
-	SigningSecret []byte
-
-	// RotatedSigningSecrets — прежние ключи подписи на время оборота.
-	// Ими артефакты ПРОВЕРЯЮТСЯ, но не подписываются.
-	RotatedSigningSecrets [][]byte
+	// AuthorizationEndpoint и TokenEndpoint — адреса точек авторизации и
+	// выдачи (RFC 6749 §3.1, §3.2), под которыми служба публикует
+	// церемонию, например `https://iam.example.net/iam/v1/authorize` и
+	// `https://iam.example.net/iam/v1/token`. Названы явно: путь, на котором
+	// служба публикует точки, — её решение, и ни из какого другого поля
+	// церемония его не выводит.
+	//
+	// Адрес точки авторизации — адрес запроса, который церемония подаёт
+	// движку от имени Authorize. Адрес точки выдачи — адрес запросов от имени
+	// Exchange, Introspect и Revoke (интроспекция и отзыв синтезируются на
+	// нём же) и значение TokenURL в настройках движка: с ним движок сверял бы
+	// `aud` утверждения клиента (RFC 7523 §3), но на путях церемонии эта
+	// сверка не исполняется — утверждение клиента церемония не обслуживает
+	// и движок отвергает его раньше (TestClientAssertionIsRefused).
+	//
+	// Каждый обязан быть абсолютным адресом с именем хоста (порт без имени,
+	// `https://:8443/…`, хостом не считается), без сведений пользователя,
+	// строки запроса и фрагмента, и записан так, как его получит движок:
+	// разбор и обратная запись адреса дают ту же строку. Адрес с пробелом,
+	// буквой не-ASCII или схемой в верхнем регистре разбирается, но в запросе к
+	// движку уехал бы в другом написании — экранированным или в нижнем
+	// регистре, — и адрес, который служба публикует, разошёлся бы с адресом, на
+	// который церемония подаёт запросы. Фрагмент адресу точки
+	// запрещает сам RFC 6749 (§3.1, §3.2). Строку запроса он разрешает, и
+	// здесь она отвергается у обоих адресов: у точки авторизации церемония
+	// ставит параметры запроса строкой запроса поверх адреса, и принесённая
+	// адресом строка слилась бы с ними; у точки выдачи её пришлось бы
+	// сохранять каждому клиенту и в `aud`, — контракт один на оба адреса, и
+	// он узкий. Сведения пользователя отвергаются потому, что адрес точки
+	// служба публикует клиентам, а учётные данные в публикуемом адресе —
+	// секрет в открытом виде; доказательство клиента приезжает заголовком
+	// или телом запроса (RFC 6749 §2.3.1), а не адресом.
+	AuthorizationEndpoint string
+	TokenEndpoint         string
 
 	// AccessTokenLifespan, RefreshTokenLifespan, AuthorizationCodeLifespan
-	// — сроки жизни артефактов. Все три обязаны быть положительными.
+	// — сроки жизни артефактов, каждый от выпуска артефакта. Все три обязаны
+	// быть положительными и не длиннее своих потолков фундамента —
+	// tokenpolicy.MaxTokenTTL, tokenpolicy.MaxRefreshTokenFamilyTTL и
+	// tokenpolicy.MaxAuthorizationCodeTTL. Срок выше потолка New отвергает,
+	// называя поле и потолок, а не урезает молча; решение, из которого взято
+	// значение каждого потолка, записано у самой константы.
+	//
+	// У AccessTokenLifespan причина потолка ещё и в выпуске: токен доступа
+	// подписывает служба (Ports.AccessTokenIssuer), а её подписант выше
+	// потолка платформы не выпускает. Выпуск короче границы законен (контракт
+	// порта), поэтому церемония со сроком длиннее обменивала бы исправно, но
+	// срок настроек не исполнялся бы ни на одном выпуске — настройка лгала бы
+	// молча; отказ при сборке её не допускает.
+	//
+	// RefreshTokenLifespan — срок ОДНОГО токена обновления: оборот выпускает
+	// преемника с тем же сроком от своего выпуска. Предел всего семейства New
+	// не держит — его держат граница гранта (AuthorizationGrant.ExpiresAt) и
+	// база службы (tokenpolicy.MaxRefreshTokenFamilyTTL называет обоих).
+	//
+	// Подписного материала в настройках нет: код авторизации и токен
+	// обновления непрозрачны (случайные байты, в хранилище — sha256
+	// значения), а токен доступа подписывает порт службы.
 	AccessTokenLifespan       time.Duration
 	RefreshTokenLifespan      time.Duration
 	AuthorizationCodeLifespan time.Duration
@@ -75,31 +118,44 @@ type Config struct {
 	// RefreshTokenIssuanceAlways, иначе у правила было бы два места.
 	RefreshTokenScopes []string
 
-	// RequireProofKey — требовать PKCE (RFC 7636) от ВСЕХ клиентов.
-	RequireProofKey bool
-
-	// RequireProofKeyForPublicClients — требовать PKCE от публичных
-	// клиентов. Действует независимо от RequireProofKey.
-	RequireProofKeyForPublicClients bool
-
-	// SecretHashCost — цена хеширования секрета клиента. Обязана быть в
-	// пределах [10, 15]: ниже — подбор дёшев, выше — сверка секрета
-	// становится прибором для отказа в обслуживании.
-	SecretHashCost int
-
 	// MinParameterEntropy — минимальная длина `state` и `nonce` в
 	// символах. Обязана быть не меньше 8 (RFC 6749 §10.10 требует не
 	// менее 128 бит для непредсказуемых значений; 8 символов — нижняя
 	// граница, ниже которой параметр перестаёт быть защитой от CSRF).
 	MinParameterEntropy int
 
-	// PortTimeout — срок ОДНОГО вызова порта хранения.
+	// PortTimeout — срок ОДНОГО вызова порта службы: порта хранения и порта
+	// выпуска токена доступа (Ports.AccessTokenIssuer) — и выпуска, и
+	// опознания.
 	PortTimeout time.Duration
 
 	// OperationTimeout — срок ВСЕЙ операции церемонии. Обязан быть не
 	// меньше PortTimeout: иначе первый же вызов порта не уложился бы в
 	// операцию, и срок порта не значил бы ничего.
 	OperationTimeout time.Duration
+
+	// NewGrantID — крючок чеканки идентификатора гранта. Обязателен.
+	//
+	// Идентификатор гранта — ключ семейства: по нему служба отзывает все
+	// артефакты одной выдачи и под ним ведёт свою запись семейства, форму
+	// которой держит ограничение её схемы. Поэтому его выбирает СЛУЖБА:
+	// движок, получив запрос без идентификатора, чеканит свой при первом
+	// чтении, и ключ, которого служба не выбирала, лёг бы во все её записи.
+	// Приставки платформы — предмет пакета `ids`, а не этого.
+	//
+	// Церемония зовёт крючок ровно один раз на грант — в CompleteAuthorization,
+	// после своих проверок выдачи и до выпуска кода — и ставит идентификатор
+	// запросу движка раньше, чем тот его прочтёт. Разбор запроса, отказ в
+	// согласии, обмен кода, оборот токена обновления, интроспекция и отзыв
+	// крючка не зовут: идентификатор едет из записи хранилища.
+	//
+	// Вызову назначается срок Config.PortTimeout, как вызову порта. Отказ
+	// крючка — отказ выдачи (случай разбирается, как отказ порта), и записи
+	// кода в хранилище не появляется. Пустой идентификатор — нарушение
+	// контракта (ErrPortContract): на пустом движок начеканил бы свой.
+	// Уникальность — забота службы: церемония её не сверяет, её держит ключ
+	// записи семейства в хранилище службы.
+	NewGrantID func(ctx context.Context) (string, error)
 }
 
 // Ceremony — церемония OAuth 2.0 платформы.
@@ -126,8 +182,8 @@ type Config struct {
 // локального значения, получившая содержимое присваиванием; канал, через
 // который прошло содержимое; получатель отданного содержимого, то есть код
 // движка, пишущий в то, что вернул ему геттер; прочее состояние движка —
-// обработчики, стратегию подписи. У форм слепой зоны держателя нет ни на одном
-// пути запроса: статическая проба на них молчит — её ноль находок и
+// обработчики, стратегию выпуска артефактов. У форм слепой зоны держателя нет
+// ни на одном пути запроса: статическая проба на них молчит — её ноль находок и
 // неразобранных стоит и при такой записи в дереве (это утверждает
 // TestNamedBlindZoneFormsStaySilent), — а перепись по тождеству содержимого не
 // видит. -race проба TestConcurrentExchangesOnAFreshCeremonyShareNoEngineState
@@ -144,9 +200,6 @@ type Ceremony struct {
 	// для одного: отозвать семейство повторённого кода или токена обновления
 	// ВНЕ единицы работы движка (см. revokeReplayedFamily).
 	bridge *storageBridge
-
-	authorizeURL string
-	tokenURL     string
 }
 
 // New собирает церемонию.
@@ -155,58 +208,61 @@ type Ceremony struct {
 // рабочем пути означала бы, что негодная сборка живёт до первого обращения и
 // падает на пользователе.
 func New(cfg Config, ports Ports) (*Ceremony, error) {
-	if err := validateConfig(&cfg); err != nil {
+	if err := validateConfig(cfg); err != nil {
 		return nil, err
 	}
 	if err := validatePorts(ports); err != nil {
 		return nil, err
 	}
 
-	issuer, err := url.Parse(cfg.Issuer)
-	if err != nil || !issuer.IsAbs() || issuer.Host == "" {
-		return nil, misuse("Config.Issuer must be an absolute URL with a host, for example https://iam.example.net")
-	}
+	bridge, store := newStorageBridge(ports, cfg.PortTimeout)
 
-	authorizeURL := issuer.JoinPath("oauth2", "authorize").String()
-	tokenURL := issuer.JoinPath("oauth2", "token").String()
-
+	// Издателя токенов настройки движка не называют: его читают лишь стратегии
+	// JWT движка, а New строит свою стратегию (artifactStrategy, ниже), которая
+	// его не читает. Код авторизации и токен обновления у неё — непрозрачные
+	// строки без утверждений, и `iss` в них нести негде; токен доступа
+	// выпускает порт службы, и `iss` в него кладёт служба; токена личности
+	// церемония не выдаёт (doc.go).
+	//
+	// PKCE (RFC 7636) обязателен ВСЕМ клиентам и только с методом S256
+	// (EnforcePKCE, EnforcePKCEForPublicClients, EnablePKCEPlainChallengeMethod
+	// ниже): запись кода без привязки невыразима (AuthorizationCodeRecord), и
+	// ручки, которая её разрешала бы, нет. Оба требования движка названы, чтобы
+	// ни один его путь не читал более мягкого правила.
 	engineCfg := &engine.Config{
 		AccessTokenLifespan:            cfg.AccessTokenLifespan,
 		RefreshTokenLifespan:           cfg.RefreshTokenLifespan,
 		AuthorizeCodeLifespan:          cfg.AuthorizationCodeLifespan,
-		GlobalSecret:                   cfg.SigningSecret,
-		RotatedGlobalSecrets:           cfg.RotatedSigningSecrets,
-		HashCost:                       cfg.SecretHashCost,
 		MinParameterEntropy:            cfg.MinParameterEntropy,
 		ScopeStrategy:                  scopeStrategyOf(cfg.ScopeMatching),
 		AudienceMatchingStrategy:       engine.DefaultAudienceMatchingStrategy,
-		EnforcePKCE:                    cfg.RequireProofKey,
-		EnforcePKCEForPublicClients:    cfg.RequireProofKeyForPublicClients,
+		EnforcePKCE:                    true,
+		EnforcePKCEForPublicClients:    true,
 		EnablePKCEPlainChallengeMethod: false,
 		SendDebugMessagesToClients:     false,
-		AccessTokenIssuer:              cfg.Issuer,
-		IDTokenIssuer:                  cfg.Issuer,
-		TokenURL:                       tokenURL,
+		TokenURL:                       cfg.TokenEndpoint,
 		RefreshTokenScopes:             refreshTokenScopesOf(cfg),
 		// Поля запроса авторизации, доезжающие до записи кода. Сверх
-		// умолчания движка (`code`, `redirect_uri`) — `code_challenge`: по
-		// нему мост узнаёт, что код привязан к PKCE, и пропавшая запись PKCE
-		// у такого кода — повтор, а не «данных PKCE нет» (см.
-		// storageBridge.GetPKCERequestSession).
-		SanitationWhiteList: []string{"code", "redirect_uri", "code_challenge"},
+		// умолчания движка (`code`, `redirect_uri`) — привязка PKCE, вызов и
+		// метод: мост переносит их в поля записи кода
+		// (AuthorizationCodeRecord.ProofKey), из которой их потом и читает
+		// обработчик PKCE движка (см. storageBridge.GetPKCERequestSession).
+		SanitationWhiteList: []string{"code", "redirect_uri", formCodeChallenge, formCodeChallengeMethod},
 	}
-	// Хешер секрета клиента назван ЗДЕСЬ, а не оставлен движку. Геттер движка
-	// заполняет неназванное поле ЛЕНИВО — первым вызовом и без синхронизации,
-	// — и первые одновременные обмены писали бы его из одного запроса под
-	// чтением из другого: гонка данных. Значение — то же, что завёл бы движок:
-	// bcrypt, цена — SecretHashCost. Два других лениво заполняемых поля,
-	// ScopeStrategy и AudienceMatchingStrategy, названы выше; четвёртое,
-	// JWKSFetcherStrategy, не названо намеренно — путь запроса церемонии его
-	// геттера не достигает. Предикат всех трёх утверждений — проба
+	// Секрет клиента сверяет порт службы (Ports.ClientSecrets), а не хешер
+	// движка: хешер настроек — clientSecretHasher, и цены хеширования у
+	// церемонии нет. Проверочное значение, его функцию и цену выбирает служба.
+	//
+	// Поле названо ЗДЕСЬ ещё и потому, что геттер движка заполняет неназванное
+	// ЛЕНИВО — первым вызовом и без синхронизации, — и первые одновременные
+	// обмены писали бы его из одного запроса под чтением из другого: гонка
+	// данных. Два других лениво заполняемых поля, ScopeStrategy и
+	// AudienceMatchingStrategy, названы выше; четвёртое, JWKSFetcherStrategy, не
+	// названо намеренно — путь запроса церемонии его геттера не достигает.
+	// Предикат всех трёх утверждений — проба
 	// TestEngineSettingsBuiltByNewAreOnlyReadOnTheRequestPath.
-	engineCfg.ClientSecretsHasher = &engine.BCrypt{Config: engineCfg}
+	engineCfg.ClientSecretsHasher = clientSecretHasher{bridge: bridge}
 
-	bridge, store := newStorageBridge(ports, cfg.PortTimeout)
 	coreStore, ok := store.(enginehandler.CoreStorage)
 	if !ok {
 		// Недостижимо: соответствие моста закреплено утверждениями
@@ -227,8 +283,13 @@ func New(cfg Config, ports Ports) (*Ceremony, error) {
 		return nil, misuse("the storage bridge does not satisfy the client storage contract")
 	}
 
-	strategy := enginehandler.NewHMACSHAStrategyUnPrefixed(
-		&enginehmac.HMACStrategy{Config: engineCfg}, engineCfg)
+	// Стратегия выпуска артефактов — своя (artifactStrategy): подписного
+	// материала у церемонии нет, токен доступа выпускает порт службы.
+	strategy := &artifactStrategy{
+		issuer:    ports.AccessTokenIssuer,
+		deadline:  bridge.deadline,
+		lifespans: engineCfg,
+	}
 
 	explicitGrant := &enginehandler.AuthorizeExplicitGrantHandler{
 		AccessTokenStrategy:    strategy,
@@ -275,11 +336,9 @@ func New(cfg Config, ports Ports) (*Ceremony, error) {
 	engineCfg.RevocationHandlers.Append(revoker)
 
 	return &Ceremony{
-		provider:     engine.NewOAuth2Provider(clientStore, engineCfg),
-		cfg:          cfg,
-		bridge:       bridge,
-		authorizeURL: authorizeURL,
-		tokenURL:     tokenURL,
+		provider: engine.NewOAuth2Provider(clientStore, engineCfg),
+		cfg:      cfg,
+		bridge:   bridge,
 	}, nil
 }
 
@@ -297,24 +356,30 @@ var (
 	_ engineproofkey.PKCERequestStorage    = (*transactionalStorageBridge)(nil)
 )
 
-func validateConfig(cfg *Config) error {
-	const (
-		minSigningSecret = 32
-		minHashCost      = 10
-		maxHashCost      = 15
-		minEntropy       = 8
-	)
+// validateConfig судит настройки и не меняет их: принимает значение, а не
+// указатель, и поправить настройки, с которыми New соберёт церемонию, не может
+// по построению.
+func validateConfig(cfg Config) error {
+	const minEntropy = 8
 	switch {
-	case strings.TrimSpace(cfg.Issuer) == "":
-		return misuse("Config.Issuer is not named")
-	case len(cfg.SigningSecret) < minSigningSecret:
-		return misuse("Config.SigningSecret is shorter than 32 bytes")
 	case cfg.AccessTokenLifespan <= 0:
 		return misuse("Config.AccessTokenLifespan is not a positive duration")
+	case cfg.AccessTokenLifespan > tokenpolicy.MaxTokenTTL:
+		return misuse("Config.AccessTokenLifespan " + cfg.AccessTokenLifespan.String() +
+			" exceeds tokenpolicy.MaxTokenTTL " + tokenpolicy.MaxTokenTTL.String() +
+			"; the access token is signed by the service, whose signer issues nothing longer")
 	case cfg.RefreshTokenLifespan <= 0:
 		return misuse("Config.RefreshTokenLifespan is not a positive duration")
+	case cfg.RefreshTokenLifespan > tokenpolicy.MaxRefreshTokenFamilyTTL:
+		return misuse("Config.RefreshTokenLifespan " + cfg.RefreshTokenLifespan.String() +
+			" exceeds tokenpolicy.MaxRefreshTokenFamilyTTL " + tokenpolicy.MaxRefreshTokenFamilyTTL.String() +
+			"; no refresh token outlives the bound of its family")
 	case cfg.AuthorizationCodeLifespan <= 0:
 		return misuse("Config.AuthorizationCodeLifespan is not a positive duration")
+	case cfg.AuthorizationCodeLifespan > tokenpolicy.MaxAuthorizationCodeTTL:
+		return misuse("Config.AuthorizationCodeLifespan " + cfg.AuthorizationCodeLifespan.String() +
+			" exceeds tokenpolicy.MaxAuthorizationCodeTTL " + tokenpolicy.MaxAuthorizationCodeTTL.String() +
+			"; the lifespan is the window an intercepted code stays exchangeable in")
 	case cfg.ScopeMatching == ScopeMatchingUnspecified:
 		return misuse("Config.ScopeMatching is not named")
 	case cfg.ScopeMatching != ScopeMatchingExact && cfg.ScopeMatching != ScopeMatchingWildcard:
@@ -325,8 +390,6 @@ func validateConfig(cfg *Config) error {
 		return misuse("Config.RefreshTokenScopes is empty while Config.RefreshTokenIssuance is RefreshTokenIssuanceOnScope")
 	case cfg.RefreshTokenIssuance == RefreshTokenIssuanceAlways && len(cfg.RefreshTokenScopes) != 0:
 		return misuse("Config.RefreshTokenScopes is set while Config.RefreshTokenIssuance is RefreshTokenIssuanceAlways")
-	case cfg.SecretHashCost < minHashCost || cfg.SecretHashCost > maxHashCost:
-		return misuse("Config.SecretHashCost is outside the range [10, 15]")
 	case cfg.MinParameterEntropy < minEntropy:
 		return misuse("Config.MinParameterEntropy is below 8 characters")
 	case cfg.PortTimeout <= 0:
@@ -335,6 +398,52 @@ func validateConfig(cfg *Config) error {
 		return misuse("Config.OperationTimeout is not a positive duration")
 	case cfg.OperationTimeout < cfg.PortTimeout:
 		return misuse("Config.OperationTimeout is shorter than Config.PortTimeout")
+	case cfg.NewGrantID == nil:
+		return misuse("Config.NewGrantID is not named; the grant identifier is minted by the service, not by the engine")
+	}
+	if err := validateEndpoint("Config.AuthorizationEndpoint", cfg.AuthorizationEndpoint); err != nil {
+		return err
+	}
+	return validateEndpoint("Config.TokenEndpoint", cfg.TokenEndpoint)
+}
+
+// validateEndpoint отвергает адрес точки, который церемония не может подать
+// движку как есть. Отказ называет поле: проверка у двух адресов одна, и без
+// имени поля оператор не узнал бы, какой из них негоден.
+func validateEndpoint(field, value string) error {
+	if strings.TrimSpace(value) == "" {
+		return misuse(field + " is not named")
+	}
+	// Судится сама строка, а не разобранное: пустые строку запроса и фрагмент
+	// (`…/token?`, `…/token#`) разбор не сохраняет, а адрес с ними — второе
+	// написание того же адреса, и параметры, поставленные поверх него, они
+	// испортили бы так же, как непустые.
+	if strings.ContainsAny(value, "?#") {
+		return misuse(field + " carries a query or a fragment; an endpoint here is a scheme, a host and a path only")
+	}
+	// Хост судится по имени (Hostname), а не по Host: у `https://:8443/…` и
+	// `https://:/…` разбор кладёт в Host один порт, и непустой Host хоста не
+	// означает.
+	endpoint, err := url.Parse(value)
+	if err != nil || !endpoint.IsAbs() || endpoint.Hostname() == "" {
+		return misuse(field + " must be an absolute URL with a scheme and a host")
+	}
+	if endpoint.User != nil {
+		return misuse(field + " carries user information; an endpoint is an address published to clients, and credentials in it are a secret in the open")
+	}
+	// Запрос к движку церемония строит из этой строки, и движок получает
+	// адрес в том написании, какое даёт обратная запись разобранного. Строка,
+	// которая с ним не совпадает, — второе написание адреса: служба
+	// опубликовала бы одно, а запросы уходили бы на другое.
+	//
+	// Правила у частей адреса разные, и отказ называет правило каждой: схему
+	// разбор понижает в регистре; хост не-ASCII обратная запись экранирует, а
+	// клиентам он публикуется A-меткой; путь обратная запись экранирует, но
+	// регистра его не трогает, и путь к регистру чувствителен.
+	if endpoint.String() != value {
+		return misuse(field + " is not written the way it is served: parsing and re-serialising it changes it; " +
+			"write the scheme in lower case, a non-ASCII host as its A-label (the xn-- form), " +
+			"and whitespace and non-ASCII characters of the path percent-encoded, keeping the letter case of the path")
 	}
 	return nil
 }
@@ -351,8 +460,10 @@ func validatePorts(ports Ports) error {
 		return misuse("Ports.RefreshTokens is not named")
 	case ports.Grants == nil:
 		return misuse("Ports.Grants is not named")
-	case ports.ProofKeys == nil:
-		return misuse("Ports.ProofKeys is not named")
+	case ports.AccessTokenIssuer == nil:
+		return misuse("Ports.AccessTokenIssuer is not named")
+	case ports.ClientSecrets == nil:
+		return misuse("Ports.ClientSecrets is not named; the client secret is verified by the service, not by the engine")
 	}
 	return nil
 }
@@ -505,7 +616,7 @@ func (c *Ceremony) Authorize(ctx context.Context, req AuthorizationRequest) (Aut
 		return AuthorizationIntent{}, err
 	}
 
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodGet, c.authorizeURL+"?"+form.Encode(), nil)
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodGet, c.cfg.AuthorizationEndpoint+"?"+form.Encode(), nil)
 	if err != nil {
 		return AuthorizationIntent{}, failf(CodeCeremonyMisuse, err,
 			"The authorization request could not be encoded.", "", err.Error())
@@ -516,7 +627,35 @@ func (c *Ceremony) Authorize(ctx context.Context, req AuthorizationRequest) (Aut
 	if engineErr != nil {
 		return intent, notes.preferRecorded(fromEngine(engineErr))
 	}
+	if err := requireProofKey(requester); err != nil {
+		return intent, err
+	}
+	if err := requireScopeTokens(requester); err != nil {
+		return intent, err
+	}
 	return intent, nil
+}
+
+// requireProofKey отвергает запрос кода без годной привязки PKCE S256 случаем
+// CodeInvalidRequest (RFC 7636 §4.4.1).
+//
+// # Почему церемония, а не движок
+//
+// Обработчик PKCE движка сверяет привязку, когда код УЖЕ выпущен и положен в
+// хранилище обработчиком кода (он стоит раньше, см. New), и отказывает уже
+// после записи. Здесь отказ приходит раньше: в Authorize — до согласия, чтобы
+// служба не спрашивала человека о запросе, который кода не получит, и в
+// CompleteAuthorization — до выпуска кода, для намерения, чей отказ служба не
+// доставила. Запрос без типа ответа `code` кода не выпускает, и привязка ему
+// не нужна — так же судит и движок.
+func requireProofKey(requester engine.AuthorizeRequester) error {
+	if requester == nil || !requester.GetResponseTypes().Has(string(ResponseKindCode)) {
+		return nil
+	}
+	if _, bad := proofKeyBindingOf(requester.GetRequestForm()); bad != nil {
+		return bad
+	}
+	return nil
 }
 
 // CompleteAuthorization закрывает намерение выдачей.
@@ -535,8 +674,19 @@ func (c *Ceremony) CompleteAuthorization(ctx context.Context, intent Authorizati
 	if err := c.checkIntent(intent); err != nil {
 		return AuthorizationResult{}, err
 	}
+	if err := requireProofKey(intent.requester); err != nil {
+		return AuthorizationResult{}, err
+	}
+	// Намерение, чей отказ служба не доставила, кода не получает: запись кода
+	// несла бы запрошенную область вне грамматики.
+	if err := requireScopeTokens(intent.requester); err != nil {
+		return AuthorizationResult{}, err
+	}
 	if strings.TrimSpace(grant.Subject) == "" {
 		return AuthorizationResult{}, misuse("AuthorizationGrant.Subject is not named; a grant without a subject is not a grant")
+	}
+	if field, why := loginContextDefect(grant.SessionID, grant.ACR, grant.AuthTime, grant.Claims); field != "" {
+		return AuthorizationResult{}, misuse("AuthorizationGrant." + field + ": " + why)
 	}
 	if err := c.checkGrantWithinRequest(intent, grant); err != nil {
 		return AuthorizationResult{}, err
@@ -554,16 +704,30 @@ func (c *Ceremony) CompleteAuthorization(ctx context.Context, intent Authorizati
 
 	// Решение службы о сроках — ГРАНИЦА семейства, а не срок первого
 	// артефакта: срок каждому артефакту назначает движок в миг выпуска, а
-	// сеанс не даёт назначить его позже границы (ceremonySession).
+	// сеанс не даёт назначить его позже границы (ceremonySession). Контекст
+	// входа — снимок: сеанс семейства несёт его от кода до последнего оборота.
 	session := newSession()
-	if err := hydrateSession(session, SessionRecord{
-		Subject:  grant.Subject,
-		Username: grant.Username,
-		NotAfter: grant.ExpiresAt,
-		Claims:   grant.Claims,
-	}); err != nil {
+	if bad := hydrateSession(session, SessionRecord{
+		Subject:   grant.Subject,
+		Username:  grant.Username,
+		SessionID: grant.SessionID,
+		ACR:       grant.ACR,
+		AuthTime:  grant.AuthTime,
+		NotAfter:  grant.ExpiresAt,
+		Claims:    grant.Claims,
+	}); bad != nil {
+		return AuthorizationResult{}, bad
+	}
+
+	// Идентификатор гранта — службы (Config.NewGrantID). Он ставится запросу
+	// ДО выпуска: впервые движок читает его, сохраняя код с его привязкой PKCE,
+	// и на пустом начеканил бы свой. Чеканка — последним шагом перед выпуском,
+	// чтобы выдача, отвергнутая проверками выше, идентификатора не расходовала.
+	grantID, err := c.mintGrantID(ctx)
+	if err != nil {
 		return AuthorizationResult{}, err
 	}
+	intent.requester.SetID(grantID)
 
 	responder, engineErr := c.provider.NewAuthorizeResponse(ctx, intent.requester, session)
 	if engineErr != nil {
@@ -573,6 +737,30 @@ func (c *Ceremony) CompleteAuthorization(ctx context.Context, intent Authorizati
 	sink := newResponseSink()
 	c.provider.WriteAuthorizeResponse(ctx, sink, intent.requester, responder)
 	return sink.authorizationResult(intent.Delivery()), nil
+}
+
+// mintGrantID спрашивает у службы идентификатор нового гранта.
+//
+// Крючок — вызов службы, как и порт, и срок у него тот же: Config.PortTimeout.
+// Его отказ разбирается, как отказ порта (истёкший срок остаётся истёкшим
+// сроком, наш случай — нашим случаем, прочее — ошибкой сервера с текстом в
+// Debug). Пустой идентификатор — нарушение контракта: движок принял бы его за
+// «не назван» и начеканил бы свой.
+func (c *Ceremony) mintGrantID(ctx context.Context) (string, error) {
+	const op = "Config.NewGrantID"
+
+	ctx, cancel := context.WithTimeout(ctx, c.cfg.PortTimeout)
+	defer cancel()
+
+	grantID, err := c.cfg.NewGrantID(ctx)
+	if err != nil {
+		return "", fromPort(op, err)
+	}
+	if grantID == "" {
+		return "", contractBreach(op, "the hook returned an empty grant identifier; "+
+			"the engine would mint one of its own in its place")
+	}
+	return grantID, nil
 }
 
 // DenyAuthorization закрывает намерение отказом.
@@ -611,10 +799,19 @@ func (c *Ceremony) DenyAuthorization(ctx context.Context, intent AuthorizationIn
 // Область сверяется по правилу Config.ScopeMatching (запрошенное `tenant.*`
 // при правиле с образцом покрывает `tenant.read`); получатель — точным
 // совпадением с запрошенным: у получателя правила с образцом нет.
+//
+// Прежде покрытия область судится по форме: выданная область — `scope-token`
+// (scopeTokenDefect). Образец покрывает и `tenant.a b`, и клиент прочёл бы
+// такую область двумя.
 func (c *Ceremony) checkGrantWithinRequest(intent AuthorizationIntent, grant AuthorizationGrant) error {
 	requested := intent.RequestedScopes()
 	covers := scopeStrategyOf(c.cfg.ScopeMatching)
 	for _, scope := range grant.GrantedScopes {
+		if defect := scopeTokenDefect(scope); defect != "" {
+			return misuse("AuthorizationGrant.GrantedScopes carries " + strconv.Quote(scope) +
+				", which is not a scope-token (RFC 6749 §3.3): " + defect +
+				"; a scope is issued as granted, and the client would read it otherwise")
+		}
 		if !covers(requested, scope) {
 			return misuse("AuthorizationGrant.GrantedScopes carries " + strconv.Quote(scope) +
 				", which the authorization request did not ask for; a grant may narrow the request, never widen it")
@@ -630,16 +827,25 @@ func (c *Ceremony) checkGrantWithinRequest(intent AuthorizationIntent, grant Aut
 	return nil
 }
 
-// checkGrantBounds отвергает границу семейства, равную нулевому времени.
+// checkGrantBounds отвергает границу семейства, равную нулевому времени, и
+// границу под видом, которого церемония не выпускает.
 //
 // Нулевое время — не граница. Движок читает нулевой срок токена обновления как
 // «без срока», и граница-ноль, сжав к себе каждый назначаемый срок, сделала бы
 // семейство БЕССРОЧНЫМ — обратное тому, о чём служба просила, назвав границу.
-// Вид без границы выражается отсутствием ключа, а не нулём. Отказ называет
-// вид; при нескольких нулевых — первый по порядку имени, чтобы текст отказа не
-// зависел от порядка обхода карты.
+// Вид без границы выражается отсутствием ключа, а не нулём.
+//
+// Вид вне словаря TokenKinds церемония не выпускает, и граница под ним не
+// ограничила бы ничего, а служба считала бы её действующей.
+//
+// Отказ называет вид; при нескольких негодных — первый по порядку имени, чтобы
+// текст отказа не зависел от порядка обхода карты.
 func checkGrantBounds(bounds map[TokenKind]time.Time) error {
 	for _, kind := range slices.Sorted(maps.Keys(bounds)) {
+		if !kind.Declared() {
+			return misuse("AuthorizationGrant.ExpiresAt[" + strconv.Quote(string(kind)) + "] names a kind the ceremony " +
+				"does not issue, so the bound would limit nothing; the kinds issued are those of TokenKinds")
+		}
 		if bounds[kind].IsZero() {
 			return misuse("AuthorizationGrant.ExpiresAt[" + strconv.Quote(string(kind)) + "] is the zero time; " +
 				"the zero time is no bound (a zero refresh token expiry reads as no expiry at all) — " +
@@ -693,8 +899,8 @@ func (c *Ceremony) Exchange(ctx context.Context, req TokenRequest) (TokenResult,
 
 	// Повтор кода авторизации (RFC 6749 §4.1.2) и токена обновления (RFC 9700
 	// §4.14.2) отзывает семейство гранта — и последовательный, замеченный
-	// выборкой, и одновременный, замеченный нулём строк погашения или оборота
-	// либо пропавшей записью PKCE. Правило не зависит от того, чем кончил
+	// выборкой, и одновременный, замеченный нулём строк погашения или
+	// оборота. Правило не зависит от того, чем кончил
 	// движок: если повтор замечен, выданное этим обменом принадлежит
 	// отозванному семейству, и отдать его вызывающему как успех значило бы
 	// отдать мёртвые токены. Отказ отзыва — отказ операции.
@@ -709,7 +915,28 @@ func (c *Ceremony) Exchange(ctx context.Context, req TokenRequest) (TokenResult,
 	if engineErr != nil {
 		return TokenResult{}, notes.preferRecorded(fromEngine(engineErr))
 	}
-	return tokenResultOf(responder), nil
+	issued, noted := notes.issuedAccessToken()
+	return withIssuedLifetime(tokenResultOf(responder), issued, noted)
+}
+
+// withIssuedLifetime ставит в ответ обмена срок ЕГО выпуска.
+//
+// Срок жизни токена доступа (RFC 6749 §5.1, `expires_in`) — exp минус момент
+// выпуска, ровно те, что порт службы положил в токен. Движок считает срок
+// сам, от своих часов и своего срока в сеансе, — это был бы второй источник
+// одного значения, и они разошлись бы на ходе часов между выпуском и ответом.
+//
+// Ответ, токен доступа которого не выпущен портом в ЭТОЙ операции, не
+// собирается вовсе: срок, взятый у чужого выпуска или ни у какого, был бы
+// ложью, и отдать токен без срока — тоже.
+func withIssuedLifetime(result TokenResult, issued IssuedAccessToken, noted bool) (TokenResult, error) {
+	if !noted || issued.Token == "" || issued.Token != result.AccessToken {
+		return TokenResult{}, failf(CodeServerError, nil,
+			"The token response carries an access token that the access token issuer did not issue in this exchange.",
+			"", "")
+	}
+	result.ExpiresIn = issued.ExpiresAt.Sub(issued.IssuedAt)
+	return result, nil
 }
 
 // revokeReplayedFamily отзывает семейство гранта, у которого замечен повтор.
@@ -723,6 +950,14 @@ func (c *Ceremony) Exchange(ctx context.Context, req TokenRequest) (TokenResult,
 // исход после отзыва огрубляется; повторный отзыв здесь законен — ноль строк
 // у порта отзыва не отказ — и делает исход ВИДИМЫМ: отказ отзыва возвращается
 // отказом операции, а не случаем «повтор», за которым живое семейство.
+//
+// # Причина отзыва
+//
+// Причину порту называет ведомость операции, а не параметр: тем же путём её
+// получает и отзыв, исполняемый движком, и у одного семейства в одной операции
+// не бывает двух причин. В обмене это причина замеченного повтора — кода или
+// токена обновления; в отзыве — просьба клиента (см.
+// operationNotes.revocationReason).
 //
 // # Почему контекст отвязан от отмены вызывающего
 //
@@ -760,6 +995,9 @@ func (c *Ceremony) Introspect(ctx context.Context, req IntrospectionRequest) (In
 	if strings.TrimSpace(req.Token) == "" {
 		return IntrospectionResult{}, misuse("IntrospectionRequest.Token is empty")
 	}
+	if err := requireIntrospectionMethod(req.AuthMethod, req.ClientSecret); err != nil {
+		return IntrospectionResult{}, err
+	}
 
 	form := url.Values{}
 	form.Set("token", req.Token)
@@ -791,6 +1029,54 @@ func (c *Ceremony) Introspect(ctx context.Context, req IntrospectionRequest) (In
 	return introspectionResultOf(responder), nil
 }
 
+// requireIntrospectionMethod отвергает по имени способ доказательства, которого
+// точка интроспекции не принимает (IntrospectionAuthMethods).
+//
+// # Почему до движка
+//
+// Движок на точке интроспекции берёт доказательство спрашивающего только
+// заголовком Authorization. Секрет телом и запрос без доказательства он
+// отвергает на разборе заголовка — «заголовка Authorization нет», — не называя
+// способа и раньше, чем спросит справочник. Такой отказ служба прочла бы как
+// недоказанного клиента, хотя недоказан не клиент, а выбор способа. Отказ
+// здесь называет поле и способ; способ судится после разрешения пустого
+// значения (resolveAuthMethod), и отказ называет, во что пустое разрешилось.
+//
+// Точка токена и отзыв сюда не ходят: там движок принимает каждый способ
+// словаря.
+func requireIntrospectionMethod(method ClientAuthMethod, clientSecret string) error {
+	resolved := resolveAuthMethod(method, clientSecret)
+	if slices.Contains(IntrospectionAuthMethods(), resolved) {
+		return nil
+	}
+	named := "IntrospectionRequest.AuthMethod " + strconv.Quote(string(resolved))
+	if method == "" {
+		named = "IntrospectionRequest.AuthMethod is empty and resolves to " + strconv.Quote(string(resolved)) +
+			" (no client secret); that method"
+	}
+	accepted := make([]string, 0, len(IntrospectionAuthMethods()))
+	for _, m := range IntrospectionAuthMethods() {
+		accepted = append(accepted, strconv.Quote(string(m)))
+	}
+	return misuse(named + " is not accepted at the introspection endpoint, which takes the proof of the " +
+		"introspecting party from the Authorization header only (RFC 7662 §2.1); accepted: " +
+		strings.Join(accepted, ", "))
+}
+
+// resolveAuthMethod разрешает пустой способ доказательства: ClientAuthNone при
+// пустом секрете, ClientAuthBasic при непустом. Названный способ — он сам.
+// Одно разрешение на все операции: иначе один и тот же запрос интроспекция и
+// точка токена читали бы разными способами.
+func resolveAuthMethod(method ClientAuthMethod, clientSecret string) ClientAuthMethod {
+	if method != "" {
+		return method
+	}
+	if clientSecret == "" {
+		return ClientAuthNone
+	}
+	return ClientAuthBasic
+}
+
 // ── Отзыв ───────────────────────────────────────────────────────────────────
 
 // Revoke снимает артефакт и всё, что выдано по тому же гранту (RFC 7009).
@@ -804,6 +1090,9 @@ func (c *Ceremony) Revoke(ctx context.Context, req RevocationRequest) error {
 	defer cancel()
 
 	ctx, notes := withNotes(ctx)
+	// Всё, что отзывается в этой операции, отзывается по просьбе клиента — и
+	// движком (живой артефакт), и церемонией (обёрнутый токен обновления ниже).
+	notes.requestRevocation(RevocationClientRevoke)
 
 	if strings.TrimSpace(req.Token) == "" {
 		return misuse("RevocationRequest.Token is empty")
@@ -852,15 +1141,14 @@ func (c *Ceremony) Revoke(ctx context.Context, req RevocationRequest) error {
 // ── Сборка запросов для движка ──────────────────────────────────────────────
 
 // postForm собирает запрос точки токена вместе с доказательством клиента.
+//
+// Запрос с доказательством клиента — это и отметка операции: она доказывает
+// клиента, и справочник в ней спрашивают ради доказательства (см.
+// storageBridge.GetClient).
 func (c *Ceremony) postForm(ctx context.Context, form url.Values, clientID, clientSecret string, method ClientAuthMethod) (*http.Request, error) {
-	if method == "" {
-		if clientSecret == "" {
-			method = ClientAuthNone
-		} else {
-			method = ClientAuthBasic
-		}
-	}
+	notesFrom(ctx).expectClientProof()
 
+	method = resolveAuthMethod(method, clientSecret)
 	switch method {
 	case ClientAuthNone:
 		if clientSecret != "" {
@@ -878,7 +1166,7 @@ func (c *Ceremony) postForm(ctx context.Context, form url.Values, clientID, clie
 		return nil, misuse("TokenRequest.AuthMethod is not one of the declared methods")
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.tokenURL, strings.NewReader(form.Encode()))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.cfg.TokenEndpoint, strings.NewReader(form.Encode()))
 	if err != nil {
 		return nil, failf(CodeCeremonyMisuse, err, "The token request could not be encoded.", "", err.Error())
 	}
@@ -1009,12 +1297,10 @@ func tokenResultOf(responder engine.AccessResponder) TokenResult {
 	}
 	for key, value := range responder.ToMap() {
 		switch key {
-		case "access_token", "token_type":
-			// Уже названы полями; второй раз не кладём.
-		case "expires_in":
-			if seconds, ok := value.(int64); ok {
-				result.ExpiresIn = time.Duration(seconds) * time.Second
-			}
+		case "access_token", "token_type", "expires_in":
+			// У всех трёх есть поля ответа, и в прочие поля они не кладутся.
+			// Срок движка не берётся вовсе: срок в ответе — срок выпуска
+			// (withIssuedLifetime), а не пересчёт движка от его часов.
 		case "scope":
 			if scope, ok := value.(string); ok && scope != "" {
 				result.Scopes = strings.Split(scope, " ")
@@ -1022,10 +1308,6 @@ func tokenResultOf(responder engine.AccessResponder) TokenResult {
 		case "refresh_token":
 			if token, ok := value.(string); ok {
 				result.RefreshToken = token
-			}
-		case "id_token":
-			if token, ok := value.(string); ok {
-				result.IdentityToken = token
 			}
 		default:
 			result.Additional[key] = value
@@ -1055,6 +1337,9 @@ func introspectionResultOf(responder engine.IntrospectionResponder) Introspectio
 	result.ClientID = rec.ClientID
 	result.Subject = rec.Session.Subject
 	result.Username = rec.Session.Username
+	result.SessionID = rec.Session.SessionID
+	result.ACR = rec.Session.ACR
+	result.AuthTime = rec.Session.AuthTime
 	result.Scopes = rec.GrantedScopes
 	result.Audiences = rec.GrantedAudiences
 	result.IssuedAt = rec.IssuedAt

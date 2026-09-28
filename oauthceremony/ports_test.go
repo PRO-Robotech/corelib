@@ -144,10 +144,10 @@ func TestUndeclaredOutcomeFromStoreIsAContractBreach(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Authorize отказал: %v", err)
 	}
-	_, err = ceremony.CompleteAuthorization(context.Background(), intent, oauthceremony.AuthorizationGrant{
+	_, err = ceremony.CompleteAuthorization(context.Background(), intent, loggedIn(oauthceremony.AuthorizationGrant{
 		Subject:       testSubject,
 		GrantedScopes: []string{"openid", "offline"},
-	})
+	}))
 	if !errors.Is(err, oauthceremony.ErrPortContract) {
 		t.Fatalf("случай %v, ожидался %v", oauthceremony.CodeOf(err), oauthceremony.CodePortContract)
 	}
@@ -168,10 +168,10 @@ func TestInsertThatTouchedNoRowIsAContractBreach(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Authorize отказал: %v", err)
 	}
-	_, err = ceremony.CompleteAuthorization(context.Background(), intent, oauthceremony.AuthorizationGrant{
+	_, err = ceremony.CompleteAuthorization(context.Background(), intent, loggedIn(oauthceremony.AuthorizationGrant{
 		Subject:       testSubject,
 		GrantedScopes: []string{"openid", "offline"},
-	})
+	}))
 	if !errors.Is(err, oauthceremony.ErrPortContract) {
 		t.Fatalf("случай %v, ожидался %v", oauthceremony.CodeOf(err), oauthceremony.CodePortContract)
 	}

@@ -107,19 +107,24 @@ func TestOurFailurePassesThroughTheEngineUnchanged(t *testing.T) {
 	}
 }
 
-// TestSentinelsAreImmutable — часовой не несёт ни описания, ни подсказки, ни
-// подробностей.
+// TestSentinelsCarryNoContent — часовой пуст: не несёт ни описания, ни
+// подсказки, ни подробностей, ни исходного отказа.
 //
 // Часовой с текстом провоцировал бы отдать его наружу как готовый отказ, и
 // текст одного случая стал бы текстом всех его появлений.
-func TestSentinelsAreImmutable(t *testing.T) {
+//
+// Неизменяемости часового проба НЕ судит: поля ProtocolError экспортированы, и
+// запись в часовой язык не запрещает — она держится уговором (см. объявление
+// часовых в errors.go). Проба видит только, что к её прогону часовые пусты.
+func TestSentinelsCarryNoContent(t *testing.T) {
+	if len(allSentinels) == 0 {
+		t.Fatal("НЕ ВЫПОЛНИЛОСЬ: перечень часовых пуст")
+	}
 	for _, s := range allSentinels {
 		if s.Description != "" || s.Hint != "" || s.Debug != "" || s.cause != nil {
-			t.Errorf("часовой %s несёт содержимое: описание=%q подсказка=%q подробности=%q",
-				s.Code, s.Description, s.Hint, s.Debug)
+			t.Errorf("часовой %s несёт содержимое: описание=%q подсказка=%q подробности=%q исходный отказ=%v",
+				s.Code, s.Description, s.Hint, s.Debug, s.cause)
 		}
 	}
-	if len(allSentinels) == 0 {
-		t.Fatal("перечень часовых пуст")
-	}
+	t.Logf("часовых осмотрено: %d", len(allSentinels))
 }

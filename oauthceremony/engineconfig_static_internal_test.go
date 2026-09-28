@@ -1022,20 +1022,32 @@ func TestEmptySourceWalkIsNotAVerdict(t *testing.T) {
 // marker отмечает в инъекции строку, которую находка обязана назвать.
 const marker = "// ← предмет"
 
-// injectedMapField — поле-карта, которое копия добавляет в тип настроек: у
-// настоящего типа ссылочных полей вида карты нет, а инъекция записи в
-// содержимое карты должна быть записью в НАСТОЯЩЕЕ поле-карту.
-const injectedMapField = "\n\t// InjectedMap — поле-карта копии для инъекций.\n\tInjectedMap map[string]string\n"
+// injectedFields — поля, которые копия добавляет в тип настроек: инъекция
+// записи в содержимое обязана быть записью в НАСТОЯЩЕЕ поле копии. Поле-карта —
+// потому что у настоящего типа ссылочных полей вида карты нет. Поля байтов и
+// среза байтов — потому что такие поля настоящего типа (общий секрет подписи и
+// прежние секреты) церемония больше не называет: подпись артефактов у неё не
+// движка, и инъекция, привязанная к ним, судила бы поле, которого у церемонии
+// нет.
+const injectedFields = "\n\t// InjectedMap — поле-карта копии для инъекций.\n\tInjectedMap map[string]string\n" +
+	"\n\t// InjectedBytes — поле байтов копии для инъекций.\n\tInjectedBytes []byte\n" +
+	"\n\t// InjectedKeys — поле среза байтов копии для инъекций.\n\tInjectedKeys [][]byte\n"
 
 // controlMethod — метод настроек, который каждая копия поддерева получает с
 // СИНТЕТИЧЕСКОЙ записью глубины 1 в поле-карту копии. Это положительный
 // контроль разбора: он не зависит от того, остались ли в живом дереве ленивые
 // геттеры, — их снятие цель, и контроль на ней не краснеет.
+//
+// Тот же файл объявляет injectedHasher — значение, которое инъекции кладут в
+// поле хешера настроек и достают из него: хешер движка церемония больше не
+// называет (секрет клиента сверяет порт службы), и инъекция, привязанная к
+// нему, судила бы тип, которого у церемонии нет.
 const (
 	controlMethod = "InjectedControlWrite"
 	controlFile   = "injected_control.go"
 	controlSrc    = "\n// InjectedControlWrite — синтетическая запись глубины 1 копии: положительный контроль разбора.\n" +
-		"func (c *Config) " + controlMethod + "() { c.InjectedMap = nil }\n"
+		"func (c *Config) " + controlMethod + "() { c.InjectedMap = nil }\n" +
+		"\n// injectedHasher — хешер копии для инъекций.\ntype injectedHasher struct{ Config *Config }\n"
 )
 
 // controlWrite — запись контроля в единице переписи.
@@ -1089,7 +1101,7 @@ func engineCopy(t *testing.T) (dir, pkgName, typeName string) {
 		writeFile(t, dir, name, string(b))
 	}
 	replaceOnce(t, dir, "config_default.go", "\tIsPushedAuthorizeEnforced bool\n}",
-		"\tIsPushedAuthorizeEnforced bool\n"+injectedMapField+"}")
+		"\tIsPushedAuthorizeEnforced bool\n"+injectedFields+"}")
 	if _, err := os.Stat(filepath.Join(dir, controlFile)); err == nil {
 		t.Fatalf("ФИКСТУРА: %s уже есть в пакете движка — контроль лёг бы поверх чужого файла", controlFile)
 	}
@@ -1207,7 +1219,7 @@ func (c *Config) TuneHTTPClient(_ context.Context) {
 			// и инъекция не должна истекать вместе с ней.
 			file: "config_default.go", anchor: "func (c *Config) GetSecretsHasher(ctx context.Context) Hasher {\n",
 			src: "func (c *Config) GetSecretsHasher(ctx context.Context) Hasher {\n" +
-				"\tc.ClientSecretsHasher.(*BCrypt).Config = &Config{HashCost: 4} " + marker + "\n"}, formAssign, 2},
+				"\tc.ClientSecretsHasher.(*injectedHasher).Config = &Config{HashCost: 4} " + marker + "\n"}, formAssign, 2},
 		{injection{name: "элемент среза, названного в New, — в существующем геттере",
 			file: "config_default.go", anchor: "\treturn c.SanitationWhiteList\n",
 			src: "\tc.SanitationWhiteList[0] = \"injected\" " + marker + "\n\treturn c.SanitationWhiteList\n"}, formAssign, 2},
@@ -1223,7 +1235,7 @@ func (c *Config) Mark() {
 `)}, formOpAssign, 2},
 		{injection{name: "инкремент элемента", file: "injected.go", src: newMethod("", `
 func (c *Config) Bump() {
-	c.GlobalSecret[0]++ `+marker+`
+	c.InjectedBytes[0]++ `+marker+`
 }
 `)}, formIncDec, 2},
 		{injection{name: "присваивание в range", file: "injected.go", src: newMethod("", `
@@ -1244,12 +1256,12 @@ func (c *Config) Forget() {
 `)}, "встроенная delete", 2},
 		{injection{name: "clear поля", file: "injected.go", src: newMethod("", `
 func (c *Config) Wipe() {
-	clear(c.GlobalSecret) `+marker+`
+	clear(c.InjectedBytes) `+marker+`
 }
 `)}, "встроенная clear", 2},
 		{injection{name: "copy в поле", file: "injected.go", src: newMethod("", `
 func (c *Config) Overwrite(b []byte) {
-	copy(c.GlobalSecret, b) `+marker+`
+	copy(c.InjectedBytes, b) `+marker+`
 }
 `)}, "встроенная copy", 2},
 		{injection{name: "мутатор slices", file: "injected.go", src: newMethod(`"slices"`, `
@@ -1281,7 +1293,7 @@ func (c *Config) ViaVar() {
 `)}, formAssign, 2},
 		{injection{name: "псевдоним через утверждение типа", file: "injected.go", src: newMethod("", `
 func (c *Config) Rehash() {
-	if b, ok := c.ClientSecretsHasher.(*BCrypt); ok {
+	if b, ok := c.ClientSecretsHasher.(*injectedHasher); ok {
 		b.Config = c `+marker+`
 	}
 }
@@ -1289,14 +1301,14 @@ func (c *Config) Rehash() {
 		{injection{name: "псевдоним переключателем типа", file: "injected.go", src: newMethod("", `
 func (c *Config) Retype() {
 	switch b := c.ClientSecretsHasher.(type) {
-	case *BCrypt:
+	case *injectedHasher:
 		b.Config = c `+marker+`
 	}
 }
 `)}, formAssign, 2},
 		{injection{name: "псевдоним элемента range", file: "injected.go", src: newMethod("", `
 func (c *Config) ZeroRotated() {
-	for _, key := range c.RotatedGlobalSecrets {
+	for _, key := range c.InjectedKeys {
 		key[0] = 0 `+marker+`
 	}
 }
@@ -1524,11 +1536,11 @@ func (c *Config) Reads(dst []byte) (int, string) {
 	h = nil
 	_ = h
 	_ = append([]string{}, c.RefreshTokenScopes...)
-	copy(dst, c.GlobalSecret)
+	copy(dst, c.InjectedBytes)
 	_ = c.ScopeStrategy(nil, "x")
 	_ = []string{c.TokenURL}
 	_ = strconv.Itoa(c.HashCost)
-	_ = string(c.GlobalSecret)
+	_ = string(c.InjectedBytes)
 	return len(c.SanitationWhiteList), v `+marker+`
 }
 `)}, false, false},
@@ -1554,7 +1566,7 @@ func (c *Config) LiteralRead() string {
 `)}, false, false},
 		{injection{name: "свежий литерал под & кладётся в поле", file: "injected.go", src: newMethod("", `
 func (c *Config) FreshHasher() {
-	c.ClientSecretsHasher = &BCrypt{Config: c} `+marker+`
+	c.ClientSecretsHasher = &injectedHasher{Config: c} `+marker+`
 }
 `)}, true, false},
 		{injection{name: "литерал копий полей-значений аргументом", file: "injected.go", src: newMethod("", `

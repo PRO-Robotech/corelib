@@ -1,5 +1,6 @@
 // Copyright © 2024 Ory Corp
 // SPDX-License-Identifier: Apache-2.0
+// Изменено PRO-Robotech (modified by PRO-Robotech): перечень изменений — internal/oauth2/PROVENANCE.md.
 
 package fosite
 
@@ -35,11 +36,11 @@ func TestHierarchicScopeStrategy(t *testing.T) {
 	assert.True(t, strategy(scopes, "fosite.key.get"))
 	assert.True(t, strategy(scopes, "fosite.key.update"))
 
-	scopes = []string{"hydra", "openid", "offline"}
+	scopes = []string{"acme", "openid", "offline"}
 	assert.False(t, strategy(scopes, "foo.bar"))
 	assert.False(t, strategy(scopes, "foo"))
-	assert.True(t, strategy(scopes, "hydra"))
-	assert.True(t, strategy(scopes, "hydra.bar"))
+	assert.True(t, strategy(scopes, "acme"))
+	assert.True(t, strategy(scopes, "acme.bar"))
 	assert.True(t, strategy(scopes, "openid"))
 	assert.True(t, strategy(scopes, "openid.baz.bar"))
 	assert.True(t, strategy(scopes, "offline"))
@@ -109,10 +110,10 @@ func TestWildcardScopeStrategy(t *testing.T) {
 	assert.False(t, strategy(scopes, "foo.bar.bar.baz.baz"))
 	assert.False(t, strategy(scopes, "foo.bar.baz.baz.baz.bar"))
 
-	scopes = strings.Fields("hydra.* openid offline  hydra")
-	assert.True(t, strategy(scopes, "hydra.clients"))
-	assert.True(t, strategy(scopes, "hydra.clients.get"))
-	assert.True(t, strategy(scopes, "hydra"))
+	scopes = strings.Fields("acme.* openid offline  acme")
+	assert.True(t, strategy(scopes, "acme.clients"))
+	assert.True(t, strategy(scopes, "acme.clients.get"))
+	assert.True(t, strategy(scopes, "acme"))
 	assert.True(t, strategy(scopes, "offline"))
 	assert.True(t, strategy(scopes, "openid"))
 }

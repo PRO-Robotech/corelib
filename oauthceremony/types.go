@@ -3,7 +3,10 @@
 
 package oauthceremony
 
-import "time"
+import (
+	"slices"
+	"time"
+)
 
 // ── Словари ─────────────────────────────────────────────────────────────────
 
@@ -76,16 +79,35 @@ const (
 type TokenKind string
 
 // Виды артефактов.
+//
+// Токена личности (`id_token`, OpenID Connect) здесь НЕТ: обработчика OpenID
+// Connect церемония не провязывает (doc.go), и вид без выпуска обещал бы
+// поведение, которого нет. Выдача токена личности — свой предмет со своим
+// портом ключей и своими настройками.
 const (
 	TokenKindAccess            TokenKind = "access_token"
 	TokenKindRefresh           TokenKind = "refresh_token"
 	TokenKindAuthorizationCode TokenKind = "authorization_code"
-	TokenKindIdentity          TokenKind = "id_token"
 	// TokenKindUnspecified — вид не назван. Отдельно от пустой строки в
 	// значении поля: в интроспекции «вид определить не удалось» —
 	// законный исход, и он обязан быть выразим.
 	TokenKindUnspecified TokenKind = ""
 )
+
+// TokenKinds возвращает словарь видов, которые церемония ВЫПУСКАЕТ, — службе,
+// которая хранит сроки и границы по видам (SessionRecord.ExpiresAt,
+// SessionRecord.NotAfter) и сопрягает словарь со своим (ограничение столбца
+// вида). Вида без выпуска в словаре нет: граница или срок под ним не значили
+// бы ничего.
+func TokenKinds() []TokenKind {
+	return []TokenKind{TokenKindAccess, TokenKindRefresh, TokenKindAuthorizationCode}
+}
+
+// Declared отвечает, входит ли вид в словарь выпускаемых. Нулевое значение
+// (TokenKindUnspecified) НЕ входит: это «вид не назван», а не вид.
+func (k TokenKind) Declared() bool {
+	return slices.Contains(TokenKinds(), k)
+}
 
 // ClientAuthMethod — способ, которым клиент доказывает себя точке токена
 // (RFC 6749 §2.3).
@@ -104,6 +126,26 @@ const (
 	// ClientAuthPost — секрет в теле запроса.
 	ClientAuthPost ClientAuthMethod = "client_secret_post"
 )
+
+// ClientAuthMethods возвращает словарь способов целиком — тому, кто строит
+// метаданные сервера обнаружения (`token_endpoint_auth_methods_supported`,
+// RFC 8414 §2) или проверяет запись клиента. Точка токена и отзыв принимают
+// каждый способ словаря; интроспекция — только те, что называет
+// IntrospectionAuthMethods.
+func ClientAuthMethods() []ClientAuthMethod {
+	return []ClientAuthMethod{ClientAuthNone, ClientAuthBasic, ClientAuthPost}
+}
+
+// IntrospectionAuthMethods — способы, которыми спрашивающий доказывает себя
+// точке интроспекции (`introspection_endpoint_auth_methods_supported`,
+// RFC 8414 §2). Перечень уже словаря ClientAuthMethods: движок на этой точке
+// берёт доказательство только заголовком Authorization (RFC 7662 §2.1), и
+// ни секрета в теле запроса, ни запроса без доказательства не принимает.
+// Способ вне перечня Introspect отвергает по имени до движка
+// (ErrCeremonyMisuse).
+func IntrospectionAuthMethods() []ClientAuthMethod {
+	return []ClientAuthMethod{ClientAuthBasic}
+}
 
 // ScopeMatching — правило сопоставления запрошенной области с разрешённой.
 type ScopeMatching uint8
@@ -128,12 +170,16 @@ const (
 // # Почему структура, а не интерфейс
 //
 // Движок объявляет клиента интерфейсом из семи методов и расширяет его ещё
-// тремя интерфейсами, которые он проверяет утверждением типа. Реализуй службa
+// тремя интерфейсами, которые он проверяет утверждением типа. Реализуй служба
 // такой интерфейс — и состав её обязанностей менялся бы при обновлении
 // апстрима молча: новый необязательный интерфейс просто перестал бы
 // подхватываться. Структура делает состав ЯВНЫМ: новое поле видно в диффе.
 //
 // # Чего в записи НЕТ
+//
+// Секрета — ни в каком виде: ни его проверочного значения, ни прежних
+// значений на время оборота. Их держит и сверяет служба портом
+// ClientSecretVerifier; у церемонии нет ни значения, ни хешера.
 //
 // Набора ключей клиента, адресов объектов запроса и закреплённого способа
 // доказательства. Всё это нужно утверждениям клиента и объектам запроса
@@ -144,13 +190,6 @@ type ClientRegistration struct {
 	// ClientID — публичный идентификатор клиента.
 	ClientID string
 
-	// HashedSecret — хеш секрета. ИМЕННО ХЕШ: чистый секрет в фундамент
-	// не передаётся никогда, сверку исполняет движок хешером церемонии.
-	HashedSecret []byte
-
-	// RotatedHashedSecrets — хеши прежних секретов на время оборота.
-	RotatedHashedSecrets [][]byte
-
 	// RedirectURIs — точный перечень разрешённых адресов возврата.
 	RedirectURIs []string
 
@@ -158,8 +197,8 @@ type ClientRegistration struct {
 	GrantKinds []GrantKind
 
 	// ResponseKinds — разрешённые СОЧЕТАНИЯ типов ответа. Каждый элемент —
-	// одно сочетание; составное сочетание записывается через пробел
-	// ("code id_token"), как того требует RFC 6749 §3.1.1.
+	// одно сочетание; составное записывается через пробел (RFC 6749 §3.1.1).
+	// Церемония обслуживает одно сочетание — `code` (ResponseKindCode).
 	ResponseKinds []string
 
 	// Scopes — области, которые клиенту дозволено запрашивать.
@@ -169,7 +208,8 @@ type ClientRegistration struct {
 	Audiences []string
 
 	// Public — клиент не может хранить секрет (приложение в браузере,
-	// мобильное приложение). Для такого клиента обязателен PKCE.
+	// мобильное приложение). PKCE церемония требует от всякого клиента, и
+	// публичного, и конфиденциального (см. ProofKeyBinding).
 	Public bool
 
 	// ResponseDeliveries — разрешённые способы доставки ответа. Пустой
@@ -187,6 +227,19 @@ type SessionRecord struct {
 	// Username — человекочитаемое имя. Необязательно; уезжает в ответ
 	// интроспекции.
 	Username string
+
+	// SessionID, ACR, AuthTime — контекст входа: сессия, из которой рождён
+	// грант, её уровень аутентификации (`acr`) и момент аутентификации
+	// (`auth_time`). Это СНИМОК, сделанный на выдаче кода
+	// (AuthorizationGrant): обмен кода и каждый оборот токена обновления
+	// переносят его без изменения, и у всего семейства гранта он один.
+	//
+	// Все три обязательны и в записи из хранилища: пустая сессия, уровень,
+	// который ранжирование acrlevel не ставит выше анонима, и нулевое время —
+	// нарушение контракта порта (ErrPortContract), а не «значения нет».
+	SessionID string
+	ACR       string
+	AuthTime  time.Time
 
 	// ExpiresAt — срок годности по каждому виду артефакта, записанный
 	// церемонией в миг выпуска. Служба возвращает карту такой, какой её
@@ -211,6 +264,11 @@ type SessionRecord struct {
 	// Claims — дополнительные утверждения, которые служба кладёт в сеанс.
 	// Переживают сериализацию через JSON, поэтому значения обязаны быть
 	// представимы в JSON.
+	//
+	// Ключей контекста входа (`sid`, `acr`, `auth_time`) в карте нет: у
+	// этих значений есть поля, и второе место у них разошлось бы с первым.
+	// Такой ключ в записи из хранилища — нарушение контракта порта
+	// (ErrPortContract).
 	Claims map[string]any
 }
 
@@ -222,6 +280,11 @@ type SessionRecord struct {
 type GrantRecord struct {
 	// GrantID — идентификатор гранта. По нему отзываются ВСЕ артефакты
 	// одного гранта (RFC 7009 §2.1, замечание о реализации).
+	//
+	// Его чеканит служба крючком Config.NewGrantID при выдаче кода; записи
+	// токенов наследуют его от записи кода. Запись, которую хранилище отдаёт
+	// живой, обязана его нести: пустой — нарушение контракта порта
+	// (ErrPortContract), а не повод движку начеканить свой.
 	GrantID string
 
 	// ClientID — клиент, которому выдан грант.
@@ -233,6 +296,11 @@ type GrantRecord struct {
 	// RequestedScopes / GrantedScopes — что просили и что дали. Хранятся
 	// ОБА: отказ в области — это разница между ними, и она обязана быть
 	// восстановима из записи, а не вычисляема заново.
+	//
+	// Каждая выданная область — `scope-token` (RFC 6749 §3.3): иной
+	// церемония на хранение не отдаёт, и запись из хранилища с такой областью —
+	// нарушение контракта порта (ErrPortContract): по ней обмен и оборот
+	// выдали бы область заново.
 	RequestedScopes []string
 	GrantedScopes   []string
 
@@ -240,12 +308,78 @@ type GrantRecord struct {
 	RequestedAudiences []string
 	GrantedAudiences   []string
 
-	// Form — протокольные поля запроса, породившего грант. Нужны движку
-	// для PKCE и для сверки адреса возврата при обмене кода.
+	// Form — протокольные поля запроса, породившего грант, ОЧИЩЕННЫЕ
+	// перечнем полей: всякая запись несёт лишь `grant_type`,
+	// `response_type`, `scope` и `client_id`, а сверх них запись кода —
+	// `redirect_uri`: по нему при обмене сверяется адрес возврата. Привязки к
+	// доказательству владения ключом здесь НЕТ: у кода она — поле его записи
+	// (AuthorizationCodeRecord.ProofKey), и второго места у неё нет.
+	// Предъявленных секретов — кода, `code_verifier`, токена обновления,
+	// секрета клиента — в Form нет ни у одной записи и ни у гранта, который
+	// получает порт выпуска токена доступа.
 	Form map[string][]string
 
 	// Session — состояние сеанса.
 	Session SessionRecord
+}
+
+// ProofKeyMethod — метод, которым из доказательства владения ключом
+// (`code_verifier`) получен вызов (`code_challenge`), RFC 7636 §4.2.
+type ProofKeyMethod string
+
+// Методы доказательства. Перечень ЗАКРЫТ и состоит из одного значения: `plain`
+// сводит доказательство к передаче секрета в открытом виде по тому же каналу,
+// что и код, и церемония его не принимает ни от клиента, ни из хранилища.
+const (
+	// ProofKeyMethodS256 — вызов есть BASE64URL(SHA256(code_verifier)).
+	ProofKeyMethodS256 ProofKeyMethod = "S256"
+)
+
+// ProofKeyMethods возвращает словарь методов целиком — службе, которая
+// сопрягает его со своим (ограничение столбца метода) и обязана убедиться, что
+// сопряжение полное.
+func ProofKeyMethods() []ProofKeyMethod {
+	return []ProofKeyMethod{ProofKeyMethodS256}
+}
+
+// Declared отвечает, входит ли метод в словарь. Нулевое значение НЕ входит:
+// по RFC 7636 §4.3 неназванный метод означает `plain`.
+func (m ProofKeyMethod) Declared() bool {
+	return slices.Contains(ProofKeyMethods(), m)
+}
+
+// ProofKeyBinding — привязка кода авторизации к доказательству владения
+// ключом (PKCE, RFC 7636): вызов, присланный клиентом в запросе авторизации, и
+// метод, которым он получен.
+//
+// Привязка ОБЯЗАТЕЛЬНА: запрос кода без годной привязки церемония отвергает
+// до выдачи, и код без неё в хранилище не уезжает. Годна привязка ровно одна —
+// метод ProofKeyMethodS256 и вызов в 43 знака алфавита base64url без
+// выравнивания (свёртка SHA-256).
+type ProofKeyBinding struct {
+	// Challenge — `code_challenge`.
+	Challenge string
+
+	// Method — `code_challenge_method`.
+	Method ProofKeyMethod
+}
+
+// AuthorizationCodeRecord — запись кода авторизации в том виде, в каком она
+// лежит в хранилище службы: грант и привязка кода к доказательству владения
+// ключом.
+//
+// # Почему одна запись
+//
+// Код и его привязка рождаются одной выдачей и умирают одним погашением, и у
+// службы это одна строка (вызов и метод — её столбцы). Отдельное хранилище
+// привязки под той же подписью было бы второй записью об одном коде и вторым
+// ходом там, где база держит одну строку.
+type AuthorizationCodeRecord struct {
+	// Grant — грант, выданный кодом.
+	Grant GrantRecord
+
+	// ProofKey — привязка кода к доказательству владения ключом.
+	ProofKey ProofKeyBinding
 }
 
 // ── Запрос авторизации ──────────────────────────────────────────────────────
@@ -274,7 +408,9 @@ type AuthorizationRequest struct {
 	// ResponseKinds — `response_type`, разобранный по пробелу.
 	ResponseKinds []ResponseKind
 
-	// Scopes — `scope`, разобранный по пробелу.
+	// Scopes — `scope`, разобранный по пробелу. Область вне грамматики
+	// `scope-token` (RFC 6749 §3.3) Authorize отвергает случаем
+	// CodeInvalidScope и возвращает намерение, годное для DenyAuthorization.
 	Scopes []string
 
 	// Audiences — `audience`.
@@ -302,10 +438,31 @@ type AuthorizationGrant struct {
 	// Username — человекочитаемое имя. Необязательно.
 	Username string
 
+	// SessionID — сессия входа, из которой служба выдаёт грант. Пусто —
+	// отказ: семейство гранта кончается вместе с этой сессией, и без её
+	// имени кончить его было бы нечем.
+	SessionID string
+
+	// ACR — уровень аутентификации этой сессии (`acr`, RFC 9470 §3). Словарь
+	// ЗАКРЫТ и один на платформу — ранжирование acrlevel: годен уровень,
+	// который оно ставит выше анонима. Прочее, в том числе пустое значение и
+	// "0" (аноним), — отказ: грант выдаётся после входа, а у входа уровень
+	// есть.
+	ACR string
+
+	// AuthTime — момент аутентификации этой сессии (`auth_time`). Нулевое
+	// время — отказ: момента нет.
+	AuthTime time.Time
+
 	// GrantedScopes — области, которые служба РЕШИЛА выдать. Выдача может
 	// сузить запрос, но не расширить: область, не покрытая запрошенными по
 	// правилу Config.ScopeMatching, отвергается ЦЕРЕМОНИЕЙ
 	// (ErrCeremonyMisuse) до выпуска кода. Движок выданное не сверяет.
+	//
+	// Каждая область — `scope-token` (RFC 6749 §3.3,
+	// `1*( %x21 / %x23-5B / %x5D-7E )`); иная отвергается так же — до выпуска
+	// кода и раньше сверки с запросом: образец `tenant.*` покрыл бы и
+	// `tenant.a b`, а клиент прочёл бы её двумя областями.
 	GrantedScopes []string
 
 	// GrantedAudiences — получатели, которых служба решила выдать. Тоже не
@@ -313,7 +470,9 @@ type AuthorizationGrant struct {
 	// совпадение), отвергается церемонией (ErrCeremonyMisuse).
 	GrantedAudiences []string
 
-	// Claims — дополнительные утверждения в сеанс.
+	// Claims — дополнительные утверждения в сеанс. Ключ контекста входа
+	// (`sid`, `acr`, `auth_time`) — отказ (ErrCeremonyMisuse): у значения
+	// есть поле выше, и второе место у него разошлось бы с первым.
 	Claims map[string]any
 
 	// ExpiresAt — ГРАНИЦА годности по видам артефактов для всего семейства
@@ -323,7 +482,8 @@ type AuthorizationGrant struct {
 	// Нулевое время — не граница и отвергается церемонией по имени вида
 	// (ErrCeremonyMisuse) до выпуска кода: движок читает нулевой срок
 	// токена обновления как «без срока», и граница-ноль сделала бы семейство
-	// бессрочным.
+	// бессрочным. Вид вне словаря TokenKinds отвергается так же: церемония
+	// его не выпускает, и граница под ним не ограничила бы ничего.
 	ExpiresAt map[TokenKind]time.Time
 }
 
@@ -369,8 +529,9 @@ type TokenRequest struct {
 	ClientID string
 
 	// ClientSecret — секрет клиента В ЧИСТОМ ВИДЕ, как его прислал
-	// клиент. Живёт ровно до конца вызова: ни в GrantRecord, ни в
-	// ProtocolError, ни в журнале он не оседает.
+	// клиент. Живёт ровно до конца вызова и уезжает ровно в одно место — в
+	// порт сверки службы (ClientSecretVerifier), обёрнутым в PresentedSecret:
+	// ни в GrantRecord, ни в ProtocolError, ни в журнале он не оседает.
 	ClientSecret string
 
 	// AuthMethod — каким способом доказывать клиента. Пустое значение
@@ -412,14 +573,13 @@ type TokenResult struct {
 	// TokenType — тип токена доступа; для церемонии всегда "bearer".
 	TokenType string
 
-	// ExpiresIn — сколько токену доступа осталось жить.
+	// ExpiresIn — срок жизни выпущенного токена доступа: его exp минус
+	// момент выпуска, ровно те, что порт выпуска положил в токен
+	// (AccessTokenIssuer, RFC 6749 §5.1 `expires_in`).
 	ExpiresIn time.Duration
 
 	// RefreshToken — токен обновления. Пусто, если не выдавался.
 	RefreshToken string
-
-	// IdentityToken — токен личности (OIDC). Пусто, если не выдавался.
-	IdentityToken string
 
 	// Scopes — выданные области.
 	Scopes []string
@@ -445,6 +605,15 @@ type IntrospectionRequest struct {
 
 	// ClientID / ClientSecret / AuthMethod — чем доказывает себя тот, кто
 	// спрашивает. Интроспекция без доказательства запрещена RFC 7662 §2.1.
+	//
+	// AuthMethod принимает ОДИН способ — ClientAuthBasic
+	// (IntrospectionAuthMethods): движок на этой точке берёт доказательство
+	// только заголовком Authorization. Пустое значение разрешается так же, как
+	// в TokenRequest: при непустом секрете — ClientAuthBasic, при пустом —
+	// ClientAuthNone. ClientAuthPost и ClientAuthNone, названные явно или
+	// полученные разрешением пустого, Introspect отвергает по имени до
+	// обращения к движку (ErrCeremonyMisuse): иначе они уезжали бы в движок и
+	// получали его отказ «заголовка Authorization нет», не называющий способа.
 	ClientID     string
 	ClientSecret string
 	AuthMethod   ClientAuthMethod
@@ -465,7 +634,8 @@ type IntrospectionResult struct {
 	// обновления.
 	AccessTokenType string
 
-	// GrantID — идентификатор гранта, породившего артефакт.
+	// GrantID — идентификатор гранта, породившего артефакт: тот, что выдал
+	// крючок Config.NewGrantID.
 	GrantID string
 
 	ClientID  string
@@ -473,6 +643,12 @@ type IntrospectionResult struct {
 	Username  string
 	Scopes    []string
 	Audiences []string
+
+	// SessionID, ACR, AuthTime — контекст входа гранта: снимок сессии на
+	// выдаче кода (SessionRecord).
+	SessionID string
+	ACR       string
+	AuthTime  time.Time
 
 	// IssuedAt — когда возник грант.
 	IssuedAt time.Time
