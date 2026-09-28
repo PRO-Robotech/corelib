@@ -244,12 +244,18 @@ func New(cfg Config, ports Ports) (*Ceremony, error) {
 		SendDebugMessagesToClients:     false,
 		TokenURL:                       cfg.TokenEndpoint,
 		RefreshTokenScopes:             refreshTokenScopesOf(cfg),
-		// Поля запроса авторизации, доезжающие до записи кода. Сверх
-		// умолчания движка (`code`, `redirect_uri`) — привязка PKCE, вызов и
-		// метод: мост переносит их в поля записи кода
-		// (AuthorizationCodeRecord.ProofKey), из которой их потом и читает
-		// обработчик PKCE движка (см. storageBridge.GetPKCERequestSession).
-		SanitationWhiteList: []string{"code", "redirect_uri", formCodeChallenge, formCodeChallengeMethod},
+		// Поля запроса авторизации, доезжающие до записи кода сверх общих
+		// (`grant_type`, `response_type`, `scope`, `client_id`) — ровно те, что
+		// называет GrantRecord.Form, и привязка PKCE:
+		//   - `redirect_uri` — по нему при обмене сверяется адрес возврата;
+		//   - вызов и метод PKCE — мост переносит их в поля записи кода
+		//     (AuthorizationCodeRecord.ProofKey), из которой их потом и читает
+		//     обработчик PKCE движка (см. storageBridge.GetPKCERequestSession).
+		// `code` из умолчания движка не назван: у запроса авторизации такого
+		// поля нет (RFC 6749 §4.1.1), код обмена движок читает из запроса
+		// токена, а не из записи, и поле с этим именем, присланное клиентом,
+		// до записи кода не доезжает (TestCodeRecordFormCarriesOnlyTheFieldsItsCommentNames).
+		SanitationWhiteList: []string{"redirect_uri", formCodeChallenge, formCodeChallengeMethod},
 	}
 	// Секрет клиента сверяет порт службы (Ports.ClientSecrets), а не хешер
 	// движка: хешер настроек — clientSecretHasher, и цены хеширования у
