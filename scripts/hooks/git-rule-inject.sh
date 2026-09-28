@@ -315,17 +315,90 @@ Claude-Session:|Claude-Session: session_01probe
 «Generated with [Claude Code]»|Generated with [Claude Code](https://example.invalid)
 «Generated with Claude Code» без скобок|generated with claude code
 ссылка claude.ai/code|https://claude.ai/code/session_01probe
+Co-Authored-By соавтора-человека — запрещён ключ, а не значение (#861)|Co-authored-by: Иван Петров <ivan@example.org>
 FORMS
-on 7; commit -m "#7 x" -m "тело" -m "Co-authored-by: Иван Петров <ivan@example.org>"
-accepted "близнец C6: соавтор-человек законен" "#7 x"
 while IFS='|' read -r label trailer; do
     [ -n "$label" ] || continue
     on 7; commit -m "#7 x" -m "Снята строка шаблона $trailer — подставлялась по умолчанию"
     accepted "близнец C6: «$label» в середине строки — упоминание, а не трейлер" "#7 x"
 done <<'MENTIONS'
 Co-Authored-By с Claude|Co-Authored-By: Claude Opus <noreply@example.invalid>
+Co-Authored-By соавтора-человека|Co-authored-by: Иван Петров <ivan@example.org>
 Claude-Session:|Claude-Session: session_01probe
 MENTIONS
+
+# ── НАСТОЯЩИЙ ВХОД (#861): сообщения трёх коммитов, записанных с трейлерами ──
+# PRO-Robotech/kacho, ветка 2840-trailered-b81c695 (d838c9ce779, 82f0e455536,
+# b81c69568a9); адрес сессии в фикстуре заменён. Близнец — то же сообщение без
+# завершающего блока трейлеров, выведенный из него же. У второго первая строка
+# 73 символа: здесь её отвергает форма, и близнец этого сообщения — отказ ТОЛЬКО
+# по длине, без атрибуции; у первого и третьего близнец записывается.
+echo "== атрибуция: настоящий вход"
+real_msgs() {
+    cat <<'REAL'
+#2840 deploy: проба порядка cert-manager исполняема в индексе
+
+TestShebangScriptsAreExecutable на голове 82f0e455536: неисполняемых 1
+(проба заведена с режимом 100644, в чистом клоне не запустится). После
+git add --chmod=+x: неисполняемых 0 из 337 файлов с shebang.
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01fixture
+%%
+#2840 deploy: состояние релиза cert-manager спрашивается без helm list -a
+
+Живой stack-up на kind (helm v4.2.4) показал: у helm v4 флага -a нет,
+и ветка «наш релиз» отказывала бы на каждом повторном подъёме. Проба
+этого не видела: подставной helm принимал любой флаг.
+
+Подставные kubectl и helm теперь сперва разбирают флаги настоящим
+инструментом (<args> --help) и отказывают его текстом. До правки
+рецепта: 10 из 10, находок 2 (Б2, Б3 — unknown shorthand flag 'a');
+после: 10 из 10, находок 0.
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01fixture
+%%
+#2840 deploy: stack-up ставит cert-manager тем же местом, что dev-up
+
+Порядок «cert-manager отдельным релизом → его вебхук → продукт» жил
+строками внутри dev-up; stack-up применял умбреллу с
+cert-manager.enabled=false и релиза не ставил, поэтому на чистом
+кластере цепочка упиралась в отсутствие CRD Certificate/Issuer.
+
+Порядок вынесен в цель cert-manager-up (страж guard-declared-context),
+её зовут оба пути подъёма раньше продукта. Исходы по владельцу CRD:
+нет — ставит; наш той же версии — не переставляет; наш другой версии —
+доводит; чужой (a8f60d) — не трогает; не прочитано — отказ.
+
+Проба tests/helm/cert-manager-release-before-product-test.sh: до правки
+10 из 10 исполнено, 9 находок; после — 10 из 10, находок 0.
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01fixture
+REAL
+}
+real_trailer="Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
+real_msgs | awk -v d="$work" '/^%%$/ { n++; next } { print > (d "/real-" (n + 1) ".msg") }'
+i=0
+for m in "$work"/real-*.msg; do
+    [ -f "$m" ] || continue
+    i=$((i + 1))
+    sed '/^Co-Authored-By:/,$d' "$m" > "${m%.msg}.twin"
+done
+fact "настоящий вход: разобрано три сообщения" test "$i" = 3
+for i in 1 2 3; do
+    subj="$(sed -n 1p "$work/real-$i.msg")"
+    on 7; commit -F "$work/real-$i.msg"
+    refused "настоящий вход $i: трейлеры коммита полосы — отказ, названа строка" "атрибуция" "«$real_trailer»"
+    on 7; commit -F "$work/real-$i.twin"
+    if [ "$i" = 2 ]; then
+        refused "близнец настоящего входа 2 без трейлеров: отказ только по длине первой строки" "символов, предел 72"
+        fact "близнец настоящего входа 2: атрибуции в отказе нет" not grep -qF "атрибуция" <<<"$out"
+    else
+        accepted "близнец настоящего входа $i: то же сообщение без блока трейлеров" "$subj"
+    fi
+done
 
 # ── ПОДПИСЬ — КОРНЕВАЯ УЧЁТНАЯ ЗАПИСЬ ────────────────────────────────────────
 echo "== подпись (корень — ~/.gitconfig пробы)"
@@ -581,7 +654,9 @@ fact "как правильно — у отказа по первой строк
     not grep -qE 'git config --global|git branch -m|удалите строку' <<<"$out"
 on 7; commit -m "#7 x" -m "тело" -m "Co-Authored-By: Claude Opus <noreply@example.invalid>"
 refused "как правильно — атрибуция: названа строка, которую удалить" \
-    "$how" "удалите строку «Co-Authored-By: Claude Opus <noreply@example.invalid>»" "соавтор-человек законен"
+    "$how" "удалите строку «Co-Authored-By: Claude Opus <noreply@example.invalid>»" "Co-Authored-By с любым значением"
+fact "как правильно — атрибуция не объявляет соавтора законным (#861)" \
+    not grep -qF "соавтор-человек законен" <<<"$out"
 fact "как правильно — у отказа по атрибуции нет строки формы" \
     not grep -qF 'git commit -m "#<N> ' <<<"$out"
 on 7; commit --author="Other <other@example.invalid>" -m "#7 x"
@@ -640,6 +715,18 @@ attempt git push -q origin 102
 stopped "та же отправка без обхода — отказ до проверок дерева" refs/heads/102 "правило git нарушено" "исполнено проверок: 0"
 on 103; nv -m "#103 x" -m "Co-authored-by: Claude <noreply@example.invalid>"; push 103
 stopped "атрибуция в отправляемом коммите — отказ" refs/heads/103 "атрибуция"
+# #861: коммит, записанный мимо хука коммита, — настоящий вход и соавтор-человек;
+# отказ называет sha. Близнецы — то же сообщение без трейлеров и упоминание в прозе.
+on 115; nv -F "$work/real-1.msg"; c115="$(git -C "$F" rev-parse HEAD)"; push 115
+stopped "настоящий вход мимо хука коммита — отказ отправки, назван sha" refs/heads/115 \
+    "${c115:0:10} атрибуция в сообщении: «$real_trailer»"
+on 116; nv -F "$work/real-1.twin"; push 116
+delivered "близнец: то же сообщение без трейлеров — доехало" refs/heads/116 "нарушений нет"
+on 117; nv -m "#117 x" -m "Co-authored-by: Иван Петров <ivan@example.org>"; c117="$(git -C "$F" rev-parse HEAD)"; push 117
+stopped "соавтор-человек мимо хука коммита — отказ отправки, назван sha" refs/heads/117 \
+    "${c117:0:10} атрибуция в сообщении: «Co-authored-by: Иван Петров <ivan@example.org>»"
+on 118; nv -m "#118 x" -m "Снята строка шаблона Co-Authored-By: Claude Opus — подставлялась"; push 118
+delivered "близнец: ключ в середине строки прозы — доехало" refs/heads/118 "нарушений нет"
 on 104; nv --author="Other <other@example.invalid>" -m "#104 x"; push 104
 stopped "чужой автор в отправляемом коммите — отказ" refs/heads/104 "автор «Other <other@example.invalid>»"
 on 105; E=(GIT_COMMITTER_NAME=bot GIT_COMMITTER_EMAIL=bot@example.invalid); nv -m "#105 x"; E=(); push 105
@@ -835,6 +922,8 @@ pr pull_request "#25 хуки и гейты, Generated with Claude Code" "" 25 "
 verdict "заголовок с атрибуцией — отказ" 1 "заголовок: атрибуция"
 pr pull_request "#25 хуки и гейты" "Тело."$'\n\n'"Co-Authored-By: Claude <noreply@example.invalid>" 25 "$h1" "$pr25"
 verdict "тело с трейлером атрибуции — отказ" 1 "тело: атрибуция"
+pr pull_request "#25 хуки и гейты" "Тело."$'\n\n'"Co-authored-by: Иван Петров <ivan@example.org>" 25 "$h1" "$pr25"
+verdict "тело с соавтором-человеком — отказ: запрещён ключ (#861)" 1 "тело: атрибуция"
 pr pull_request "#25 хуки и гейты" "" issue-25 "$h1" "$pr25"
 verdict "голова «issue-25» без коммита до T0 — отказ по имени" 1 "голова «issue-25»"
 on batch-quota-fate "$pre_m"; commit -m "#57 x"

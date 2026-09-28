@@ -206,6 +206,48 @@ func TestIssuedCodeIsOneRecordThatCarriesItsProofKey(t *testing.T) {
 	}
 }
 
+// TestCodeRecordFormCarriesOnlyTheFieldsItsCommentNames — протокольные поля
+// записи кода — ровно те, что называет GrantRecord.Form: общие `grant_type`,
+// `response_type`, `scope`, `client_id` и сверх них `redirect_uri`. Поле
+// запроса авторизации с именем `code` (у запроса авторизации такого параметра
+// нет, RFC 6749 §4.1.1) до записи кода не доходит, сколько бы клиент его ни
+// прислал.
+//
+// Близнец — поля, которые запись кода несёт по делу, доходят: `redirect_uri` —
+// в Form, вызов привязки — в поле привязки записи.
+func TestCodeRecordFormCarriesOnlyTheFieldsItsCommentNames(t *testing.T) {
+	store := newMemoryPorts()
+	registerTestClient(t, store)
+	ceremony := newTestCeremony(t, store.ports())
+
+	req := authorizeRequest()
+	req.Additional["code"] = []string{"planted"}
+	intent, err := ceremony.Authorize(context.Background(), req)
+	if err != nil {
+		t.Fatalf("НЕ ВЫПОЛНИЛОСЬ: Authorize отказал: %v", err)
+	}
+	if _, err := ceremony.CompleteAuthorization(context.Background(), intent, loggedIn(oauthceremony.AuthorizationGrant{
+		Subject:       testSubject,
+		GrantedScopes: []string{"openid", "offline"},
+	})); err != nil {
+		t.Fatalf("НЕ ВЫПОЛНИЛОСЬ: CompleteAuthorization отказал: %v", err)
+	}
+	stored := store.storedCode(t)
+
+	named := map[string]bool{"grant_type": true, "response_type": true, "scope": true, "client_id": true, "redirect_uri": true}
+	for key, values := range stored.form {
+		if !named[key] {
+			t.Errorf("запись кода несёт поле %s=%q, которого комментарий GrantRecord.Form не называет", key, values)
+		}
+	}
+	if got := stored.form["redirect_uri"]; len(got) != 1 || got[0] != testRedirectURI {
+		t.Errorf("близнец: redirect_uri в записи кода %q, ожидался %q", got, testRedirectURI)
+	}
+	if want := proofKeyChallenge(testVerifier); stored.challenge != want {
+		t.Errorf("близнец: вызов в записи кода %q, ожидался %q", stored.challenge, want)
+	}
+}
+
 // TestExchangeChecksTheProofKeyOfTheCodeRecord — доказательство сверяется с
 // привязкой, которую несёт ЗАПИСЬ КОДА в миг обмена: переписанная в записи
 // привязка решает обмен, прежняя — нет.

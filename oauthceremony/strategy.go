@@ -235,8 +235,8 @@ func (s *artifactStrategy) AccessTokenSignature(ctx context.Context, token strin
 		failure = contractBreach(op, "the token was identified with an empty identifier; there is nothing to find its grant by")
 	default:
 		// «Не наш» — законный ответ, отказа нет.
-		if ours := fromPort(op, err); ours.Code != CodeGrantNotFound {
-			failure = identificationFailure(op, ours, token)
+		if ours := fromPortWithout(op, err, token); ours.Code != CodeGrantNotFound {
+			failure = identificationFailure(op, ours)
 		}
 	}
 	notesFrom(ctx).noteUnidentified(failure)
@@ -262,33 +262,36 @@ func (s *artifactStrategy) AccessTokenSignature(ctx context.Context, token strin
 //
 // Порт получает предъявительский токен как есть — и токен доступа, и, на
 // интроспекции без подсказки, токен обновления. Ни один текст отказа
-// церемонии его не несёт: значение вырезается из описания, подсказки и
-// подробностей, даже если порт, вопреки контракту, положил его в свой текст.
-// Отказ порта остаётся причиной (Unwrap) таким, каким его вернул порт: это его
-// значение, и его текст — предмет контракта порта.
-func identificationFailure(op string, ours *ProtocolError, presented string) *ProtocolError {
+// церемонии не несёт его из текста порта: значение вырезается из описания,
+// подсказки и подробностей, которые принёс порт, даже если порт, вопреки
+// контракту, положил его в свой текст (fromPortWithout), — и вырезается ДО
+// того, как они лягут рядом с текстами церемонии. Постоянные тексты
+// церемонии и имя вызова не трогаются: значение выбирает клиент, и значение,
+// совпавшее с частью постоянного текста, этого текста не портит. Отказ порта
+// остаётся причиной (Unwrap) таким, каким его вернул порт: это его значение, и
+// его текст — предмет контракта порта.
+func identificationFailure(op string, ours *ProtocolError) *ProtocolError {
 	switch ours.Code {
 	case CodeServerError, CodeTemporarilyUnavailable, CodePortDeadline, CodePortCanceled, CodePortContract:
+		return ours
 	default:
-		ours = failf(CodePortContract, ours.cause, textPortContract, textPortContractHint,
+		return failf(CodePortContract, ours.cause, textPortContract, textPortContractHint,
 			op+": the issuer answered case "+ours.Code.String()+", which is none of its outcomes: "+
 				"an authentic token, expired included, is answered with its jti, a foreign one with "+
 				"ErrGrantNotFound, a failed check with a failure; "+ours.Debug)
 	}
-	return withoutPresented(ours, presented)
 }
 
 // presentedMarker — чем заменяется предъявленное значение в тексте отказа.
 const presentedMarker = "[presented token]"
 
-// withoutPresented — тот же отказ, но без предъявленного значения ни в одном
-// тексте. Случай и причина не меняются.
-func withoutPresented(p *ProtocolError, presented string) *ProtocolError {
+// withoutPresented — текст порта без предъявленного значения: каждое его
+// вхождение заменено маркером. Пустое значение — вырезать нечего.
+func withoutPresented(text, presented string) string {
 	if presented == "" {
-		return p
+		return text
 	}
-	scrub := func(text string) string { return strings.ReplaceAll(text, presented, presentedMarker) }
-	return failf(p.Code, p.cause, scrub(p.Description), scrub(p.Hint), scrub(p.Debug))
+	return strings.ReplaceAll(text, presented, presentedMarker)
 }
 
 // ValidateAccessToken судит срок токена доступа по записи гранта. Подлинность

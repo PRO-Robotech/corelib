@@ -187,11 +187,13 @@ type Config struct {
 // неразобранных стоит и при такой записи в дереве (это утверждает
 // TestNamedBlindZoneFormsStaySilent), — а перепись по тождеству содержимого не
 // видит. -race проба TestConcurrentExchangesOnAFreshCeremonyShareNoEngineState
-// судит не форму записи, а только гонку: запись и чтение одного места из
-// одновременных обменов, не упорядоченные синхронизацией, — на пути обмена и
-// лишь когда они случились в её прогоне. Исполненная её прогоном запись этим
-// ещё не поймана: запись, которую ни один другой обмен не делит с ней без
-// синхронизации, для детектора не гонка, сколько бы раз она ни исполнилась.
+// судит не форму записи, а только гонку: два доступа к одному месту из
+// одновременных обменов, хотя бы один из них запись, не упорядоченные
+// синхронизацией, — запись против чтения и запись против записи, — на пути
+// обмена и лишь когда они случились в её прогоне. Исполненная её прогоном
+// запись этим ещё не поймана: запись, которую ни один другой обмен не делит с
+// ней без синхронизации, для детектора не гонка, сколько бы раз она ни
+// исполнилась.
 type Ceremony struct {
 	provider engine.OAuth2Provider
 	cfg      Config
@@ -242,12 +244,18 @@ func New(cfg Config, ports Ports) (*Ceremony, error) {
 		SendDebugMessagesToClients:     false,
 		TokenURL:                       cfg.TokenEndpoint,
 		RefreshTokenScopes:             refreshTokenScopesOf(cfg),
-		// Поля запроса авторизации, доезжающие до записи кода. Сверх
-		// умолчания движка (`code`, `redirect_uri`) — привязка PKCE, вызов и
-		// метод: мост переносит их в поля записи кода
-		// (AuthorizationCodeRecord.ProofKey), из которой их потом и читает
-		// обработчик PKCE движка (см. storageBridge.GetPKCERequestSession).
-		SanitationWhiteList: []string{"code", "redirect_uri", formCodeChallenge, formCodeChallengeMethod},
+		// Поля запроса авторизации, доезжающие до записи кода сверх общих
+		// (`grant_type`, `response_type`, `scope`, `client_id`) — ровно те, что
+		// называет GrantRecord.Form, и привязка PKCE:
+		//   - `redirect_uri` — по нему при обмене сверяется адрес возврата;
+		//   - вызов и метод PKCE — мост переносит их в поля записи кода
+		//     (AuthorizationCodeRecord.ProofKey), из которой их потом и читает
+		//     обработчик PKCE движка (см. storageBridge.GetPKCERequestSession).
+		// `code` из умолчания движка не назван: у запроса авторизации такого
+		// поля нет (RFC 6749 §4.1.1), код обмена движок читает из запроса
+		// токена, а не из записи, и поле с этим именем, присланное клиентом,
+		// до записи кода не доезжает (TestCodeRecordFormCarriesOnlyTheFieldsItsCommentNames).
+		SanitationWhiteList: []string{"redirect_uri", formCodeChallenge, formCodeChallengeMethod},
 	}
 	// Секрет клиента сверяет порт службы (Ports.ClientSecrets), а не хешер
 	// движка: хешер настроек — clientSecretHasher, и цены хеширования у
@@ -325,15 +333,17 @@ func New(cfg Config, ports Ports) (*Ceremony, error) {
 	// как код выпущен, — обработчик PKCE читает уже выданный код из
 	// ответа. Поставь его первым, и он не нашёл бы кода и отказал бы
 	// «обработчик PKCE обязан быть загружен после обработчика кода».
-	engineCfg.AuthorizeEndpointHandlers.Append(explicitGrant)
-	engineCfg.AuthorizeEndpointHandlers.Append(proofKey)
-
-	engineCfg.TokenEndpointHandlers.Append(explicitGrant)
-	engineCfg.TokenEndpointHandlers.Append(refreshGrant)
-	engineCfg.TokenEndpointHandlers.Append(proofKey)
-
-	engineCfg.TokenIntrospectionHandlers.Append(introspector)
-	engineCfg.RevocationHandlers.Append(revoker)
+	//
+	// Перечни — литералы, а не Append: у литерала ёмкость равна длине, а
+	// Append растит массив с запасом (три обработчика — ёмкость четыре).
+	// Настройки делят все одновременные обмены, и запас — общий для них
+	// незанятый элемент, в который пишет любой append на пути запроса. Каждый
+	// срез настроек без запаса — предикат пробы
+	// TestEngineSettingsSlicesBuiltByNewHaveNoSpareCapacity.
+	engineCfg.AuthorizeEndpointHandlers = engine.AuthorizeEndpointHandlers{explicitGrant, proofKey}
+	engineCfg.TokenEndpointHandlers = engine.TokenEndpointHandlers{explicitGrant, refreshGrant, proofKey}
+	engineCfg.TokenIntrospectionHandlers = engine.TokenIntrospectionHandlers{introspector}
+	engineCfg.RevocationHandlers = engine.RevocationHandlers{revoker}
 
 	return &Ceremony{
 		provider: engine.NewOAuth2Provider(clientStore, engineCfg),
