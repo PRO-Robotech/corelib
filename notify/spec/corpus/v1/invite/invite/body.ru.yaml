@@ -1,0 +1,4 @@
+blocks:
+  - heading: "Вас пригласили"
+  - p: "{{ inviter_name }} приглашает вас в облако."
+  - button: {text: "Принять приглашение", token: token, path: "/iam/invitations/accept"}

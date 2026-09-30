@@ -1,0 +1,7 @@
+blocks:
+  - heading: "Проба"
+  - p: "Вас пригласил {{ inviter }}."
+    when: inviter
+  - p: "Текст без приглашающего."
+  - button: {text: "Открыть", path: target}
+    when: target

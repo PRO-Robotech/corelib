@@ -1,0 +1,8 @@
+# Корпус v1: шаблон без атрибутов; лимит у класса notice допустим.
+name: hello
+class: notice
+ttl: 5m
+limits:
+  - {scope: recipient, window: 30m, max: 1}
+subject:
+  ru: "Проба связи"
