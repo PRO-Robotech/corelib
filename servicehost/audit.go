@@ -112,13 +112,18 @@ type census struct {
 	// напечатанным, а не подразумеваемым: «стримов нет» и «стримы не считали»
 	// иначе неразличимы.
 	streams int
+	// identityMethods — методы перечня звена идентичности служб, сверенные с
+	// каталогом. Ноль печатается: «звена нет» и «перечень не сверяли» иначе
+	// неразличимы.
+	identityMethods int
 }
 
 func (c census) String() string {
 	return fmt.Sprintf("осмотрено: методов %d (изъято платформенных %d, стримов %d), доменов %d, "+
 		"строк каталога %d, сужаемых методов %d, скрывающих типов %d, спрашиваемых портом типов %d, "+
-		"объявленных охватом пробы типов %d",
-		c.methods, c.exempted, c.streams, c.domains, c.rows, c.narrowers, c.hidden, c.probed, c.covered)
+		"объявленных охватом пробы типов %d, методов перечня звена идентичности служб %d",
+		c.methods, c.exempted, c.streams, c.domains, c.rows, c.narrowers, c.hidden, c.probed, c.covered,
+		c.identityMethods)
 }
 
 // domainOf выводит proto-пакет из полного имени метода (К-2: домен ВЫВОДИТСЯ, а
@@ -215,6 +220,7 @@ func audit(spec servicecontract.Spec, served servedSet, cat catalogView, rpcMap 
 	auditNarrowers(&c, &f, spec, served, cat)     // О3 + О4
 	auditHideExistence(&c, &f, spec, cat, rpcMap) // О5
 	auditStreamBudget(&c, &f, spec, served, cat)  // О11
+	auditServiceIdentity(&c, &f, spec, cat)       // NTF1-M09 (в)
 
 	if err := f.err(nameOf(spec)); err != nil {
 		return c, err
@@ -564,6 +570,29 @@ func auditStreamBudget(c *census, f *findings, spec servicecontract.Spec, served
 			"про подписки там, где подписок нет. Либо снимите её изъятием "+
 			"servicecontract.NotApplicable(\"серверных стримов не служу\"), либо верните стрим, "+
 			"ради которого она объявлена", budget))
+	}
+}
+
+// auditServiceIdentity — метод перечня звена идентичности служб обязан быть в
+// каталоге прав процесса (NTF1-M09 (в)).
+//
+// Метод вне каталога звено прав отвергло бы как незамапленный — то есть
+// объявленный перечень открывал бы службе метод, которого не спрашивает ни одна
+// строка прав, и расхождение жило бы молча до первого вызова. Сверка идёт по
+// каталогу, выведенному из аннотаций служимых доменов, — тому же источнику, что
+// у О2.
+func auditServiceIdentity(c *census, f *findings, spec servicecontract.Spec, cat catalogView) {
+	id, ok := spec.ServiceIdentity.Get()
+	if !ok {
+		return
+	}
+	for _, m := range id.Methods() {
+		c.identityMethods++
+		if _, inCatalog := cat.rows[servicecontract.MethodFQN(m)]; !inCatalog {
+			f.add("ServiceIdentity "+m, "метод перечня звена идентичности служб не найден в каталоге "+
+				"прав процесса: звено открывало бы службе метод, у которого нет строки прав. Уберите "+
+				"метод из перечня либо поднимите службу, которая его служит")
+		}
 	}
 }
 

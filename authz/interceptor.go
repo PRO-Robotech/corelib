@@ -87,9 +87,9 @@ type InterceptorOptions struct {
 	CheckTimeout time.Duration
 
 	// SubjectExtractor — функция, извлекающая (subject string, ok bool) из
-	// ctx. По умолчанию — `defaultSubjectExtractor` использует
-	// `operations.PrincipalFromContext(ctx)`. Можно переопределить
-	// для тестов.
+	// ctx. По умолчанию — `defaultSubjectExtractor`, который зовёт ОДНУ функцию
+	// субъекта [CallerSubject]: пересланный доверенным принципал либо служба,
+	// опознанная звеном идентичности служб. Можно переопределить для тестов.
 	SubjectExtractor func(ctx context.Context) (subjectFGA string, principalID string, ok bool)
 
 	// AllowSystemPrincipal — если true, system-principal (Type="system",

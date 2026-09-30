@@ -260,6 +260,14 @@ type BootPosture struct {
 	// Гейт посадки оценивает значение оси; пустая строка не совпадает ни с одним
 	// написанием и судится отказом наравне с отсутствием ключа.
 	HostForm string
+	// ServiceIdentity — звено идентичности служб, которое процесс РЕАЛЬНО
+	// поднял: перечень методов и строки таблицы `{SAN → имя службы}` одной
+	// строкой. Заполняется `grpcsrv.ServiceIdentity.Report()` того звена, что
+	// уехало в дескриптор; у процесса без звена — `grpcsrv.ServiceIdentityNotApplicable`.
+	// Строка, а не тип звена, чтобы пакет самоотчёта остался листом графа
+	// импортов; своего словаря написаний у самоотчёта нет. Гейт посадки
+	// оценивает перечень и таблицу по этой строке (NTF1-M09).
+	ServiceIdentity string
 }
 
 // LogBootPosture пишет BootPosture единственной структурированной строкой.
@@ -278,5 +286,6 @@ func LogBootPosture(logger *slog.Logger, p BootPosture) {
 		"own_rest_public_tls", p.OwnRESTPublicTLS,
 		"own_rest_internal_tls", p.OwnRESTInternalTLS,
 		"host_form", p.HostForm,
+		"service_identity", p.ServiceIdentity,
 	)
 }

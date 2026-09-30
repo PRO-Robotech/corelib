@@ -5,18 +5,17 @@ package authz
 
 import (
 	"context"
-
-	"github.com/PRO-Robotech/corelib/operations"
 )
 
-// defaultSubjectExtractor — стандартная реализация на основе
-// operations.PrincipalFromContextOK.
+// defaultSubjectExtractor — стандартная реализация: зовёт ОДНУ функцию субъекта
+// [CallerSubject], ту же, что субъект сужения списков.
 //
 // Возвращает:
-//   - subjectFGA — "user:usr_xxx" или "service_account:sva_xxx"
-//   - principalID — raw ID (для rate-limit-bucket'а)
-//   - ok — false, если ctx не назвал НИКОГО (см. ниже), либо id несёт
-//     FGA-разделители
+//   - subjectFGA — "user:usr_xxx", "service_account:sva_xxx" либо
+//     "service:<имя>" для службы, опознанной звеном идентичности;
+//   - principalID — ключ корзины бюджета отказов: raw ID пересланного
+//     принципала либо "service:<имя>" с типом (CX1-03);
+//   - ok — false, если [CallerSubject] никого не назвал.
 //
 // # Анонимность не становится субъектом
 //
@@ -27,29 +26,20 @@ import (
 // «неизвестно кто» получить форму субъекта — и выдача, задуманная для
 // аутентифицированных, начинает отвечать «да» тому, кто не аутентифицировался.
 //
-// Поэтому здесь стоит БЕЗУСЛОВНЫЙ отказ ДО любого вопроса модели, и признак
-// анонимности берётся из ОДНОГО общего предиката operations.Principal.IsAnonymous
-// (пустая пара ИЛИ зарезервированное слово operations.AnonymousPrincipalID в
-// любом заявленном типе). Тип не может быть признаком: его назначает себе тот,
-// кто прислал заголовки личности. Единый предикат — чтобы производитель метки и
-// её распознаватель не разъехались.
+// Отказ стоит ДО любого вопроса модели и живёт в [CallerSubject]: признак
+// анонимности — общий предикат operations.Principal.IsAnonymous, идентификатор с
+// разделителями модели (':' / '#' / '@' / пробелы) трактуется так же — не
+// собирать из недоверенного заголовка инъекционно оформленный субъект.
 //
 // ok=false → interceptor fail-closed (denied). Сужается именно анонимность:
 // ЯВНО установленный bootstrap-принципал (`{system, bootstrap}`) остаётся
 // личностью и штатно обрабатывается опцией AllowSystemPrincipal.
 func defaultSubjectExtractor(ctx context.Context) (string, string, bool) {
-	p, ok := operations.PrincipalFromContextOK(ctx)
-	if !ok || p.IsAnonymous() {
+	c, ok := CallerSubject(ctx)
+	if !ok {
 		return "", "", false
 	}
-	// principal id приходит из недоверенного x-kacho-principal-id header'а. Если
-	// он несёт FGA-разделители (':' / '#' / '@' / whitespace) — трактуем как
-	// anonymous (ok=false → interceptor fail-closed deny), а НЕ собираем из него
-	// инъекционно-оформленный subject. Симметрично FormatObject-валидации объекта.
-	if !validSubjectID(p.ID) {
-		return "", "", false
-	}
-	return FormatSubject(p.Type, p.ID), p.ID, true
+	return c.Subject(), c.PrincipalID(), true
 }
 
 // isAnonymousSubject — helper. Returns true для всех принципалов
