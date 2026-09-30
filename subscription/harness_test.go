@@ -112,6 +112,10 @@ type standOpts struct {
 	// Ноль отправляет вывод в никуда: прочим пробам он не нужен, а печатать его
 	// в поток проб значило бы утопить их отказы в чужих строках.
 	logger *slog.Logger
+	// links — звенья боевой цепочки, которые стоят ЗА подстановкой вызывающего:
+	// извлечение личности и звено идентичности служб. Ноль — прежний стенд, где
+	// личность кладёт сама подстановка.
+	links []grpc.StreamServerInterceptor
 }
 
 func newStand(t testing.TB, o standOpts) *stand {
@@ -169,10 +173,10 @@ func newStand(t testing.TB, o standOpts) *stand {
 	// Личность вызывающего кладёт звено — там же, где её кладёт боевая цепочка.
 	// Класть её мимо транспорта значило бы проверять сервер на входе, которого
 	// в бою не бывает.
-	srv := grpc.NewServer(grpc.StreamInterceptor(
+	srv := grpc.NewServer(grpc.ChainStreamInterceptor(append([]grpc.StreamServerInterceptor{
 		func(srv any, ss grpc.ServerStream, _ *grpc.StreamServerInfo, handler grpc.StreamHandler) error {
 			return handler(srv, principalStream{ServerStream: ss, ctx: mergeCancel(caller, ss.Context())})
-		}))
+		}}, o.links...)...))
 	subscriptionv1.RegisterInternalSubscriptionServiceServer(srv, server)
 	go func() { _ = srv.Serve(lis) }()
 	t.Cleanup(srv.Stop)

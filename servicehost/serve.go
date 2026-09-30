@@ -586,7 +586,13 @@ func catalogOf(domains []string) catalogView {
 //  7. переданная личность, сужённая кругом — вправе ли пир говорить за другого.
 //     Порядок 6→7 обязателен: решение о доверии по ещё не извлечённой личности
 //     решением не является;
-//  8. решение о доступе — читает уже извлечённого субъекта.
+//  8. звено идентичности служб — кем является САМ пир на методе закрытого
+//     перечня, когда за другого он не говорит. Стоит за 7 и до решения: субъект
+//     решает одна функция (`authz.CallerSubject`), и пересланный принципал в
+//     ней решает первым, поэтому звено не заменяет пересылку, а дополняет её.
+//     Звено ставится ВСЕГДА и одинаково на обоих слушателях, без ветки по `on`
+//     (CX1-34): у изъятой оси это нулевое звено, не опознающее никого;
+//  9. решение о доступе — читает уже извлечённого субъекта.
 //
 // # Чего в этой цепочке ПОКА НЕТ, и почему это названо, а не умолчано
 //
@@ -613,6 +619,7 @@ func unaryChain(spec servicecontract.Spec, slot *decisionSlot,
 	}
 	chain = append(chain, grpcsrv.PrincipalExtractUnary(carriedTrustDomain(spec), carriedForwarders(spec),
 		grpcsrv.WithIdentityArrival(arrival))...)
+	chain = append(chain, carriedServiceIdentity(spec).Unary())
 	return append(chain, slot.unary())
 }
 
@@ -642,6 +649,7 @@ func streamChain(spec servicecontract.Spec, slot *decisionSlot,
 	}
 	chain = append(chain, grpcsrv.PrincipalExtractStream(carriedTrustDomain(spec), carriedForwarders(spec),
 		grpcsrv.WithIdentityArrival(arrival))...)
+	chain = append(chain, carriedServiceIdentity(spec).Stream())
 	return append(chain, slot.stream())
 }
 
@@ -669,4 +677,14 @@ func carriedForwarders(spec servicecontract.Spec) grpcsrv.TrustedForwarders {
 func carriedTrustDomain(spec servicecontract.Spec) grpcsrv.TrustDomain {
 	domain, _ := spec.TrustDomain.Get()
 	return domain
+}
+
+// carriedServiceIdentity — звено идентичности служб контура, поднятого носителем.
+//
+// Значение оси — звено; изъятие — нулевое звено, которое не опознаёт никого.
+// Ветки «ставить ли звено» здесь нет: цепочка одна на оба слушателя и на любую
+// посадку, и отличаются они только перечнем, пришедшим полем дескриптора.
+func carriedServiceIdentity(spec servicecontract.Spec) grpcsrv.ServiceIdentity {
+	id, _ := spec.ServiceIdentity.Get()
+	return id
 }

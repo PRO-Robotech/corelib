@@ -303,3 +303,35 @@ func TestLogBootPosture_HostFormIsEmittedAsGiven(t *testing.T) {
 		}
 	}
 }
+
+// TestLogBootPosture_ServiceIdentityIsEmittedAsGiven — перечень методов и строки
+// таблицы звена идентичности служб едут в строку самоотчёта ключом
+// service_identity ровно тем написанием, которое дало звено
+// (`grpcsrv.ServiceIdentity.Report()`), чтобы гейт посадки оценивал то, что
+// процесс поднял (NTF1-M09). Своего словаря у самоотчёта нет; пустое значение
+// эмитится, а не пропадает: «звено не доложено» отличимо от «ключа нет».
+func TestLogBootPosture_ServiceIdentityIsEmittedAsGiven(t *testing.T) {
+	for _, give := range []string{
+		"methods=/corelib.subscription.InternalSubscriptionService/Subscribe; " +
+			"table=spiffe://kacho.cloud/ns/kacho/sa/kacho-notify=notify",
+		"n/a",
+		"",
+	} {
+		var buf bytes.Buffer
+		observability.LogBootPosture(observability.NewSlogger(&buf), observability.BootPosture{
+			Service:         "notify-probe",
+			ServiceIdentity: give,
+		})
+		var line map[string]any
+		if err := json.Unmarshal(buf.Bytes(), &line); err != nil {
+			t.Fatalf("unmarshal: %v (raw=%q)", err, buf.String())
+		}
+		got, ok := line["service_identity"]
+		if !ok {
+			t.Fatalf("service_identity отсутствует в строке самоотчёта: %v", line)
+		}
+		if got != give {
+			t.Fatalf("service_identity = %v, дано %q", got, give)
+		}
+	}
+}
