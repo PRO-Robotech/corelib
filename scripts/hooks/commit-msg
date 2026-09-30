@@ -1,0 +1,164 @@
+#!/usr/bin/env bash
+# Copyright (c) PRO-Robotech
+# SPDX-License-Identifier: Apache-2.0
+#
+# Хук коммита: правило git в МОМЕНТ коммита. Предикат — scripts/hooks/git-rule.sh
+# (правило и решения — в его шапке); провязка — scripts/hooks/install.sh, проба —
+# scripts/hooks/git-rule-inject.sh. Исходы: 0 — нарушений нет; 1 — отказ, каждое
+# нарушение названо, а под ним — «как правильно» для КАЖДОГО класса нарушений
+# (git_rule_howto), и только для них; коммит не записывается. Законный коммит
+# хук пропускает молча.
+#
+# СУДИТСЯ ТО, ЧТО GIT ЗАПИШЕТ, а не черновик в файле. В редакторе (GIT_EDITOR не
+# «:» — git выставляет «:» хуку, когда редактора не было) и при commit.cleanup=
+# strip git вырезает строки, начатые знаком комментария, уже ПОСЛЕ хука: первая
+# строка `#<N> ` исчезла бы. Знак — тот, что возьмёт git: core.commentChar и
+# core.commentString задают одно, и действует ПОСЛЕДНЕЕ прочитанное значение
+# (замер). Сообщение чистится здесь тем же знаком, а первая строка, которую git
+# вырежет, — отказ. `auto` — отказ при любой первой строке: знак git выбирает
+# сам, по черновику ДО редактора, и хуку он не виден.
+#
+# ПОДПИСЬ сверяется итогом: автора git выставляет хуку сам (с --author, -c
+# user.*, локальной настройкой), `git var` отдаёт то, что будет записано.
+# Переопределение корня отказывает отдельно, со своей причиной, даже когда
+# значение совпадает с корнем (уровни и ключи — git_rule_ident_overrides),
+# так же GIT_COMMITTER_* и GIT_CONFIG_GLOBAL. Корень — `~/.gitconfig` того HOME,
+# под которым идёт коммит.
+#
+# T0 берётся у истории ОБОИХ родителей: у слияния, вносящего правило в ветку,
+# открытую до правила, в истории HEAD правила нет, а в истории MERGE_HEAD — есть.
+#
+# ДАТА АВТОРА ДО T0 — ОТКАЗ у любого коммита, который судит хук, и перепись
+# (--amend) не исключение. T0 выведен из истории родителей, значит, в ней есть
+# добавление правила, и коммит до правила (git_rule_pre_rule) в дереве с хуком
+# не рождается: вершина с датой до T0 здесь лежит поверх правила. Перепись её от
+# НОВОГО коммита с теми же автором и датой (`-C HEAD`, `--author` с `--date`)
+# хук не отличает — окружение у них одно (замер), — и судит обе одинаково.
+#
+# СЛЕПЫЕ ЗОНЫ. Хук клиентский. Пробой измерено, что его минуют --no-verify
+# (коммит и слияние), cherry-pick, revert, rebase без -i, am, commit-tree и
+# --cleanup=strip в командной строке (хук видит `#<N> …`, git записывает
+# следующую строку). По построению, вне пробы: непровязанный клон, правка через
+# веб, слияние на сервере (его сообщение задаётся после проверок). Одинаковые с
+# корнем GIT_AUTHOR_* неотличимы от выставленных самим git; ветка, ответвлённая
+# от ветки до правила, читается как ветка до правила; что `#<N>` — задача этого
+# репозитория, хук не знает. Записанные коммиты судят ещё два держателя: страж
+# отправки (scripts/hooks/git-rule-push.sh — тоже клиентский) и проверка
+# запроса в конвейере (.github/scripts/pr-rule-check.sh — обходы хуков её не
+# минуют, но подписи она не судит). Граница по датам у обоих общая: коммит,
+# записанный мимо хука на основании старше правила с обеими датами до T0,
+# неотличим от работы до правила (шапка scripts/hooks/git-rule.sh).
+set -uo pipefail
+
+here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if [ ! -f "$here/git-rule.sh" ]; then
+    echo "commit-msg ОТКАЗ: нет $here/git-rule.sh — предиката правила нет, судить нечем" >&2
+    exit 1
+fi
+# shellcheck source=scripts/hooks/git-rule.sh
+. "$here/git-rule.sh"
+
+file="${1:?commit-msg: git не передал файл сообщения}"
+fail=()
+# Классы нарушений по порядку первого появления — строки «как правильно».
+how=()
+need() { [[ " ${how[*]} " == *" $1 "* ]] || how+=("$1"); }
+git_dir="$(git rev-parse --git-dir)"
+
+# ── T0: история обоих родителей ──────────────────────────────────────────────
+parents=()
+git rev-parse -q --verify HEAD >/dev/null 2>&1 && parents+=(HEAD)
+merging=0
+if [ -f "$git_dir/MERGE_HEAD" ]; then
+    merging=1
+    while read -r m; do [ -z "$m" ] || parents+=("$m"); done <"$git_dir/MERGE_HEAD"
+fi
+if [ "${#parents[@]}" -gt 0 ]; then git_rule_load_t0 "${parents[@]}"; else git_rule_load_t0 HEAD; fi
+
+# ── ЧТО GIT ЗАПИШЕТ ──────────────────────────────────────────────────────────
+comment="$(git config --get-regexp '^core\.comment(char|string)$' 2>/dev/null | tail -1)"
+comment="${comment#* }"
+[ -n "$comment" ] || comment="#"
+cleanup="$(git config --get commit.cleanup 2>/dev/null || true)"
+strip=""
+if [ "${GIT_EDITOR:-}" != ":" ]; then
+    strip="коммит через редактор"
+elif [ "$cleanup" = strip ]; then
+    strip="commit.cleanup=strip"
+fi
+if [ -z "$strip" ]; then
+    msg="$(git stripspace <"$file")"
+elif [ "$comment" = auto ]; then
+    need editor
+    fail+=("$strip при core.commentChar=auto: знак комментария git выбирает сам, по черновику до редактора, и строку «#<N> …» может вырезать — коммитьте -m/-F без редактора либо задайте знак явно")
+    msg="$(git stripspace <"$file")"
+else
+    msg="$(git stripspace --strip-comments <"$file")"
+    first_raw="$(git stripspace <"$file" | sed -n 1p)"
+    case "$first_raw" in
+        "$comment"*) need editor; fail+=("$strip: строка «$first_raw» начата знаком комментария «$comment» и будет вырезана — коммитьте -m/-F без редактора") ;;
+    esac
+fi
+
+# ── АТРИБУЦИЯ — у любого коммита ─────────────────────────────────────────────
+attr=""
+if attr="$(git_rule_attribution "$msg")"; then
+    need attribution
+    fail+=("атрибуция в сообщении: «$attr»")
+fi
+
+# ── T0: дата автора — у любого коммита, судимого хуком (шапка) ───────────────
+ident="$(git var GIT_AUTHOR_IDENT)"
+at="${ident% *}"; at="${at##* }"
+author="${ident% * *}"
+if [ "$GIT_RULE_T0_KNOWN" = 1 ] && [ "$at" -lt "$GIT_RULE_T0" ]; then
+    need date
+    fail+=("дата автора $(date -u -d "@$at" '+%F %T' 2>/dev/null || echo "@$at") раньше T0 — коммит в дереве с хуком записан после правила, и дата в прошлом правило не обходит")
+fi
+
+# ── ФОРМА И ВЕТКА ────────────────────────────────────────────────────────────
+branch="$(git symbolic-ref -q --short HEAD 2>/dev/null || true)"
+while IFS= read -r f; do
+    [ -z "$f" ] && continue
+    if [ "$merging" = 1 ]; then need merge; else need form; fi
+    fail+=("$f")
+done < <(git_rule_form "$msg" "$merging" "$branch")
+if [ -n "$branch" ] && [ "$branch" != main ] && ! git_rule_is_number "$branch" &&
+    ! git_rule_before_rule HEAD; then
+    need branch
+    fail+=("ветка «$branch»: ветка называется номером задачи (^[0-9]+\$), исключение одно — main; ветка до правила несёт свой коммит, записанный до правила (обе даты до T0, в истории нет добавления правила)")
+fi
+
+# ── ПОДПИСЬ — корневая учётная запись ────────────────────────────────────────
+ident_fail() { need ident; fail+=("$1"); }
+[ -z "${GIT_CONFIG_GLOBAL+x}" ] ||
+    ident_fail "корень перенаправлен окружением GIT_CONFIG_GLOBAL — подпись берётся из ~/.gitconfig"
+if root="$(git_rule_root_ident)"; then
+    committer="$(git var GIT_COMMITTER_IDENT)"
+    committer="${committer% * *}"
+    [ "$author" = "$root" ] ||
+        ident_fail "автор «$author» — не корневая учётная запись «$root»"
+    [ "$committer" = "$root" ] ||
+        ident_fail "коммиттер «$committer» — не корневая учётная запись «$root»"
+else
+    ident_fail "корневая учётная запись не задана (git config --global user.name / user.email) — подпись сверять не с чем"
+fi
+over="$(git_rule_ident_overrides)"
+[ -z "$over" ] ||
+    ident_fail "подпись переопределена поверх корня (уровень:ключ): ${over//$'\n'/, } — снять настройку"
+for v in GIT_COMMITTER_NAME GIT_COMMITTER_EMAIL; do
+    [ -z "${!v+x}" ] || ident_fail "подпись переопределена окружением: $v"
+done
+
+if [ "${#fail[@]}" -gt 0 ]; then
+    {
+        echo "commit-msg ОТКАЗ — правило git (scripts/hooks/git-rule.sh; T0 $(git_rule_t0_text)):"
+        printf '  · %s\n' "${fail[@]}"
+        echo "как правильно:"
+        for c in "${how[@]}"; do
+            printf '  → %s\n' "$(git_rule_howto "$c" "$branch" "$attr")"
+        done
+    } >&2
+    exit 1
+fi
+exit 0
