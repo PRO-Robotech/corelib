@@ -218,11 +218,11 @@ func newPKI(t *testing.T) *pki {
 	}
 	p := &pki{ca: ca, caKey: key, pool: x509.NewCertPool()}
 	p.pool.AddCert(ca)
-	p.server = p.leaf(t, "", true)
+	p.server = p.leaf(t, true)
 	return p
 }
 
-func (p *pki) leaf(t *testing.T, san string, server bool) tls.Certificate {
+func (p *pki) leaf(t *testing.T, server bool, sans ...string) tls.Certificate {
 	t.Helper()
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
@@ -244,11 +244,13 @@ func (p *pki) leaf(t *testing.T, san string, server bool) tls.Certificate {
 		tmpl.IPAddresses = []net.IP{net.ParseIP("127.0.0.1")}
 	} else {
 		tmpl.ExtKeyUsage = []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth}
-		u, uerr := url.Parse(san)
-		if uerr != nil {
-			t.Fatalf("SAN: %v", uerr)
+		for _, san := range sans {
+			u, uerr := url.Parse(san)
+			if uerr != nil {
+				t.Fatalf("SAN %q: %v", san, uerr)
+			}
+			tmpl.URIs = append(tmpl.URIs, u)
 		}
-		tmpl.URIs = []*url.URL{u}
 	}
 	der, err := x509.CreateCertificate(rand.Reader, tmpl, p.ca, &key.PublicKey, p.caKey)
 	if err != nil {
@@ -267,8 +269,8 @@ func (p *pki) serverCreds() credentials.TransportCredentials {
 }
 
 // callWithCert поднимает сервер на эфемерном порту и зовёт демо-метод
-// клиентским сертификатом с переданным SAN.
-func callWithCert(t *testing.T, srv *grpc.Server, p *pki, san string) codes.Code {
+// клиентским сертификатом с переданными URI-SAN.
+func callWithCert(t *testing.T, srv *grpc.Server, p *pki, sans ...string) codes.Code {
 	t.Helper()
 	srv.RegisterService(&demoServiceDesc, nil)
 	lis, err := net.Listen("tcp", "127.0.0.1:0")
@@ -279,7 +281,7 @@ func callWithCert(t *testing.T, srv *grpc.Server, p *pki, san string) codes.Code
 	t.Cleanup(srv.Stop)
 
 	client := credentials.NewTLS(&tls.Config{
-		Certificates: []tls.Certificate{p.leaf(t, san, false)},
+		Certificates: []tls.Certificate{p.leaf(t, false, sans...)},
 		RootCAs:      p.pool,
 		ServerName:   "127.0.0.1",
 		MinVersion:   tls.VersionTLS13,
@@ -335,6 +337,30 @@ func TestBothListenersCarryTheServiceIdentityLinkOnTheWire(t *testing.T) {
 	if got := strayAsked.all(); len(got) != 0 {
 		t.Fatalf("модель спрошена без субъекта: %v", got)
 	}
+
+	// CX1-02 (б) на проводе: SAN из таблицы плюс второй spiffe-URI, который
+	// приведения не проходит. Идентификатора у такого листа не один, и личности
+	// у него нет — ни на одном слушателе; отказ тот же, что у листа вне таблицы.
+	for _, extra := range malformedSecondSPIFFE {
+		var twoAsked subjectLog
+		public, internal = pair(&twoAsked)
+		pub, intl = callWithCert(t, public, p, hostNotifySAN, extra), callWithCert(t, internal, p, hostNotifySAN, extra)
+		if pub != intl || pub != codes.PermissionDenied {
+			t.Fatalf("SAN из таблицы + %q: публичный %v, внутренний %v — ожидался одинаковый PERMISSION_DENIED", extra, pub, intl)
+		}
+		if got := twoAsked.all(); len(got) != 0 {
+			t.Fatalf("SAN из таблицы + %q: модель спрошена от %v — лист с двумя spiffe-URI опознан", extra, got)
+		}
+	}
+}
+
+// malformedSecondSPIFFE — spiffe-URI, которые приведение не проходит. Каждый из
+// них, стоя в листе рядом с SAN из таблицы, делает идентификаторов два.
+var malformedSecondSPIFFE = []string{
+	"spiffe://kacho.cloud/ns/kacho/sa/other/",
+	"spiffe://kacho.cloud/ns/kacho/sa/a%20b",
+	"spiffe://kacho.cloud:8443/ns/kacho/sa/kacho-notify",
+	"spiffe://kacho.cloud/ns/kacho/sa/%61",
 }
 
 // ── NTF1-M06: служебный принципал не владелец операций ──────────────────────

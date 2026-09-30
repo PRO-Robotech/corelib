@@ -332,6 +332,38 @@ func TestServiceIdentityLinkRecognizesOnlyTheExactSANOnAListedMethod(t *testing.
 					t.Fatalf("сертификат с двумя SPIFFE-идентификаторами опознан как %q", name)
 				}
 			})
+			// CX1-02 (б): считаются spiffe-URI ДО приведения. Второй идентификатор,
+			// который приведение не проходит, не отбрасывается молча — он делает
+			// идентификаторов два, и личности нет; в каком порядке — неважно.
+			for _, extra := range []string{
+				"spiffe://kacho.cloud/ns/kacho/sa/other/",
+				"spiffe://kacho.cloud/ns/kacho/sa/a b",
+				"spiffe://kacho.cloud:8443/ns/kacho/sa/kacho-notify",
+				"spiffe://kacho.cloud/ns/kacho/sa/%61",
+				"SPIFFE://kacho.cloud/ns/kacho/sa/x?q=1",
+				"spiffe:opaque",
+			} {
+				for _, order := range [][]string{{notifySAN, extra}, {extra, notifySAN}} {
+					t.Run("канонический SAN + неканонический spiffe-URI — имени нет: "+strings.Join(order, " , "), func(t *testing.T) {
+						if name, ok := lane.run(t, id, verifiedPeer(t, order...), subscribeFQN); ok {
+							t.Fatalf("лист %q опознан как %q: неканонический spiffe-URI отброшен молча", order, name)
+						}
+					})
+				}
+			}
+			t.Run("единственный spiffe-URI не приводится — имени нет", func(t *testing.T) {
+				if name, ok := lane.run(t, id, verifiedPeer(t, notifySAN+"/"), subscribeFQN); ok {
+					t.Fatalf("неприводимый единственный идентификатор опознан как %q", name)
+				}
+			})
+			// Законный близнец: URI другой схемы идентификатором SPIFFE не является
+			// и счёта не меняет — дельта против кейсов выше ровно в схеме.
+			t.Run("канонический SAN + URI другой схемы — имя службы", func(t *testing.T) {
+				name, ok := lane.run(t, id, verifiedPeer(t, notifySAN, "https://kacho.cloud/ns/kacho/sa/other/"), subscribeFQN)
+				if !ok || name != lawfulNotify {
+					t.Fatalf("URI другой схемы сбил опознание: %q %v", name, ok)
+				}
+			})
 			t.Run("пир без транспорта — имени нет", func(t *testing.T) {
 				if name, ok := lane.run(t, id, context.Background(), subscribeFQN); ok {
 					t.Fatalf("вызов без сертификата опознан как %q", name)
