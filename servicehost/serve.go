@@ -133,10 +133,9 @@ func servePair(ctx context.Context, d servicecontract.Descriptor, public, intern
 	if err != nil {
 		return err
 	}
-	rpcMap, err := catalogderive.Derive(domains...)
+	rpcMap, err := rightsMap(d, domains)
 	if err != nil {
-		return fmt.Errorf("servicehost: %s не поднимается — карта прав не выводится из аннотаций "+
-			"дескрипторов, слинкованных в этот бинарь: %w", spec.Service, err)
+		return err
 	}
 	cat := catalogOf(domains)
 
@@ -178,6 +177,29 @@ func servePair(ctx context.Context, d servicecontract.Descriptor, public, intern
 	stopReport()
 	<-reportDone
 	return serveErr
+}
+
+// rightsMap выводит карту прав служимых доменов и привязывает записи формы
+// ScopeBound к экземплярам, объявленным дескриптором (З14).
+//
+// Привязка стоит ЗДЕСЬ, до отказов старта и до звена решения: перепись
+// скрытия существования спрашивает тип объекта у записи карты, а у
+// непривязанной записи извлекателя нет. Метод формы без привязки своего типа —
+// отказ старта с именем метода; оставленный пустым, он отвергался бы на каждом
+// вызове голосом прав, не называя ни метода, ни пропуска.
+func rightsMap(d servicecontract.Descriptor, domains []string) (authz.RPCMap, error) {
+	svc := d.Spec().Service
+	derived, err := catalogderive.Derive(domains...)
+	if err != nil {
+		return nil, fmt.Errorf("servicehost: %s не поднимается — карта прав не выводится из аннотаций "+
+			"дескрипторов, слинкованных в этот бинарь: %w", svc, err)
+	}
+	bound, err := catalogderive.Bind(derived, d.Bindings())
+	if err != nil {
+		return nil, fmt.Errorf("servicehost: %s не поднимается — привязки серверов (Spec.Bound) не "+
+			"сходятся с методами формы ScopeBound: %w", svc, err)
+	}
+	return bound, nil
 }
 
 // serverPair собирает ОБА сервера из ОДНОЙ пары цепочек.
