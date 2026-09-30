@@ -123,10 +123,9 @@ while IFS= read -r f; do
     if [ "$merging" = 1 ]; then need merge; else need form; fi
     fail+=("$f")
 done < <(git_rule_form "$msg" "$merging" "$branch")
-if [ -n "$branch" ] && [ "$branch" != main ] && ! git_rule_is_number "$branch" &&
-    ! git_rule_before_rule HEAD; then
+if [ -n "$branch" ] && why="$(git_rule_branch_why "$branch")" && ! git_rule_before_rule HEAD; then
     need branch
-    fail+=("ветка «$branch»: ветка называется номером задачи (^[0-9]+\$), исключение одно — main; ветка до правила несёт свой коммит, записанный до правила (обе даты до T0, в истории нет добавления правила)")
+    fail+=("ветка «$branch»: $why; ветка называется «<N>-<суть>», исключения — main, голый номер из переходного перечня и ветка до правила (свой коммит, записанный до правила: обе даты до T0, в истории нет добавления правила)")
 fi
 
 # ── ПОДПИСЬ — корневая учётная запись ────────────────────────────────────────

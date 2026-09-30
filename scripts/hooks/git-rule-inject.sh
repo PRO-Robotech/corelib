@@ -39,6 +39,12 @@
 # подделки в два факта — слияние клиента c6d8b1b3 — не держит ни одного из
 # них, снятое условие он не пропускает, пока стоит второе.
 #
+# ПЕРЕХОДНЫЙ ПЕРЕЧЕНЬ ФИКСТУРЫ — свой, а не перечень дерева: в нём голый номер
+# 42 (ветка есть на подставной площадке), и пробе нужен его близнец — голый 43
+# вне перечня. Перечень дерева судится отдельно: строк не той формы в нём нет.
+# Ветки фикстуры — «<N>-<суть>» (7-x, 25-batch, 26-lane…): голый номер вне
+# перечня правилом отвергается, и каждое утверждение краснело бы от соседа.
+#
 # КОНТРОЛЬ — дерево без хука коммита (как ветка волны до corelib#25): тот же
 # дефектный коммит там записывается. Без этого прогона нечем показать, что
 # дефект воспроизводим, а не выдуман.
@@ -70,7 +76,8 @@ MAKEFILE="$tree/Makefile"
 CI="$tree/.github/workflows/ci.yml"
 
 void() { echo "git-rule-inject: НЕ ВЫПОЛНИЛОСЬ — $*" >&2; exit 2; }
-for f in "$HOOK" "$RULE" "$INSTALL" "$PREPUSH" "$PUSHRULE" "$PRCHECK" "$MAKEFILE" "$CI"; do
+BARE="$here/git-rule-bare-branches.txt"
+for f in "$HOOK" "$RULE" "$INSTALL" "$PREPUSH" "$PUSHRULE" "$PRCHECK" "$MAKEFILE" "$CI" "$BARE"; do
     [ -f "$f" ] || void "нет $f"
 done
 for t in git make sed grep cmp seq mktemp python3 curl; do command -v "$t" >/dev/null 2>&1 || void "нет $t в PATH"; done
@@ -121,6 +128,7 @@ F="$work/f"
 mkdir -p "$F/scripts/hooks"
 cp "$HOOK" "$RULE" "$INSTALL" "$PREPUSH" "$PUSHRULE" "$F/scripts/hooks/" || void "файлы под пробой не скопированы"
 chmod +x "$F/scripts/hooks/commit-msg" "$F/scripts/hooks/pre-push"
+printf '# переходный перечень фикстуры\n42 ветка релиза фикстуры\n' > "$F/scripts/hooks/git-rule-bare-branches.txt"
 echo 'фикстура пробы правила git' > "$F/README"
 t0_iso="2026-01-01T00:00:00Z"
 git -C "$F" init -q || void "фикстура не заведена"
@@ -223,23 +231,23 @@ tree_without() {
 
 # ── ПЕРВАЯ СТРОКА: #<N> ──────────────────────────────────────────────────────
 echo "== первая строка «#<N> »"
-on 7
+on 7-x
 commit -m "hooks: x"
 refused "C1: «hooks: x» на ветке 7" "не начинается с «#<N> »" "«hooks: x»"
-on 7; commit -m "#7 x"
+on 7-x; commit -m "#7 x"
 accepted "близнец C1: «#7 x» на ветке 7" "#7 x"
 for bad_subj in "#7x" "# 7 x" " #7 x" "#7"; do
-    on 7; commit -m "$bad_subj"
+    on 7-x; commit -m "$bad_subj"
     refused "форма «$bad_subj» — не «#<N> »" "не начинается с «#<N> »"
 done
 # T1 — форма пачки: ветка пачки — номер её первой задачи, коммит на задачу
 # «#<N> …». Номер обычного коммита с именем ветки не сверяется; что N — задача
 # этого репозитория, судит проверка запроса (ниже), а не хук.
-on 7; commit -m "#8 x"
+on 7-x; commit -m "#8 x"
 accepted "T1: «#8 x» на ветке 7 — форма пачки, законно" "#8 x"
-on 25; commit -m "#58 гейт целевых веток"
+on 25-batch; commit -m "#58 гейт целевых веток"
 accepted "T1: «#58 …» на ветке пачки 25" "#58 гейт целевых веток"
-on 25; commit -m "#59 цепочка needs"
+on 25-batch; commit -m "#59 цепочка needs"
 accepted "T1: «#59 …» на ветке пачки 25" "#59 цепочка needs"
 on main; commit -m "#7 x"
 accepted "ветка main — исключение, «#7 x» законно" "#7 x"
@@ -252,34 +260,34 @@ echo "== длина первой строки (символы, а не байт�
 ru() { local n="$1" s=""; for _ in $(seq "$n"); do s="${s}ж"; done; printf '%s' "$s"; }
 s72="#7 $(ru 69)"
 s73="#7 $(ru 70)"
-on 7; commit -m "$s73"
+on 7-x; commit -m "$s73"
 refused "C3: 73 символа кириллицей — отказ, названы 73 и 72" "73" "72"
-on 7; commit -m "$s72"
+on 7-x; commit -m "$s72"
 accepted "близнец C3: 72 символа кириллицей" "$s72"
-on 7; E=(LC_ALL=C LANG=C); commit -m "$s72"
+on 7-x; E=(LC_ALL=C LANG=C); commit -m "$s72"
 accepted "C4: 72 символа кириллицей под LC_ALL=C — счёт в символах (байтов 141)" "$s72"
-on 7; E=(LC_ALL=C LANG=C); commit -m "$s73"
+on 7-x; E=(LC_ALL=C LANG=C); commit -m "$s73"
 refused "C4: 73 символа под LC_ALL=C — отказ и там" "73"
 s72l="#7 $(printf 'a%.0s' $(seq 69))"
-on 7; commit -m "${s72l}a"
+on 7-x; commit -m "${s72l}a"
 refused "73 символа латиницей — отказ" "73"
-on 7; commit -m "$s72l"
+on 7-x; commit -m "$s72l"
 accepted "72 символа латиницей" "$s72l"
 
 # ── ОДНО УТВЕРЖДЕНИЕ; ПЕРВАЯ СТРОКА ОТДЕЛЕНА ОТ ТЕЛА ─────────────────────────
 echo "== одно утверждение и отделённая первая строка"
-on 7; commit -m "#7 снят x; заведён y"
+on 7-x; commit -m "#7 снят x; заведён y"
 refused "точка с запятой — второе утверждение" "точка с запятой"
-on 7; commit -m "#7 снят x."
+on 7-x; commit -m "#7 снят x."
 refused "точка в конце первой строки" "точка в конце"
-on 7; commit -m "#7 снят x. Заведён y"
+on 7-x; commit -m "#7 снят x. Заведён y"
 refused "второе предложение после точки" "второе предложение"
-on 7; commit -m "#7 снят go.mod: версия 1.2 закреплена"
+on 7-x; commit -m "#7 снят go.mod: версия 1.2 закреплена"
 accepted "близнец: точка внутри имени и числа — не второе предложение" "#7 снят go.mod: версия 1.2 закреплена"
-on 7; commit -m "#7 ветка — номер задачи"
+on 7-x; commit -m "#7 ветка — номер задачи"
 accepted "граница: тире не судится (одно утверждение через тире от двух не отличить разбором)" "#7 ветка — номер задачи"
 printf '#7 первая строка\nвторая строка без пустой\n' > "$work/glued.msg"
-on 7; commit -F "$work/glued.msg"
+on 7-x; commit -F "$work/glued.msg"
 refused "первая строка без пустой строки после неё — git склеит их в заголовок" "пустой строки"
 
 # ── ТЕЛО: ≤12 СТРОК ПОСЛЕ git stripspace ─────────────────────────────────────
@@ -287,16 +295,16 @@ refused "первая строка без пустой строки после �
 # абзацами: так тело видит читатель `git log`. Первая строка и пустая после неё
 # в счёт не входят; хвостовые пустые строки stripspace снимает.
 echo "== тело (строки после git stripspace, пустые между абзацами — в счёте)"
-on 7; commit -m "#7 x" -m "$(seq 13)"
+on 7-x; commit -m "#7 x" -m "$(seq 13)"
 refused "C5: тело из 13 строк — отказ" "13" "12"
-on 7; commit -m "#7 x" -m "$(seq 12)"
+on 7-x; commit -m "#7 x" -m "$(seq 12)"
 accepted "близнец C5: тело из 12 строк" "#7 x"
-on 7; commit -m "#7 x" -m "$(seq 6)" -m "$(seq 6)"
+on 7-x; commit -m "#7 x" -m "$(seq 6)" -m "$(seq 6)"
 refused "единица счёта: 12 непустых + 1 пустая между абзацами = 13 — отказ" "13"
-on 7; commit -m "#7 x" -m "$(seq 6)" -m "$(seq 5)"
+on 7-x; commit -m "#7 x" -m "$(seq 6)" -m "$(seq 5)"
 accepted "единица счёта: 11 непустых + 1 пустая = 12" "#7 x"
 { printf '#7 x\n\n'; seq 12; printf '\n\n\n\n'; } > "$work/tail.msg"
-on 7; commit -F "$work/tail.msg"
+on 7-x; commit -F "$work/tail.msg"
 accepted "хвостовые пустые строки снимает stripspace — 12" "#7 x"
 
 # ── АТРИБУЦИИ НЕТ: каждая форма — своим прогоном ─────────────────────────────
@@ -305,7 +313,7 @@ accepted "хвостовые пустые строки снимает stripspace
 echo "== атрибуция"
 while IFS='|' read -r label trailer; do
     [ -n "$label" ] || continue
-    on 7; commit -m "#7 x" -m "тело" -m "$trailer"
+    on 7-x; commit -m "#7 x" -m "тело" -m "$trailer"
     refused "C6: $label" "атрибуция"
 done <<'FORMS'
 Co-Authored-By с Claude|Co-Authored-By: Claude Opus <noreply@example.invalid>
@@ -319,7 +327,7 @@ Co-Authored-By соавтора-человека — запрещён ключ, 
 FORMS
 while IFS='|' read -r label trailer; do
     [ -n "$label" ] || continue
-    on 7; commit -m "#7 x" -m "Снята строка шаблона $trailer — подставлялась по умолчанию"
+    on 7-x; commit -m "#7 x" -m "Снята строка шаблона $trailer — подставлялась по умолчанию"
     accepted "близнец C6: «$label» в середине строки — упоминание, а не трейлер" "#7 x"
 done <<'MENTIONS'
 Co-Authored-By с Claude|Co-Authored-By: Claude Opus <noreply@example.invalid>
@@ -389,9 +397,9 @@ done
 fact "настоящий вход: разобрано три сообщения" test "$i" = 3
 for i in 1 2 3; do
     subj="$(sed -n 1p "$work/real-$i.msg")"
-    on 7; commit -F "$work/real-$i.msg"
+    on 7-x; commit -F "$work/real-$i.msg"
     refused "настоящий вход $i: трейлеры коммита полосы — отказ, названа строка" "атрибуция" "«$real_trailer»"
-    on 7; commit -F "$work/real-$i.twin"
+    on 7-x; commit -F "$work/real-$i.twin"
     if [ "$i" = 2 ]; then
         refused "близнец настоящего входа 2 без трейлеров: отказ только по длине первой строки" "символов, предел 72"
         fact "близнец настоящего входа 2: атрибуции в отказе нет" not grep -qF "атрибуция" <<<"$out"
@@ -402,44 +410,44 @@ done
 
 # ── ПОДПИСЬ — КОРНЕВАЯ УЧЁТНАЯ ЗАПИСЬ ────────────────────────────────────────
 echo "== подпись (корень — ~/.gitconfig пробы)"
-on 7; commit -m "#7 x"
+on 7-x; commit -m "#7 x"
 fact "близнец: автор и коммиттер — корневая учётная запись" \
     test "$(git -C "$F" log -1 --format='%an <%ae>|%cn <%ce>')" = "$root_name <$root_mail>|$root_name <$root_mail>"
-on 7; commit --author="Other <other@example.invalid>" -m "#7 x"
+on 7-x; commit --author="Other <other@example.invalid>" -m "#7 x"
 refused "--author чужой — отказ" "автор «Other <other@example.invalid>»"
-on 7; E=(GIT_AUTHOR_NAME=bot GIT_AUTHOR_EMAIL=bot@example.invalid); commit -m "#7 x"
+on 7-x; E=(GIT_AUTHOR_NAME=bot GIT_AUTHOR_EMAIL=bot@example.invalid); commit -m "#7 x"
 refused "GIT_AUTHOR_* чужие — отказ" "автор «bot <bot@example.invalid>»"
 # Коммиттер, отличный от корня, при КОРНЕВОМ user.*: сам корень несёт
 # committer.email. Переопределения уровня нет (уровень — global), и ловит его
 # ровно сравнение коммиттера с корнем.
 printf '[committer]\n\temail = bot@example.invalid\n' >> "$HOME/.gitconfig"
-on 7; commit -m "#7 x"
+on 7-x; commit -m "#7 x"
 refused "коммиттер из committer.email корня — отказ сравнением" "коммиттер «$root_name <bot@example.invalid>»"
 cp "$work/root.gitconfig" "$HOME/.gitconfig"
-on 7; attempt git -c user.name="$root_name" -c user.email="$root_mail" commit -q --allow-empty -m "#7 x"
+on 7-x; attempt git -c user.name="$root_name" -c user.email="$root_mail" commit -q --allow-empty -m "#7 x"
 refused "-c user.* с КОРНЕВЫМИ значениями — отказ при любом значении" "command:user.email"
-on 7; attempt git -c committer.email="$root_mail" commit -q --allow-empty -m "#7 x"
+on 7-x; attempt git -c committer.email="$root_mail" commit -q --allow-empty -m "#7 x"
 refused "-c committer.email с КОРНЕВЫМ значением — отказ при любом значении" "command:committer.email"
-on 7; attempt git -c author.email="$root_mail" commit -q --allow-empty -m "#7 x"
+on 7-x; attempt git -c author.email="$root_mail" commit -q --allow-empty -m "#7 x"
 refused "-c author.email с КОРНЕВЫМ значением — отказ при любом значении" "command:author.email"
-on 7; git -C "$F" config --local user.email "$root_mail"; commit -m "#7 x"
+on 7-x; git -C "$F" config --local user.email "$root_mail"; commit -m "#7 x"
 refused "--local user.email — отказ при любом значении" "local:user.email"
 git -C "$F" config --local --unset user.email
-on 7; git -C "$F" config --local committer.name bot; commit -m "#7 x"
+on 7-x; git -C "$F" config --local committer.name bot; commit -m "#7 x"
 refused "--local committer.name — отказ: назван уровень и коммиттер" "local:committer.name" "коммиттер «bot <$root_mail>»"
 git -C "$F" config --local --unset committer.name
 printf '[committer]\n\temail = %s\n' "$root_mail" > "$work/sys-committer"
-on 7; E=(-u GIT_CONFIG_NOSYSTEM GIT_CONFIG_SYSTEM="$work/sys-committer"); commit -m "#7 x"
+on 7-x; E=(-u GIT_CONFIG_NOSYSTEM GIT_CONFIG_SYSTEM="$work/sys-committer"); commit -m "#7 x"
 refused "committer.email уровня system — старше корневого user.*: отказ" "system:committer.email"
 printf '[user]\n\temail = other@example.invalid\n' > "$work/sys-user"
-on 7; E=(-u GIT_CONFIG_NOSYSTEM GIT_CONFIG_SYSTEM="$work/sys-user"); commit -m "#7 x"
+on 7-x; E=(-u GIT_CONFIG_NOSYSTEM GIT_CONFIG_SYSTEM="$work/sys-user"); commit -m "#7 x"
 accepted "близнец: user.email уровня system ниже корня — не переопределение" "#7 x"
-on 7; E=(GIT_COMMITTER_NAME="$root_name"); commit -m "#7 x"
+on 7-x; E=(GIT_COMMITTER_NAME="$root_name"); commit -m "#7 x"
 refused "GIT_COMMITTER_NAME — отказ при любом значении" "GIT_COMMITTER_NAME"
-on 7; E=(GIT_CONFIG_GLOBAL="$work/root.gitconfig"); commit -m "#7 x"
+on 7-x; E=(GIT_CONFIG_GLOBAL="$work/root.gitconfig"); commit -m "#7 x"
 refused "GIT_CONFIG_GLOBAL перенаправляет корень — отказ" "GIT_CONFIG_GLOBAL"
 mkdir -p "$work/nohome"
-on 7; E=(HOME="$work/nohome" XDG_CONFIG_HOME="$work/nohome/.config" GIT_AUTHOR_NAME=x GIT_AUTHOR_EMAIL=x@example.invalid GIT_COMMITTER_NAME=x GIT_COMMITTER_EMAIL=x@example.invalid); commit -m "#7 x"
+on 7-x; E=(HOME="$work/nohome" XDG_CONFIG_HOME="$work/nohome/.config" GIT_AUTHOR_NAME=x GIT_AUTHOR_EMAIL=x@example.invalid GIT_COMMITTER_NAME=x GIT_COMMITTER_EMAIL=x@example.invalid); commit -m "#7 x"
 refused "корневая учётная запись не задана — отказ" "корневая учётная запись не задана"
 
 # ── РЕДАКТОР: строка «#…» вырезается как комментарий ─────────────────────────
@@ -450,57 +458,57 @@ echo "== коммит через редактор (знак комментари
 printf '#!/bin/sh\nprintf "#7 x\\n\\nтело\\n" > "$1"\n' > "$work/editor.sh"
 chmod +x "$work/editor.sh"
 edit() { E=(GIT_EDITOR="$work/editor.sh"); attempt git "$@" commit -q --allow-empty; }
-on 7; edit
+on 7-x; edit
 refused "коммит через редактор — отказ до того, как git вырежет «#7 x»" "через редактор"
-on 7; git -C "$F" config core.commentChar ';'; edit
+on 7-x; git -C "$F" config core.commentChar ';'; edit
 accepted "близнец: редактор при core.commentChar=; — «#» не комментарий" "#7 x"
 git -C "$F" config --unset core.commentChar
-on 7; git -C "$F" config core.commentChar auto; edit
+on 7-x; git -C "$F" config core.commentChar auto; edit
 refused "core.commentChar=auto и редактор — знак выбирает git, «#7 x» он вырезает: отказ" "при core.commentChar=auto"
 git -C "$F" config --unset core.commentChar
-on 7; edit -c core.commentChar=auto
+on 7-x; edit -c core.commentChar=auto
 refused "-c core.commentChar=auto и редактор — отказ" "при core.commentChar=auto"
 # Оба ключа задают один знак, и git берёт ПОСЛЕДНИЙ прочитанный (замер: ';' затем
 # '#' — вырезается «#»). Хук, читающий ключи в своём порядке, взял бы не тот.
-on 7; git -C "$F" config core.commentString ';'; git -C "$F" config core.commentChar '#'; edit
+on 7-x; git -C "$F" config core.commentString ';'; git -C "$F" config core.commentChar '#'; edit
 refused "commentString=; затем commentChar=# — git берёт «#»: отказ" "через редактор"
 git -C "$F" config --unset core.commentString; git -C "$F" config --unset core.commentChar
-on 7; git -C "$F" config core.commentChar '#'; git -C "$F" config core.commentString ';'; edit
+on 7-x; git -C "$F" config core.commentChar '#'; git -C "$F" config core.commentString ';'; edit
 accepted "близнец: commentChar=# затем commentString=; — git берёт «;», «#7 x» цел" "#7 x"
 git -C "$F" config --unset core.commentString; git -C "$F" config --unset core.commentChar
-on 7; git -C "$F" config commit.cleanup strip; commit -m "#7 x" -m "тело"
+on 7-x; git -C "$F" config commit.cleanup strip; commit -m "#7 x" -m "тело"
 refused "commit.cleanup=strip вырежет «#7 x» и при -m — отказ" "commit.cleanup"
-on 7; git -C "$F" config commit.cleanup whitespace; commit -m "#7 x" -m "тело"
+on 7-x; git -C "$F" config commit.cleanup whitespace; commit -m "#7 x" -m "тело"
 accepted "близнец: commit.cleanup=whitespace" "#7 x"
 git -C "$F" config --unset commit.cleanup
 
 # ── СЛИЯНИЕ: настоящий git merge ─────────────────────────────────────────────
 echo "== слияние (git merge --no-ff)"
-on 8; echo 8 > "$F/eight.txt"; git -C "$F" add eight.txt; commit -m "#8 предмет восьмой"
+on 8-y; echo 8 > "$F/eight.txt"; git -C "$F" add eight.txt; commit -m "#8 предмет восьмой"
 accepted "ветка 8: свой коммит" "#8 предмет восьмой"
 h8="$(git -C "$F" rev-parse HEAD)"
 merge() { attempt git merge -q --no-ff "$@"; }
-on 7; merge 8 -m "#7 merge #8: предмет восьмой"
+on 7-x; merge 8-y -m "#7 merge #8: предмет восьмой"
 accepted "слияние по форме «#7 merge #8: …» на ветке 7" "#7 merge #8: предмет восьмой"
 fact "записанное слияние — коммит с двумя родителями" \
     test "$(git -C "$F" log -1 --format=%P | wc -w)" -eq 2
-on 7; merge 8 -m "#7 merge main: сверка со стволом"
+on 7-x; merge 8-y -m "#7 merge main: сверка со стволом"
 accepted "слияние по форме «#7 merge main: …»" "#7 merge main: сверка со стволом"
-on 7; merge 8 -m "#7 предмет восьмой"
+on 7-x; merge 8-y -m "#7 предмет восьмой"
 refused "слияние без «merge #<M>: …» — отказ" "слияние"
-on 7; merge 8 -m "#9 merge #8: предмет восьмой"
-refused "слияние на ветке 7 с номером 9 — отказ: слияние — акт ветки, номер её" "«#9» на ветке «7»"
-on 7; merge 8 -m "#7 merge #8:"
+on 7-x; merge 8-y -m "#9 merge #8: предмет восьмой"
+refused "слияние на ветке 7 с номером 9 — отказ: слияние — акт ветки, номер её" "«#9» на ветке «7-x»"
+on 7-x; merge 8-y -m "#7 merge #8:"
 refused "слияние без текста после двоеточия — отказ" "слияние"
-on 7; merge 8
+on 7-x; merge 8-y
 refused "слияние с сообщением git по умолчанию («Merge branch …») — отказ" "Merge branch"
-on 7; merge 8 -m "#7 merge #8: предмет" -m "Co-Authored-By: Claude <noreply@example.invalid>"
+on 7-x; merge 8-y -m "#7 merge #8: предмет" -m "Co-Authored-By: Claude <noreply@example.invalid>"
 refused "слияние с атрибуцией — отказ" "атрибуция"
 
 # ── ИМЯ ВЕТКИ: номер задачи; исключение одно — main ──────────────────────────
 echo "== имя ветки"
 on issue-7; commit -m "#7 x"
-refused "ветка «issue-7», открытая после правила, — отказ" "ветка «issue-7»" "номером задачи"
+refused "ветка «issue-7», открытая после правила, — отказ" "ветка «issue-7»" "«<N>-<суть>»"
 on lane/oauth2-engine; commit -m "#7 x"
 refused "ветка «lane/oauth2-engine» после правила — отказ" "ветка «lane/oauth2-engine»"
 # Ветка до правила — такой, какой она бывает на деле: её собственный коммит (не
@@ -530,9 +538,38 @@ late_m="$(git -C "$F" commit-tree -p "$late_c" -p "$h1" -m "#57 merge main: пр
     void "слияние поздней записи не собрано"
 on batch-late "$late_m"; commit -m "#7 x"
 refused "дата автора до T0, записан после T0 на основании старше правила — не «до правила», отказ по имени" "ветка «batch-late»"
-on 7 "$pre_m"; on issue-8 "$pre_m"; commit -m "#8 x"
+on 7-x "$pre_m"; on issue-8 "$pre_m"; commit -m "#8 x"
 refused "ветка «issue-8» от вершины, лежащей на ветке-номере, — отказ" "ветка «issue-8»"
-drop 7 batch-quota-fate batch-late issue-7 issue-8 lane/oauth2-engine
+drop 7-x batch-quota-fate batch-late issue-7 issue-8 lane/oauth2-engine
+
+# ── ИМЯ ВЕТКИ «<N>-<суть>» И ПЕРЕХОДНЫЙ ПЕРЕЧЕНЬ (corelib#79) ─────────────────
+# Каждое свойство — парой: имя, отличное от законного одним фактом, — отказ.
+echo "== имя ветки «<N>-<суть>» и переходный перечень голых номеров"
+on 7-x; commit -m "#7 x"
+accepted "«7-x» — номер и суть: законно" "#7 x"
+on 7; commit -m "#7 x"
+refused "голый номер «7» вне переходного перечня — отказ с подсказкой формы" \
+    "голый номер «7» — не в переходном перечне" "«7-<суть>»" "git branch -m <N>-<суть>"
+on 42; commit -m "#42 x"
+accepted "близнец: голый номер «42» из переходного перечня — законно до вливания" "#42 x"
+on 43; commit -m "#43 x"
+refused "голый номер «43», соседний с перечнем, — отказ" "голый номер «43»"
+for bad_branch in 7-X 7- x-7 7-a_b 7--a 7-a- "7-$(printf 'a%.0s' $(seq 41))"; do
+    on "$bad_branch"; commit -m "#7 x"
+    refused "имя «$bad_branch» — не «<N>-<суть>»: отказ" "ветка «$bad_branch»"
+done
+on 7-a-b; commit -m "#7 x"
+accepted "близнец: суть из нескольких слов через дефис" "#7 x"
+on "7-$(printf 'a%.0s' $(seq 40))"; commit -m "#7 x"
+accepted "близнец: суть в 40 символов — на пределе" "#7 x"
+on 2914-notify; commit -m "#2914 x"
+accepted "эпик «2914-notify» — форма та же" "#2914 x"
+on 42; mv "$F/scripts/hooks/git-rule-bare-branches.txt" "$work/bare.aside"; commit -m "#42 x"
+refused "перечня нет — голый номер «42» отвергнут: переходу конец" "голый номер «42»"
+mv "$work/bare.aside" "$F/scripts/hooks/git-rule-bare-branches.txt"
+drop 7 42 43 7-X x-7 7-a_b 7--a 7-a- 7-a-b "7-$(printf 'a%.0s' $(seq 41))" "7-$(printf 'a%.0s' $(seq 40))" 2914-notify
+fact "переходный перечень дерева: строк не той формы нет" \
+    bash -c ". '$RULE'; GIT_RULE_BARE_LIST='$BARE'; git_rule_load_bare; [ \"\${#GIT_RULE_BARE_BAD[@]}\" -eq 0 ]"
 
 # ── РЕВИЗИЯ СТАРШЕ ПРАВИЛА (R8): отказ без обхода, выход — слияние ───────────
 # Переходник провязан в общем каталоге клона и видит ВСЕ рабочие копии, а в
@@ -553,13 +590,13 @@ commit -m "#57 x"
 accepted "R8: после слияния коммит ветки до правила записан" "#57 x"
 on batch-quota-fate "$pre_c"; merge "$h1" -m "hooks: merge"
 refused "R8: слияние с дефектной первой строкой судит внесённый хук — отказ" "не начинается с «#<N> »"
-on 41 "$pre_c"; merge "$h1" -m "#41 merge main: правило git в ветке"
+on 41-x "$pre_c"; merge "$h1" -m "#41 merge main: правило git в ветке"
 accepted "R8: ветка-номер до правила — слияние по форме записано" "#41 merge main: правило git в ветке"
-drop batch-quota-fate 41
+drop batch-quota-fate 41-x
 
 # ── T0: граница истории ──────────────────────────────────────────────────────
 echo "== T0 (наименьшее время автора коммита, заводившего scripts/hooks/commit-msg)"
-on 7; E=(GIT_AUTHOR_DATE=2020-06-01T00:00:00Z); commit -m "#7 x"
+on 7-x; E=(GIT_AUTHOR_DATE=2020-06-01T00:00:00Z); commit -m "#7 x"
 refused "новый коммит с датой автора до T0 — отказ: дата в прошлом правило не обходит" "раньше T0"
 # Вершина с датой автора до T0 в дереве с хуком лежит поверх добавления правила:
 # дерево несёт хук, значит, история — его добавление, и записана она после
@@ -570,16 +607,16 @@ refused "новый коммит с датой автора до T0 — отка
 # и автор судятся. Прежде это была слепая зона хука O1.
 hist_c="$(GIT_AUTHOR_NAME=old GIT_AUTHOR_EMAIL=old@example.invalid GIT_AUTHOR_DATE=2025-01-01T00:00:00Z \
     git -C "$F" commit-tree -p "$h1" -m "lane: старая работа" "$h1^{tree}")" || void "коммит истории не собран"
-on 7 "$hist_c"; commit --amend -m "lane: старая работа, сообщение переписано"
+on 7-x "$hist_c"; commit --amend -m "lane: старая работа, сообщение переписано"
 refused "перепись вершины с датой до T0 поверх правила — отказ: дата, форма и автор судятся" \
     "раньше T0" "не начинается с «#<N> »" "автор «old <old@example.invalid>»"
-on 7 "$hist_c"; commit --amend -m "lane: старая работа" -m "Co-Authored-By: Claude <noreply@example.invalid>"
+on 7-x "$hist_c"; commit --amend -m "lane: старая работа" -m "Co-Authored-By: Claude <noreply@example.invalid>"
 refused "перепись вершины с датой до T0 с атрибуцией — отказ: атрибуция судится у любого" "атрибуция"
-on 7 "$hist_c"; E=(GIT_COMMITTER_NAME=bot GIT_COMMITTER_EMAIL=bot@example.invalid); commit --amend -m "lane: старая работа"
+on 7-x "$hist_c"; E=(GIT_COMMITTER_NAME=bot GIT_COMMITTER_EMAIL=bot@example.invalid); commit --amend -m "lane: старая работа"
 refused "перепись вершины с датой до T0 чужим коммиттером — отказ" "GIT_COMMITTER_NAME"
-on 7 "$hist_c"; commit -C HEAD
+on 7-x "$hist_c"; commit -C HEAD
 refused "O1 закрыта: новый коммит -C HEAD поверх вершины с датой до T0 — отказ" "раньше T0" "не начинается с «#<N> »"
-on 7 "$hist_c"; commit --author="old <old@example.invalid>" --date=2025-01-01T00:00:00Z -m "anything goes. Here"
+on 7-x "$hist_c"; commit --author="old <old@example.invalid>" --date=2025-01-01T00:00:00Z -m "anything goes. Here"
 refused "O1 закрыта: новый коммит с автором и датой вершины до T0 — отказ" "раньше T0" "второе предложение"
 # Два добавления: хук правила снят и заведён снова. T0 — первое добавление:
 # коммит с датой между ними — после правила, судится целиком и записан.
@@ -590,19 +627,19 @@ re_c="$(GIT_AUTHOR_DATE=2026-03-01T00:00:00Z GIT_COMMITTER_DATE=2026-03-01T00:00
     git -C "$F" commit-tree -p "$rm_c" -m "#1 хук заведён снова" "$h1^{tree}")" || void "коммит повторного добавления не собран"
 fact "фикстура: у ревизии два добавления хука" \
     test "$(git -C "$F" log --diff-filter=A --format=%H "$re_c" -- scripts/hooks/commit-msg | wc -l)" -eq 2
-on 7 "$re_c"; E=(GIT_AUTHOR_DATE=2026-02-15T00:00:00Z); commit -m "#7 между добавлениями"
+on 7-x "$re_c"; E=(GIT_AUTHOR_DATE=2026-02-15T00:00:00Z); commit -m "#7 между добавлениями"
 accepted "T0 — первое добавление: коммит между двумя добавлениями — после правила" "#7 между добавлениями"
-on 7 "$re_c"; E=(GIT_AUTHOR_DATE=2025-12-15T00:00:00Z); commit -m "#7 до первого добавления"
+on 7-x "$re_c"; E=(GIT_AUTHOR_DATE=2025-12-15T00:00:00Z); commit -m "#7 до первого добавления"
 refused "близнец: коммит до первого добавления — раньше T0" "раньше T0"
 # Граница мелкого клона показывает все свои файлы добавленными: T0 с неё не
 # берётся. Клон глубины 1 на коммите ПОСЛЕ правила: новый коммит с датой между
 # настоящим T0 и границей — не «дата раньше T0», а коммит, судимый целиком.
-on 7; E=(GIT_AUTHOR_DATE=2026-03-01T00:00:00Z GIT_COMMITTER_DATE=2026-03-01T00:00:00Z); commit -m "#7 после правила"
+on 7-x; E=(GIT_AUTHOR_DATE=2026-03-01T00:00:00Z GIT_COMMITTER_DATE=2026-03-01T00:00:00Z); commit -m "#7 после правила"
 accepted "коммит после правила — вершина мелкого клона" "#7 после правила"
 git -C "$F" branch -q -f shallow-tip HEAD
 S="$work/shallow"
 git clone -q --depth 1 --branch shallow-tip "file://$F" "$S" 2>/dev/null || void "мелкий клон не собран"
-git -C "$S" checkout -q -b 7
+git -C "$S" checkout -q -b 7-x
 (cd "$S" && bash scripts/hooks/install.sh install) >/dev/null 2>&1 || void "мелкий клон не провязан"
 before="$(git -C "$S" rev-parse HEAD)"
 out="$(cd "$S" && GIT_AUTHOR_DATE=2026-02-01T00:00:00Z git commit -q --allow-empty -m "#7 x" 2>&1 </dev/null)"; rc=$?
@@ -618,7 +655,7 @@ else bad "мелкий клон: код $rc, «T0 не выведен» не с�
 git -C "$F" branch -q -f readd-tip "$re_c"
 S2="$work/shallow2"
 git clone -q --depth 2 --branch readd-tip "file://$F" "$S2" 2>/dev/null || void "второй мелкий клон не собран"
-git -C "$S2" checkout -q -b 7
+git -C "$S2" checkout -q -b 7-x
 (cd "$S2" && bash scripts/hooks/install.sh install) >/dev/null 2>&1 || void "второй мелкий клон не провязан"
 fact "фикстура: граница мелкого клона — коммит снятия, файла правила на ней нет" \
     bash -c "[ \"\$(git -C '$S2' rev-parse HEAD~1)\" = '$rm_c' ] && ! git -C '$S2' cat-file -e '$rm_c:scripts/hooks/commit-msg' 2>/dev/null"
@@ -630,7 +667,7 @@ else bad "мелкий клон без файла на границе: T0 взя
 
 # ── ПЕРЕХОДНИК И АДРЕСАТ ─────────────────────────────────────────────────────
 echo "== переходник: адресата нет — отказ"
-on 7
+on 7-x
 mv "$F/scripts/hooks/commit-msg" "$work/cm.aside"
 commit -m "#7 x"
 refused "адресат снят с диска — коммит остановлен, проверок не было, выход назван" \
@@ -647,34 +684,34 @@ mv "$work/rule.aside" "$F/scripts/hooks/git-rule.sh"
 # сторона — в accepted(): у записанного коммита этого текста нет вовсе.
 echo "== текст отказа: «как правильно»"
 how="как правильно:"
-on 7; commit -m "hooks: x"
+on 7-x; commit -m "hooks: x"
 refused "как правильно — первая строка: названы форма «#<N> …» и её пределы" \
     "$how" 'git commit -m "#<N> ' "72 символов" "12 строк"
 fact "как правильно — у отказа по первой строке нет строк подписи, ветки и атрибуции" \
     not grep -qE 'git config --global|git branch -m|удалите строку' <<<"$out"
-on 7; commit -m "#7 x" -m "тело" -m "Co-Authored-By: Claude Opus <noreply@example.invalid>"
+on 7-x; commit -m "#7 x" -m "тело" -m "Co-Authored-By: Claude Opus <noreply@example.invalid>"
 refused "как правильно — атрибуция: названа строка, которую удалить" \
     "$how" "удалите строку «Co-Authored-By: Claude Opus <noreply@example.invalid>»" "Co-Authored-By с любым значением"
 fact "как правильно — атрибуция не объявляет соавтора законным (#861)" \
     not grep -qF "соавтор-человек законен" <<<"$out"
 fact "как правильно — у отказа по атрибуции нет строки формы" \
     not grep -qF 'git commit -m "#<N> ' <<<"$out"
-on 7; commit --author="Other <other@example.invalid>" -m "#7 x"
+on 7-x; commit --author="Other <other@example.invalid>" -m "#7 x"
 refused "как правильно — подпись: названы корень и что не передавать" \
     "$how" "git config --global user.name" "--author"
-on 7; git -C "$F" config --local user.email "$root_mail"; commit -m "#7 x"
+on 7-x; git -C "$F" config --local user.email "$root_mail"; commit -m "#7 x"
 refused "как правильно — подпись уровня local: названо снятие настройки" \
     "$how" "git config --local --unset"
 git -C "$F" config --local --unset user.email
 on issue-7; commit -m "#7 x"
-refused "как правильно — ветка: названо переименование в номер задачи" "$how" "git branch -m <N>"
-on 7; git -C "$F" branch -q -D issue-7
-merge 8 -m "#9 merge #8: предмет восьмой"
+refused "как правильно — ветка: названо переименование в «<N>-<суть>» и переходный перечень" "$how" "git branch -m <N>-<суть>" "git-rule-bare-branches.txt"
+on 7-x; git -C "$F" branch -q -D issue-7
+merge 8-y -m "#9 merge #8: предмет восьмой"
 refused "как правильно — слияние: форма с номером ЭТОЙ ветки" \
     "$how" 'git merge --no-ff <ветка> -m "#7 merge #<M>: ' '"#7 merge main: '
-on 7; edit
+on 7-x; edit
 refused "как правильно — редактор: сообщение через -m или -F" "$how" "через -m или -F"
-on 7; E=(GIT_AUTHOR_DATE=2020-06-01T00:00:00Z); commit -m "#7 x"
+on 7-x; E=(GIT_AUTHOR_DATE=2020-06-01T00:00:00Z); commit -m "#7 x"
 refused "как правильно — дата автора: без даты в прошлом" "$how" "GIT_AUTHOR_DATE"
 
 # ── ОТПРАВКА: страж правила в pre-push, настоящий git push ───────────────────
@@ -705,47 +742,53 @@ stopped() {
 nv() { attempt git commit -q --allow-empty --no-verify "$@"; }
 on main "$h1"; P=(); push main
 delivered "законная отправка main: история до T0 и коммит правила" refs/heads/main "правило git" "нарушений нет"
-on 101; commit -m "#101 x"; push 101
-delivered "законная отправка ветки-номера" refs/heads/101 "новых коммитов 1"
-on 102; nv -m "hooks: x"; push 102
-stopped "первая строка без «#<N> » в отправке — отказ до проверок и до обхода" refs/heads/102 \
+on 101-x; commit -m "#101 x"; push 101-x
+delivered "законная отправка ветки-номера" refs/heads/101-x "новых коммитов 1"
+on 102-x; nv -m "hooks: x"; push 102-x
+stopped "первая строка без «#<N> » в отправке — отказ до проверок и до обхода" refs/heads/102-x \
     "не начинается с «#<N> »" "правило git нарушено"
 fact "обход CORELIB_SKIP_PREPUSH стража правила не снимает" not grep -qF "пропущен по CORELIB_SKIP_PREPUSH" <<<"$out"
-attempt git push -q origin 102
-stopped "та же отправка без обхода — отказ до проверок дерева" refs/heads/102 "правило git нарушено" "исполнено проверок: 0"
-on 103; nv -m "#103 x" -m "Co-authored-by: Claude <noreply@example.invalid>"; push 103
-stopped "атрибуция в отправляемом коммите — отказ" refs/heads/103 "атрибуция"
+attempt git push -q origin 102-x
+stopped "та же отправка без обхода — отказ до проверок дерева" refs/heads/102-x "правило git нарушено" "исполнено проверок: 0"
+on 103-x; nv -m "#103 x" -m "Co-authored-by: Claude <noreply@example.invalid>"; push 103-x
+stopped "атрибуция в отправляемом коммите — отказ" refs/heads/103-x "атрибуция"
 # #861: коммит, записанный мимо хука коммита, — настоящий вход и соавтор-человек;
 # отказ называет sha. Близнецы — то же сообщение без трейлеров и упоминание в прозе.
-on 115; nv -F "$work/real-1.msg"; c115="$(git -C "$F" rev-parse HEAD)"; push 115
-stopped "настоящий вход мимо хука коммита — отказ отправки, назван sha" refs/heads/115 \
+on 115-x; nv -F "$work/real-1.msg"; c115="$(git -C "$F" rev-parse HEAD)"; push 115-x
+stopped "настоящий вход мимо хука коммита — отказ отправки, назван sha" refs/heads/115-x \
     "${c115:0:10} атрибуция в сообщении: «$real_trailer»"
-on 116; nv -F "$work/real-1.twin"; push 116
-delivered "близнец: то же сообщение без трейлеров — доехало" refs/heads/116 "нарушений нет"
-on 117; nv -m "#117 x" -m "Co-authored-by: Иван Петров <ivan@example.org>"; c117="$(git -C "$F" rev-parse HEAD)"; push 117
-stopped "соавтор-человек мимо хука коммита — отказ отправки, назван sha" refs/heads/117 \
+on 116-x; nv -F "$work/real-1.twin"; push 116-x
+delivered "близнец: то же сообщение без трейлеров — доехало" refs/heads/116-x "нарушений нет"
+on 117-x; nv -m "#117 x" -m "Co-authored-by: Иван Петров <ivan@example.org>"; c117="$(git -C "$F" rev-parse HEAD)"; push 117-x
+stopped "соавтор-человек мимо хука коммита — отказ отправки, назван sha" refs/heads/117-x \
     "${c117:0:10} атрибуция в сообщении: «Co-authored-by: Иван Петров <ivan@example.org>»"
-on 118; nv -m "#118 x" -m "Снята строка шаблона Co-Authored-By: Claude Opus — подставлялась"; push 118
-delivered "близнец: ключ в середине строки прозы — доехало" refs/heads/118 "нарушений нет"
-on 104; nv --author="Other <other@example.invalid>" -m "#104 x"; push 104
-stopped "чужой автор в отправляемом коммите — отказ" refs/heads/104 "автор «Other <other@example.invalid>»"
-on 105; E=(GIT_COMMITTER_NAME=bot GIT_COMMITTER_EMAIL=bot@example.invalid); nv -m "#105 x"; E=(); push 105
-stopped "чужой коммиттер в отправляемом коммите — отказ" refs/heads/105 "коммиттер «bot <bot@example.invalid>»"
+on 118-x; nv -m "#118 x" -m "Снята строка шаблона Co-Authored-By: Claude Opus — подставлялась"; push 118-x
+delivered "близнец: ключ в середине строки прозы — доехало" refs/heads/118-x "нарушений нет"
+on 104-x; nv --author="Other <other@example.invalid>" -m "#104 x"; push 104-x
+stopped "чужой автор в отправляемом коммите — отказ" refs/heads/104-x "автор «Other <other@example.invalid>»"
+on 105-x; E=(GIT_COMMITTER_NAME=bot GIT_COMMITTER_EMAIL=bot@example.invalid); nv -m "#105 x"; E=(); push 105-x
+stopped "чужой коммиттер в отправляемом коммите — отказ" refs/heads/105-x "коммиттер «bot <bot@example.invalid>»"
 # Близнец 105, отличный в один факт: обе даты — до T0. Коммит поверх правила
 # записан после него, и его коммиттер судится, какую дату он ни назови.
 bc_c="$(GIT_COMMITTER_NAME=bot GIT_COMMITTER_EMAIL=bot@example.invalid GIT_AUTHOR_DATE=2020-06-01T00:00:00Z \
     GIT_COMMITTER_DATE=2020-06-01T00:00:00Z git -C "$F" commit-tree -p "$h1" -m "#114 x" "$h1^{tree}")" ||
     void "коммит чужого коммиттера с датами до T0 не собран"
-on 114 "$bc_c"; push 114
-stopped "чужой коммиттер, обе даты до T0 поверх правила — отказ по коммиттеру" refs/heads/114 "коммиттер «bot <bot@example.invalid>»"
+on 114-x "$bc_c"; push 114-x
+stopped "чужой коммиттер, обе даты до T0 поверх правила — отказ по коммиттеру" refs/heads/114-x "коммиттер «bot <bot@example.invalid>»"
+on 43; nv -m "#43 x"; push 43
+stopped "новая ветка с голым номером «43» вне перечня — отказ по имени" refs/heads/43 "голый номер «43»"
+on 42; commit -m "#42 x"; push 42
+delivered "близнец: новая ветка «42» из переходного перечня — доехала" refs/heads/42 "нарушений нет"
+on 106-X; nv -m "#106 x"; push 106-X
+stopped "новая ветка «106-X» — суть не в нижнем регистре: отказ по имени" refs/heads/106-X "ветка «106-X»"
 on issue-106; nv -m "#106 x"; push issue-106
 stopped "новая ветка «issue-106» — отказ по имени" refs/heads/issue-106 "ветка «issue-106»"
-on 25; commit -m "#58 гейт целевых веток"; push 25
-delivered "T1: «#58 …» на ветке пачки 25 — доехала" refs/heads/25
-on 107; attempt git merge -q --no-ff --no-verify "$h8" -m "#9 merge #8: предмет восьмой"; push 107
-stopped "слияние «#9» на ветке 107 — отказ: номер слияния — номер ветки" refs/heads/107 "«#9» на ветке «107»"
-on 108; merge "$h8" -m "#108 merge #8: предмет восьмой"; push 108
-delivered "близнец: слияние «#108 merge #8» на ветке 108 — влитый «#8 …» судится формой" refs/heads/108 "новых коммитов 2"
+on 25-batch; commit -m "#58 гейт целевых веток"; push 25-batch
+delivered "T1: «#58 …» на ветке пачки 25 — доехала" refs/heads/25-batch
+on 107-x; attempt git merge -q --no-ff --no-verify "$h8" -m "#9 merge #8: предмет восьмой"; push 107-x
+stopped "слияние «#9» на ветке 107 — отказ: номер слияния — номер ветки" refs/heads/107-x "«#9» на ветке «107-x»"
+on 108-x; merge "$h8" -m "#108 merge #8: предмет восьмой"; push 108-x
+delivered "близнец: слияние «#108 merge #8» на ветке 108 — влитый «#8 …» судится формой" refs/heads/108-x "новых коммитов 2"
 on batch-quota-fate "$pre_m"; commit -m "#57 x"; push batch-quota-fate
 delivered "новая ветка до правила (свой коммит до T0 на основании старше правила) — имя законно, форма старого не судится" \
     refs/heads/batch-quota-fate "новых коммитов 3" "нарушений нет"
@@ -782,26 +825,26 @@ bx_m="$(git -C "$F" commit-tree -p "$bx_c" -p "$h1" -m "#57 merge main: прав
 on feature-z "$bx_m"; push feature-z
 delivered "граница: обе даты до T0 на основании старше правила — доехало, как работа до правила" \
     refs/heads/feature-z "нарушений нет"
-on 109; commit -m "#109 x"; P=(GIT_CONFIG_GLOBAL="$work/root.gitconfig"); push 109
-stopped "GIT_CONFIG_GLOBAL при отправке — корень перенаправлен: отказ" refs/heads/109 "GIT_CONFIG_GLOBAL"
-P=(HOME="$work/nohome" XDG_CONFIG_HOME="$work/nohome/.config"); push 109
-stopped "корень не задан при отправке — судить подпись не с чем: отказ" refs/heads/109 "корневая учётная запись не задана"
+on 109-x; commit -m "#109 x"; P=(GIT_CONFIG_GLOBAL="$work/root.gitconfig"); push 109-x
+stopped "GIT_CONFIG_GLOBAL при отправке — корень перенаправлен: отказ" refs/heads/109-x "GIT_CONFIG_GLOBAL"
+P=(HOME="$work/nohome" XDG_CONFIG_HOME="$work/nohome/.config"); push 109-x
+stopped "корень не задан при отправке — судить подпись не с чем: отказ" refs/heads/109-x "корневая учётная запись не задана"
 P=()
-on 110; nv -m "hooks: опубликован мимо стража"
-attempt git push -q --no-verify origin 110
-fact "фикстура: дефектный коммит опубликован мимо стража (--no-verify)" test -n "$(remote_at refs/heads/110)"
-on 111 110; commit -m "#111 поверх опубликованного"; push 111
-delivered "опубликованный коммит не судится повторно — судится новый" refs/heads/111 "новых коммитов 1"
-push :110
-fact "снятие ссылки не судится — снято" test -z "$(remote_at refs/heads/110)"
-on 112; nv -m "hooks: метка"; push "HEAD:refs/tags/t112"
+on 110-x; nv -m "hooks: опубликован мимо стража"
+attempt git push -q --no-verify origin 110-x
+fact "фикстура: дефектный коммит опубликован мимо стража (--no-verify)" test -n "$(remote_at refs/heads/110-x)"
+on 111-x 110-x; commit -m "#111 поверх опубликованного"; push 111-x
+delivered "опубликованный коммит не судится повторно — судится новый" refs/heads/111-x "новых коммитов 1"
+push :110-x
+fact "снятие ссылки не судится — снято" test -z "$(remote_at refs/heads/110-x)"
+on 112-x; nv -m "hooks: метка"; push "HEAD:refs/tags/t112"
 stopped "метка на неопубликованном дефектном коммите — отказ: коммит уехал бы" refs/tags/t112 "не начинается с «#<N> »"
-on 113; commit -m "#113 x"
+on 113-x; commit -m "#113 x"
 mv "$F/scripts/hooks/git-rule-push.sh" "$work/push.aside"
-push 113
-stopped "стража правила нет рядом с pre-push — отказ, а не молчаливый пропуск" refs/heads/113 "git-rule-push.sh: правило git судить нечем"
+push 113-x
+stopped "стража правила нет рядом с pre-push — отказ, а не молчаливый пропуск" refs/heads/113-x "git-rule-push.sh: правило git судить нечем"
 mv "$work/push.aside" "$F/scripts/hooks/git-rule-push.sh"
-out="$(cd "$S" && printf 'refs/heads/7 %s refs/heads/7 %s\n' "$(git rev-parse HEAD)" 0000000000000000000000000000000000000000 |
+out="$(cd "$S" && printf 'refs/heads/7-x %s refs/heads/7-x %s\n' "$(git rev-parse HEAD)" 0000000000000000000000000000000000000000 |
     bash scripts/hooks/git-rule-push.sh origin 2>&1)"; rc=$?
 if printf '%s' "$out" | grep -qF "T0 не выведен"; then ok "мелкий клон: страж отправки называет, что T0 не выведен (код $rc)"
 else bad "мелкий клон: страж отправки не сказал «T0 не выведен» (код $rc)"; printf '%s\n' "$out" | sed 's/^/      | /'; fi
@@ -812,8 +855,12 @@ cat > "$work/api.py" <<'PY'
 import http.server, json, sys
 port_file, log_file, commits_file = sys.argv[1], sys.argv[2], sys.argv[3]
 REPO = "/repos/probe/corelib/issues/"
+BRANCHES = "/repos/probe/corelib/branches/"
+# Ветки площадки для переходного перечня: 42 есть (200), 5001 — сбой (500),
+# прочие — 404 {"message":"Branch not found"} (ответ GitHub о снятой ветке).
+LIVE_BRANCHES = {"42"}
 COMMITS = "/repos/probe/corelib/commits/"
-ISSUES = {1, 7, 8, 25, 26, 32, 41, 57, 58, 59}
+ISSUES = {1, 7, 8, 25, 26, 32, 41, 42, 43, 57, 58, 59}
 # Ответ о коммите — по записи «<sha> <вид> <родителей>» в commits_file,
 # прочитанной на каждом запросе. Вид server — слияние площадки (замер
 # 372daa90: login web-flow, verified true, адрес noreply@github.com). Прочие
@@ -855,6 +902,14 @@ class H(http.server.BaseHTTPRequestHandler):
         code, body = 404, {"message": "Not Found"}
         if self.path.startswith(COMMITS):
             code, body = commit_answer(self.path[len(COMMITS):])
+        elif self.path.startswith(BRANCHES):
+            b = self.path[len(BRANCHES):]
+            if b in LIVE_BRANCHES:
+                code, body = 200, {"name": b}
+            elif b == "5001":
+                code, body = 500, {"message": "Server Error"}
+            else:
+                code, body = 404, {"message": "Branch not found"}
         elif self.path.startswith(REPO) and self.path[len(REPO):].isdigit():
             n = int(self.path[len(REPO):])
             url = "https://api.example.invalid/repos/probe/corelib"
@@ -906,23 +961,23 @@ verdict() {
 # Ветки запроса: 25 — законная пачка (#25, #58, слияние #25 merge #8). У 26
 # база — вершина пачки, и диапазон несёт ровно один коммит — дефект случая;
 # прочие — по одному факту.
-on 25; commit -m "#25 хук коммита"; commit -m "#58 гейт целевых веток"; merge "$h8" -m "#25 merge #8: предмет восьмой"
+on 25-batch; commit -m "#25 хук коммита"; commit -m "#58 гейт целевых веток"; merge "$h8" -m "#25 merge #8: предмет восьмой"
 pr25="$(git -C "$F" rev-parse HEAD)"
-pr pull_request "#25 хуки и гейты" "Тело запроса. Снята строка шаблона Claude-Session: session_01probe — подставлялась." 25 "$h1" "$pr25"
+pr pull_request "#25 хуки и гейты" "Тело запроса. Снята строка шаблона Claude-Session: session_01probe — подставлялась." 25-batch "$h1" "$pr25"
 verdict "законный запрос пачки 25: #25, #58, слияние #25 merge #8, упоминание в теле" 0 "нарушений нет"
 fact "проверка запроса спрашивала API трекера о задачах 25, 58, 8 с ключом" \
     bash -c "grep -qx '/repos/probe/corelib/issues/25 Bearer probe-token' '$work/api.log' &&
              grep -qx '/repos/probe/corelib/issues/58 Bearer probe-token' '$work/api.log' &&
              grep -qx '/repos/probe/corelib/issues/8 Bearer probe-token' '$work/api.log'"
-pr pull_request "хуки и гейты" "" 25 "$h1" "$pr25"
+pr pull_request "хуки и гейты" "" 25-batch "$h1" "$pr25"
 verdict "заголовок без «#<N> » — отказ" 1 "заголовок не начинается с «#<N> »"
-pr pull_request "#26 хуки и гейты" "" 25 "$h1" "$pr25"
-verdict "заголовок «#26» у головы 25 — отказ: заголовок — акт ветки" 1 "заголовок «#26» у головы «25»"
-pr pull_request "#25 хуки и гейты, Generated with Claude Code" "" 25 "$h1" "$pr25"
+pr pull_request "#26 хуки и гейты" "" 25-batch "$h1" "$pr25"
+verdict "заголовок «#26» у головы 25 — отказ: заголовок — акт ветки" 1 "заголовок «#26» у головы «25-batch»"
+pr pull_request "#25 хуки и гейты, Generated with Claude Code" "" 25-batch "$h1" "$pr25"
 verdict "заголовок с атрибуцией — отказ" 1 "заголовок: атрибуция"
-pr pull_request "#25 хуки и гейты" "Тело."$'\n\n'"Co-Authored-By: Claude <noreply@example.invalid>" 25 "$h1" "$pr25"
+pr pull_request "#25 хуки и гейты" "Тело."$'\n\n'"Co-Authored-By: Claude <noreply@example.invalid>" 25-batch "$h1" "$pr25"
 verdict "тело с трейлером атрибуции — отказ" 1 "тело: атрибуция"
-pr pull_request "#25 хуки и гейты" "Тело."$'\n\n'"Co-authored-by: Иван Петров <ivan@example.org>" 25 "$h1" "$pr25"
+pr pull_request "#25 хуки и гейты" "Тело."$'\n\n'"Co-authored-by: Иван Петров <ivan@example.org>" 25-batch "$h1" "$pr25"
 verdict "тело с соавтором-человеком — отказ: запрещён ключ (#861)" 1 "тело: атрибуция"
 pr pull_request "#25 хуки и гейты" "" issue-25 "$h1" "$pr25"
 verdict "голова «issue-25» без коммита до T0 — отказ по имени" 1 "голова «issue-25»"
@@ -941,45 +996,73 @@ verdict "записан после T0 на основании старше пр�
 pr pull_request "#7 x" "" feature-x "$h1" "$vx_c"
 verdict "дата автора до T0 поверх правила, голова feature-x — отказ по голове и форме" 1 \
     "голова «feature-x»" "не начинается с «#<N> »" "второе предложение"
-pr pull_request "#7 x" "" 7 "$h1" "$vx_c"
+pr pull_request "#7 x" "" 7-x "$h1" "$vx_c"
 verdict "дата автора до T0 поверх правила, голова 7 — отказ по форме" 1 "не начинается с «#<N> »" "второе предложение"
 pr pull_request "#7 x" "" feature-y "$h1" "$vy_c"
 verdict "обе даты до T0 поверх правила — отказ: историю клиент не выбирает" 1 \
     "голова «feature-y»" "не начинается с «#<N> »"
 pr pull_request "#7 x" "" feature-z "$h1" "$bx_m"
 verdict "граница: обе даты до T0 на основании старше правила — не отличимо от работы до правила" 0 "нарушений нет"
-on 26 "$pr25"; nv -m "hooks: x"
-pr pull_request "#26 x" "" 26 "$pr25" "$(git -C "$F" rev-parse HEAD)"
+on 26-lane "$pr25"; nv -m "hooks: x"
+pr pull_request "#26 x" "" 26-lane "$pr25" "$(git -C "$F" rev-parse HEAD)"
 verdict "коммит после T0 без «#<N> » в запросе — отказ с его sha" 1 "не начинается с «#<N> »" "$(git -C "$F" rev-parse --short=10 HEAD)"
-on 26 "$pr25"; nv -m "#26 x" -m "Co-authored-by: Claude <noreply@example.invalid>"
-pr pull_request "#26 x" "" 26 "$pr25" "$(git -C "$F" rev-parse HEAD)"
+on 26-lane "$pr25"; nv -m "#26 x" -m "Co-authored-by: Claude <noreply@example.invalid>"
+pr pull_request "#26 x" "" 26-lane "$pr25" "$(git -C "$F" rev-parse HEAD)"
 verdict "коммит с атрибуцией в запросе — отказ" 1 "атрибуция в сообщении"
-on 27; echo 8b > "$F/eight-b.txt"; git -C "$F" add eight-b.txt; commit -m "#8 предмет второй"
+on 27-x; echo 8b > "$F/eight-b.txt"; git -C "$F" add eight-b.txt; commit -m "#8 предмет второй"
 h8b="$(git -C "$F" rev-parse HEAD)"
-on 26 "$pr25"; attempt git merge -q --no-ff --no-verify "$h8b" -m "#9 merge #8: предмет второй"
+on 26-lane "$pr25"; attempt git merge -q --no-ff --no-verify "$h8b" -m "#9 merge #8: предмет второй"
 fact "фикстура: на ветке 26 записано слияние (два родителя)" \
     test "$(git -C "$F" log -1 --format=%P | wc -w)" -eq 2
-pr pull_request "#26 x" "" 26 "$pr25" "$(git -C "$F" rev-parse HEAD)"
-verdict "слияние «#9» на первой цепочке головы 26 — отказ" 1 "«#9» на ветке «26»"
-on 26 "$pr25"; merge "$h8b" -m "#26 merge #8: предмет второй"
-pr pull_request "#26 x" "" 26 "$pr25" "$(git -C "$F" rev-parse HEAD)"
+pr pull_request "#26 x" "" 26-lane "$pr25" "$(git -C "$F" rev-parse HEAD)"
+verdict "слияние «#9» на первой цепочке головы 26 — отказ" 1 "«#9» на ветке «26-lane»"
+on 26-lane "$pr25"; merge "$h8b" -m "#26 merge #8: предмет второй"
+pr pull_request "#26 x" "" 26-lane "$pr25" "$(git -C "$F" rev-parse HEAD)"
 verdict "близнец: слияние «#26 merge #8» на голове 26 — законно" 0 "нарушений нет"
 # Номер влитой ветки M называет ТОЛЬКО первая строка слияния: у влитого коммита
 # свой номер (#8), и сверка M держится лишь сбором номеров слияния.
-on 26 "$pr25"; merge "$h8b" -m "#26 merge #99999: предмет второй"
-pr pull_request "#26 x" "" 26 "$pr25" "$(git -C "$F" rev-parse HEAD)"
+on 26-lane "$pr25"; merge "$h8b" -m "#26 merge #99999: предмет второй"
+pr pull_request "#26 x" "" 26-lane "$pr25" "$(git -C "$F" rev-parse HEAD)"
 verdict "«#26 merge #99999: …» — M не задача этого репозитория: отказ" 1 "нет задачи #99999"
 for case in "99999|нет задачи #99999" "46|#46 — запрос, а не задача" "4100|нет задачи #4100" "3010|задача #3010 перенесена"; do
     n="${case%%|*}"; why="${case#*|}"
-    on 26 "$pr25"; nv -m "#$n x"
-    pr pull_request "#26 x" "" 26 "$pr25" "$(git -C "$F" rev-parse HEAD)"
+    on 26-lane "$pr25"; nv -m "#$n x"
+    pr pull_request "#26 x" "" 26-lane "$pr25" "$(git -C "$F" rev-parse HEAD)"
     verdict "«#$n …» — не задача этого репозитория: отказ" 1 "$why"
 done
-pr pull_request "#99999 x" "" 99999 "$h1" "$pr25"
+pr pull_request "#99999 x" "" 99999-x "$h1" "$pr25"
 verdict "номер заголовка и головы — тоже задача этого репозитория: отказ" 1 "нет задачи #99999"
-on 26 "$pr25"; nv -m "#5000 x"
-pr pull_request "#26 x" "" 26 "$pr25" "$(git -C "$F" rev-parse HEAD)"
+on 26-lane "$pr25"; nv -m "#5000 x"
+pr pull_request "#26 x" "" 26-lane "$pr25" "$(git -C "$F" rev-parse HEAD)"
 verdict "API трекера ответил 500 — судить не смог: исход 2, а не зелёное" 2 "500"
+# Голова и переходный перечень (corelib#79).
+pr pull_request "#25 хуки и гейты" "" 25 "$h1" "$pr25"
+verdict "голова «25» — голый номер вне перечня: отказ" 1 "голова «25»: голый номер «25»"
+on 42 "$pr25"; commit -m "#42 x"
+pr42="$(git -C "$F" rev-parse HEAD)"
+pr pull_request "#42 релиз" "" 42 "$pr25" "$pr42"
+verdict "близнец: голова «42» из перечня, ветка на площадке есть — законно" 0 "нарушений нет" \
+    "переходный перечень голых номеров (scripts/hooks/git-rule-bare-branches.txt): записей 1, ветка есть на площадке у 1"
+fact "проверка запроса спрашивала площадку о ветке 42 переходного перечня" \
+    grep -qx '/repos/probe/corelib/branches/42 Bearer probe-token' "$work/api.log"
+pr pull_request "#25 хуки и гейты" "" 25-Batch "$h1" "$pr25"
+verdict "голова «25-Batch» — суть не в нижнем регистре: отказ" 1 "голова «25-Batch»"
+printf '42 релиз\n44 влитая ветка\n' > "$F/scripts/hooks/git-rule-bare-branches.txt"
+pr pull_request "#25 хуки и гейты" "" 25-batch "$h1" "$pr25"
+verdict "запись перечня о ветке, которой на площадке нет (404), — отказ: запись пережила предмет" 1 \
+    "ветки «44» на площадке нет (ответ 404)"
+printf '42 релиз\nrelease-26 не номер\n' > "$F/scripts/hooks/git-rule-bare-branches.txt"
+pr pull_request "#25 хуки и гейты" "" 25-batch "$h1" "$pr25"
+verdict "строка перечня не той формы — отказ" 1 "строка «release-26 не номер»"
+printf '42 релиз\n5001 сбой площадки\n' > "$F/scripts/hooks/git-rule-bare-branches.txt"
+pr pull_request "#25 хуки и гейты" "" 25-batch "$h1" "$pr25"
+verdict "площадка ответила 500 о ветке перечня — судить не смог: исход 2" 2 "ветка 5001 переходного перечня (ответ 500)"
+printf '# записей нет\n' > "$F/scripts/hooks/git-rule-bare-branches.txt"
+pr pull_request "#25 хуки и гейты" "" 25-batch "$h1" "$pr25"
+verdict "перечень без записей — цель, а не отказ" 0 "нарушений нет" "записей 0"
+pr pull_request "#42 релиз" "" 42 "$pr25" "$pr42"
+verdict "перечень пуст — голова «42» отвергнута" 1 "голова «42»: голый номер «42»"
+git -C "$F" checkout -q -- scripts/hooks/git-rule-bare-branches.txt
 
 # ── СЕРВЕРНОЕ СЛИЯНИЕ (corelib#70) ───────────────────────────────────────────
 # Слияние запроса, собранное площадкой: два родителя, коммиттер «GitHub
@@ -1010,7 +1093,7 @@ server_merge() {
         git -C "$F" commit-tree "${parents[@]}" -F - "$pr25^{tree}")" || void "серверное слияние фикстуры не собрано"
     [ "$1" = none ] || printf '%s %s %s\n' "$srv" "$1" "$n" >> "$work/api.commits"
 }
-srvpr() { pr pull_request "#26 x" "" 26 "$pr25" "$srv"; }
+srvpr() { pr pull_request "#26 x" "" 26-lane "$pr25" "$srv"; }
 server_merge server "#25 сборка пачки: предмет второй (#46)"
 srv_ok="$srv"
 srvpr
@@ -1041,7 +1124,7 @@ for twin in "unverified:подпись не проверена (verified false)"
     server_merge "${twin%%:*}" "#25 сборка пачки: предмет второй (#46)"
     srvpr
     verdict "подделка — ${twin#*:}, прочее как у слияния площадки: судится как слияние клиента, отказ" 1 \
-        "${srv:0:10} слияние — «#<N> merge #<M>: …»" "${srv:0:10} слияние «#25» на ветке «26»"
+        "${srv:0:10} слияние — «#<N> merge #<M>: …»" "${srv:0:10} слияние «#25» на ветке «26-lane»"
 done
 server_merge none "#25 сборка пачки: предмет второй (#46)"
 srvpr
@@ -1077,16 +1160,16 @@ server_merge server "#25 сборка пачки (#46)" "$body17"
 srvpr
 verdict "запись прощает свой sha, а не класс: второе такое же слияние — отказ" 1 "${srv:0:10} тело — 17 строк"
 printf '%s длина %s\n' "$srv17" "$reason" > "$ledger"
-pr pull_request "#26 x" "" 26 "$pr25" "$srv17"
+pr pull_request "#26 x" "" 26-lane "$pr25" "$srv17"
 verdict "класс записи не из словаря — отказ, записью не прощено" 1 "класс «длина» не из словаря" "${srv17:0:10} тело — 17 строк"
 printf '%s тело\n' "$srv17" > "$ledger"
-pr pull_request "#26 x" "" 26 "$pr25" "$srv17"
+pr pull_request "#26 x" "" 26-lane "$pr25" "$srv17"
 verdict "запись без причины — отказ" 1 "без причины"
-on 26 "$pr25"; nv -m "#26 x" -m "$body17"
+on 26-lane "$pr25"; nv -m "#26 x" -m "$body17"
 own17="$(git -C "$F" rev-parse HEAD)"
 mkdir -p "$F/.github/scripts"
 printf '%s тело %s\n' "$own17" "$reason" > "$ledger"
-pr pull_request "#26 x" "" 26 "$pr25" "$own17"
+pr pull_request "#26 x" "" 26-lane "$pr25" "$own17"
 verdict "запись у коммита клиента — отказ: свой коммит переписывается, а не прощается" 1 \
     "${own17:0:10} — не серверное слияние" "${own17:0:10} тело — 17 строк"
 # Близнец законной записи (srv17) в один факт: коммит площадки подтверждён
@@ -1103,19 +1186,19 @@ srvpr
 verdict "запись о коммите, которого нет в клоне, — отказ: исключать нечего" 1 "0123456789 — коммита нет в клоне"
 printf '%s тело %s\n' "$srv17" "$reason" > "$ledger"
 git -C "$F" update-ref refs/heads/main "$srv17" || void "ссылка main фикстуры не переставлена"
-pr pull_request "#26 x" "" 26 "$pr25" "$srv17"
+pr pull_request "#26 x" "" 26-lane "$pr25" "$srv17"
 verdict "запись о коммите, уже влитом в main, — отказ: запись пережила предмет" 1 "${srv17:0:10} — уже предок main"
 git -C "$F" update-ref refs/heads/main "$h1" || void "ссылка main фикстуры не возвращена"
 printf '# записей нет\n' > "$ledger"
-pr pull_request "#26 x" "" 26 "$pr25" "$srv_ok"
+pr pull_request "#26 x" "" 26-lane "$pr25" "$srv_ok"
 verdict "ведомость без записей — цель, а не отказ: законный запрос зелёный, перепись названа" 0 \
     "нарушений нет" "записей послабления 0"
 rm -rf "$F/.github"
 pr push "" "" "" "" ""
 verdict "событие не запрос (push) — судить нечего, и это сказано" 0 "запроса нет"
-pr pull_request "#1 x" "" 1 "$h0" "$h0"
+pr pull_request "#1 x" "" 1-x "$h0" "$h0"
 verdict "T0 не выведен (в истории запроса правила нет) — исход 2" 2 "T0 не выведен"
-pr pull_request "#7 x" "" 7 "$h1" "$(git -C "$S" rev-parse HEAD)" "$S"
+pr pull_request "#7 x" "" 7-x "$h1" "$(git -C "$S" rev-parse HEAD)" "$S"
 verdict "мелкий клон — диапазон неполон: исход 2" 2 "мелкий"
 out="$(cd "$F" && env -i PATH="$PATH" HOME="$HOME" GITHUB_EVENT_NAME=pull_request bash "$PRCHECK" 2>&1)"; rc=$?
 verdict "вход не задан (нет PR_TITLE) — исход 2" 2 "не задан"
@@ -1131,7 +1214,7 @@ if ! { git -C "$G" init -q && git -C "$G" add -A && git -C "$G" commit -qm "fixt
     void "контрольная фикстура не собрана"
 fi
 (cd "$G" && bash scripts/hooks/install.sh install) >/dev/null 2>&1 || void "контрольная фикстура не провязана"
-git -C "$G" checkout -q -b 7
+git -C "$G" checkout -q -b 7-x
 out="$(git -C "$G" commit -q --allow-empty -m "hooks: x" -m "Co-Authored-By: Claude <noreply@example.invalid>" 2>&1)"; rc=$?
 if [ "$rc" -eq 0 ] && [ "$(git -C "$G" log -1 --format=%s)" = "hooks: x" ]; then
     ok "контроль: без хука коммита «hooks: x» с атрибуцией записан — дефект воспроизводим"
@@ -1147,7 +1230,7 @@ bypassed() {
     if [ "$rc" -eq 0 ] && [ "$got" = "$want" ]; then ok "граница: $name — записано «$got»"
     else bad "граница: $name — код $rc, первая строка «$got»: слепая зона шапки хука не подтверждена"; printf '%s\n' "$out" | sed 's/^/      | /'; fi
 }
-on 7; commit --no-verify -m "hooks: x"
+on 7-x; commit --no-verify -m "hooks: x"
 bypassed "git commit --no-verify" "hooks: x"
 # src_c — коммит с дефектной первой строкой поверх коммита правила, собран без
 # хука (commit-tree на своём индексе): его переносят команды ниже.
@@ -1156,24 +1239,24 @@ src_tree="$(cd "$F" && GIT_INDEX_FILE="$work/src.idx" git read-tree "$h1" &&
     GIT_INDEX_FILE="$work/src.idx" git update-index --add --cacheinfo "100644,$blob,src.txt" &&
     GIT_INDEX_FILE="$work/src.idx" git write-tree)" || void "дерево переносимого коммита не собрано"
 src_c="$(git -C "$F" commit-tree -p "$h1" -m "hooks: src" "$src_tree")" || void "переносимый коммит не собран"
-on 7; attempt git cherry-pick "$src_c"
+on 7-x; attempt git cherry-pick "$src_c"
 bypassed "git cherry-pick" "hooks: src"
-on 7 "$src_c"; attempt git revert --no-edit HEAD
+on 7-x "$src_c"; attempt git revert --no-edit HEAD
 bypassed "git revert --no-edit" "Revert \"hooks: src\""
-on 7; echo base > "$F/base.txt"; git -C "$F" add base.txt; commit -m "#7 база"
+on 7-x; echo base > "$F/base.txt"; git -C "$F" add base.txt; commit -m "#7 база"
 h7b="$(git -C "$F" rev-parse HEAD)"
-on 9 "$src_c"; attempt git rebase -q "$h7b"
+on 9-x "$src_c"; attempt git rebase -q "$h7b"
 bypassed "git rebase (без -i)" "hooks: src"
-on 7; git -C "$F" format-patch -q -1 "$src_c" -o "$work/patches" >/dev/null
+on 7-x; git -C "$F" format-patch -q -1 "$src_c" -o "$work/patches" >/dev/null
 attempt git am -q "$work/patches"/*.patch
 bypassed "git am" "hooks: src"
-on 7
+on 7-x
 # shellcheck disable=SC2016  # раскрывает дочерний bash в фикстуре
 attempt bash -c 'git reset -q --hard "$(git commit-tree -p HEAD -m "hooks: tree" "HEAD^{tree}")"'
 bypassed "git commit-tree" "hooks: tree"
-on 7; commit --cleanup=strip -m "#7 x" -m "тело стало первой строкой"
+on 7-x; commit --cleanup=strip -m "#7 x" -m "тело стало первой строкой"
 bypassed "--cleanup=strip в командной строке (хук видит «#7 x», git записывает тело)" "тело стало первой строкой"
-on 7; merge 8 --no-verify -m "hooks: merge"
+on 7-x; merge 8-y --no-verify -m "hooks: merge"
 bypassed "git merge --no-verify" "hooks: merge"
 
 # ── ПРОВЯЗКА В МЕХАНИЗМЫ: Makefile и ci.yml зовут пробу и проверку запроса ───
