@@ -363,6 +363,16 @@ const (
 	// без неё `validate.ResourceID` отвергал бы корректный `id` строки, который
 	// сама служба и выдала.
 	PrefixNotificationHyphen = "ntf"
+	// PrefixNoticeHyphen — notify Notice (`ntc-…`): извещение оператора об
+	// обслуживании, сбое, выводе из эксплуатации и приостановке (NTF-5,
+	// PRO-Robotech/kacho#2924; приёмка NTF-5, Р3). NewHyphenID("ntc") →
+	// "ntc-<17-base32>" (21 символ).
+	//
+	// Запись здесь обязательна по тому же классу, что у `lim`, `mbr` и `ak`:
+	// без неё `validate.ResourceID` отвергал бы корректный `id`, который служба
+	// `notify` сама и выдала, и публичный и внутренний `Get` извещения отвечали
+	// бы `INVALID_ARGUMENT` на всяком входе.
+	PrefixNoticeHyphen = "ntc"
 )
 
 // hyphenFormPrefixes — going-forward hyphen-form id prefixes (B3, redesign-2026
@@ -441,6 +451,9 @@ var hyphenFormPrefixes = []string{
 	PrefixCidrGroupHyphen,
 	// nlb: LoadBalancer/Listener/TargetGroup
 	"nlb", "lst", "tgr",
+	// notify: Notice — извещение оператора (NTF-5, Р3). Именованная константа:
+	// единый источник истины с NewHyphenID-генерацией службы `notify`.
+	PrefixNoticeHyphen,
 	// geo — НАМЕРЕННО отсутствует: Region/Zone используют human-slug (ru-central1,
 	// ru-central1-a), THE ONE документированный carve-out из <prefix>-<base32> (B3).
 	// per-domain Operation-prefix'ы (sop/enp/iop/rop/aop/epd) — тоже legacy-concat,
