@@ -1,0 +1,272 @@
+#!/usr/bin/env bash
+# Copyright (c) PRO-Robotech
+# SPDX-License-Identifier: Apache-2.0
+#
+# Хук отправки: то, что первым делом проверяет ci.yml, — локально, ДО конвейера.
+# Экземпляр свой, не копия (ban20): состав свой — один Go-модуль, и в корневом
+# Makefile только цели провязки, поэтому инструменты зовутся напрямую, как в ci.yml.
+#
+# ЧТО ГОНИТСЯ: build · vet · gofmt · golangci-lint (пин v2.12.2, тот же, что в
+# ci.yml: расхождение версии дало бы другой вердикт об одном дереве, и молча) ·
+# go test -short -count=1 с вердиктом ТОГО ЖЕ прогонщика, что в задании unit
+# (.github/scripts/go-test-verdict.py): «ok» голого go test не отличает прошедшие
+# пробы от пропущенных и от отсутствующих. `-short` здесь — выключатель
+# контейнеров, а не урезание по вкусу: тега сборки у интеграционных проб нет
+# (`git ls-files '*_test.go' | xargs grep -lE '^//go:build' | wc -l` → 0),
+# `pgtest` объявляет пропуск по `testing.Short()`. Замер на дереве волны 32:
+# 99 пакетов, 3073 пробы, пропущено 191, 30 с. `-count=1` обязателен: пробы
+# дерева (treehygiene, treecorpus, internal/engineconfinement) отказываются
+# работать на прогоне, который go test кеширует (treecorpus/cachedverdict.go).
+#
+# ЧТО НЕ ГОНИТСЯ — печатается на КАЖДОМ пути выхода (`finish`): -race (его
+# гонит задание unit; хук обязан быть быстрым, а детектор гонок пересобирает
+# всё дерево своим режимом), интеграция с Postgres (контейнеры), gosec (своя
+# установка инструмента ради того же) и govulncheck (судит базу уязвимостей, а
+# не дерево).
+#
+# ПРОВЯЗКА КЛОНА — ПРЕДПОСЫЛКА, А НЕ ПРОВЕРКА. Хук спрашивает `install.sh check`
+# до проверок и отказывает, если клон провязан не так: переходник прежней
+# редакции (v1) исполняет этот файл, раз он есть, — но на дереве без него
+# выходит нулём, и СЛЕДУЮЩАЯ отправка такого дерева уехала бы непроверенной
+# молча. Отказ здесь — единственный момент, когда v1 виден: в дереве его нет,
+# он живёт в клоне. В перепись проверок провязка не входит: она о клоне, а не о
+# дереве, и «исполнено 1 из 1» на ней было бы зелёным о нуле осмотренного.
+#
+# СУДИТСЯ ОТПРАВЛЯЕМАЯ РЕВИЗИЯ. Проверки читают диск рабочей копии, а уезжает
+# коммит. Вершина отправки не равна HEAD либо в копии есть правки или
+# неотслеживаемое — ОТКАЗ: вердикт был бы о другом дереве. Разных вершин в
+# одной отправке больше одной — ОТКАЗ по той же причине. Отправка одних снятий
+# ссылок содержимого не везёт — код 0 с переписью. Пустой вход (хук позван
+# руками) — судится рабочая копия, и это печатается.
+#
+# ИСХОДЫ: 0 — исполнена хотя бы одна проверка, красных 0; 1 — красное либо
+# отказ по предмету; 2 — не исполнено ни одной: «отказов 0» при нуле
+# исполненного — «спросить было не у кого», а не зелёное. Проверка без условия
+# (нет инструмента, версия линтера не равна пину) — третья категория: названа
+# поимённо, в «исполнено» не входит, отправку одна не останавливает.
+#
+# ПРАВИЛО GIT — ПЕРВЫМ, до провязки, проверок и обхода: имя новой ветки и
+# ЗАПИСАННЫЕ коммиты отправки судит scripts/hooks/git-rule-push.sh (предикат —
+# scripts/hooks/git-rule.sh, общий с хуком коммита и проверкой запроса). Нет
+# стража рядом с хуком — отказ: хук без него выпускал бы нарушение молча.
+#
+# ОБХОД ОДИН: `CORELIB_SKIP_PREPUSH=1` — снимает ПРОВЕРКИ дерева, а не правило
+# git, и печатает строку и перечень непроверенного. Обхода по имени ветки нет:
+# ветка — номер задачи (правило 2026-09-22), а пропуск `wip/*`/`tmp/*` вёз
+# дерево непроверенным и не был объявлен обходом. `git push --no-verify` обходит
+# хук средствами git до его запуска и сказать о себе отсюда не может.
+#
+# КЭШ ЛИНТЕРА — в каталоге git ЭТОЙ рабочей копии: общий на машину отдаёт
+# полосе чужой вердикт, а в дереве он стал бы неотслеживаемым файлом и сам
+# сделал бы копию «грязной».
+#
+# Установка: `make install-hooks`; провязку проверяет `make check-hooks`.
+# Проба этого файла и провязки — scripts/hooks/inject.sh, стража правила git —
+# scripts/hooks/git-rule-inject.sh (обе — `make probe-hooks`).
+set -uo pipefail
+exec 1>&2
+
+GOLANGCI_LINT_VERSION="v2.12.2"
+NOT_RUN="-race · интеграция с Postgres · gosec · govulncheck"
+
+declared=0
+executed=0
+red=()
+unmet=()
+why=""
+
+finish() {
+    local code="$1"; shift
+    printf '%s\n' "$@"
+    echo "   исполнено проверок: $executed · здесь НЕ гонялось: $NOT_RUN"
+    echo "   («хук зелен» не значит «конвейер зелен»)"
+    exit "$code"
+}
+
+# Инструменты САМОГО хука и провязки, которую он спрашивает (не проверок: их
+# отсутствие — «без условия» у своей проверки). Без любого из них разбор
+# отправки и копии дал бы пустую строку, и отказ назвал бы ложную причину.
+for t in git grep sed sort wc head mkdir tr date cat; do
+    command -v "$t" >/dev/null 2>&1 ||
+        finish 2 "pre-push: ОТКАЗ — нет $t в PATH: это инструмент самого хука, без него не прочесть ни отправку, ни копию"
+done
+
+ROOT="$(git rev-parse --show-toplevel 2>/dev/null)" ||
+    finish 2 "pre-push: ОТКАЗ — корень рабочей копии не установлен: судить нечего и негде"
+# Состояние хука — в каталоге git ЭТОЙ рабочей копии (см. «КЭШ ЛИНТЕРА»).
+state_dir="$(git rev-parse --absolute-git-dir 2>/dev/null)/corelib-prepush"
+lint_cache="$state_dir/golangci-lint"
+# Окружение git проверкам не наследуется: с выставленным GIT_DIR git в
+# дочерних процессах определял бы репозиторий по переменной, а не по каталогу.
+unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_OBJECT_DIRECTORY \
+      GIT_ALTERNATE_OBJECT_DIRECTORIES GIT_COMMON_DIR GIT_PREFIX
+cd "$ROOT" || finish 2 "pre-push: ОТКАЗ — в корень рабочей копии не перейти: $ROOT"
+
+# ── ЧТО УЕЗЖАЕТ: строки `<local_ref> <local_sha> <remote_ref> <remote_sha>` ──
+# Вход читается один раз: его судят и страж правила, и проверки ниже.
+push_input=""
+[ -t 0 ] || push_input="$(cat)"
+refs=0
+tips=()
+while read -r _lref lsha _rref _rsha; do
+    [ -n "${lsha:-}" ] || continue
+    refs=$((refs + 1))
+    case "$lsha" in *[!0]*) ;; *) continue ;; esac   # одни нули — снятие ссылки
+    c="$(git rev-parse --verify --quiet "$lsha^{commit}")" ||
+        finish 1 "pre-push: ОТКАЗ — отправляемый объект $lsha не сводится к коммиту: судить нечего"
+    tips+=("$c")
+done <<<"$push_input"
+
+# ── ПРАВИЛО GIT: имя ветки и записанные коммиты — до всего остального ──────
+rule_guard="$ROOT/scripts/hooks/git-rule-push.sh"
+[ -f "$rule_guard" ] ||
+    finish 1 "pre-push: ОТКАЗ — нет $rule_guard: правило git судить нечем"
+rule_out="$(bash "$rule_guard" "${1:-origin}" <<<"$push_input" 2>&1)"
+rule_rc=$?
+printf '%s\n' "$rule_out"
+case "$rule_rc" in
+    0) ;;
+    2) finish 1 "pre-push: ОТКАЗ — правило git судить не с чем (код 2): отправка остановлена" ;;
+    *) finish 1 "pre-push: ОТКАЗ — правило git нарушено (код $rule_rc): отправка остановлена" ;;
+esac
+
+if [ "${CORELIB_SKIP_PREPUSH:-0}" = "1" ]; then
+    finish 0 "pre-push: пропущен по CORELIB_SKIP_PREPUSH=1 — правило git судилось, локальные проверки НЕ выполнялись"
+fi
+
+# ── ПРОВЯЗКА КЛОНА: предпосылка вердикта о СЛЕДУЮЩЕЙ отправке ──────────────
+installer="$ROOT/scripts/hooks/install.sh"
+[ -f "$installer" ] ||
+    finish 1 "pre-push: ОТКАЗ — провязка клона: нет $installer — судить провязку нечем"
+wiring="$(bash "$installer" check 2>&1)"
+wiring_rc=$?
+if [ "$wiring_rc" -ne 0 ]; then
+    finish 1 "pre-push: ОТКАЗ — провязка клона (install.sh check, код $wiring_rc):" \
+             "$(printf '%s\n' "$wiring" | sed 's/^/  | /')" \
+             "  Клон, провязанный не так, пропустит дерево без хука молча. Перепровязать:" \
+             "  make install-hooks"
+fi
+
+subject="рабочая копия $ROOT (входа отправки нет — хук позван руками)"
+if [ "$refs" -gt 0 ] && [ "${#tips[@]}" -eq 0 ]; then
+    finish 0 "pre-push: ссылок в отправке $refs, все — снятия: содержимого не уезжает, проверять нечего"
+fi
+if [ "${#tips[@]}" -gt 0 ]; then
+    distinct="$(printf '%s\n' "${tips[@]}" | sort -u | wc -l)"
+    [ "$distinct" -eq 1 ] ||
+        finish 1 "pre-push: ОТКАЗ — отправка несёт $distinct разных вершин: вердикт был бы об одной, уехали бы все." \
+                 "  Отправляйте ветки по одной."
+    tip="${tips[0]}"
+    head="$(git rev-parse --verify --quiet 'HEAD^{commit}' || true)"
+    [ "$tip" = "$head" ] ||
+        finish 1 "pre-push: ОТКАЗ — уезжает $tip, а рабочая копия стоит на ${head:-<HEAD не разрешается>}:" \
+                 "  проверки судили бы другое дерево. Отправляйте из копии, стоящей на отправляемой ревизии."
+    st="$(git status --porcelain)" ||
+        finish 1 "pre-push: ОТКАЗ — состояние рабочей копии не прочитано: чистоту судимого дерева не установить"
+    dirty="$(printf '%s' "$st" | grep -c .)"
+    [ "$dirty" -eq 0 ] ||
+        finish 1 "pre-push: ОТКАЗ — в рабочей копии правок и неотслеживаемых файлов: $dirty." \
+                 "  Сборка и линтер читают диск: вердикт был бы о дереве, которого в $tip нет." \
+                 "  Закоммитьте либо уберите их (git stash -u) и повторите."
+    subject="ревизия $tip (= HEAD, рабочая копия чистая)"
+fi
+
+echo "== pre-push (corelib): судится $subject"
+echo "   провязка клона: $(printf '%s\n' "$wiring" | grep -m1 '^хуки:')"
+
+# check <имя> <функция>: функция возвращает код проверки; условие не создано —
+# объявляет его в `why`, не исполняя проверку. Категорию даёт `why`, а не код:
+# у golangci-lint код 3 — его собственный отказ, и выводить из кода «без
+# условия» значило бы обнулять красное.
+check() {
+    local name="$1" rc
+    declared=$((declared + 1))
+    why=""
+    echo ""
+    echo "-- $name --"
+    "$2"; rc=$?
+    if [ -n "$why" ]; then
+        unmet+=("$name: $why")
+        echo "УСЛОВИЕ НЕ СОЗДАНО: $why — вердикта о «$name» нет"
+        return
+    fi
+    executed=$((executed + 1))
+    if [ "$rc" -eq 0 ]; then echo "ok"; else red+=("$name"); echo "КРАСНОЕ: $name (код $rc)"; fi
+}
+
+need() { command -v "$1" >/dev/null 2>&1 && return 0; why="$1 не найден в PATH"; return 1; }
+
+c_build() { need go || return; go build ./...; }
+c_vet()   { need go || return; go vet ./...; }
+c_gofmt() {
+    need gofmt || return
+    local files out
+    files="$(git ls-files '*.go')"
+    if [ -z "$files" ]; then
+        echo "обход пуст — ни одного файла Go не прочитано: «ноль неотформатированных» было бы «ноль прочитанного»"
+        return 1
+    fi
+    # shellcheck disable=SC2086  # пути индекса без пробелов; тот же обход, что в ci.yml
+    out="$(gofmt -l $files)" || { echo "gofmt не разобрал дерево"; return 1; }
+    [ -z "$out" ] || { echo "требуется gofmt:"; echo "$out"; return 1; }
+    echo "прочитано файлов Go: $(printf '%s\n' "$files" | wc -l)"
+}
+c_lint() {
+    need golangci-lint || return
+    local have want="${GOLANGCI_LINT_VERSION#v}"
+    have="$(golangci-lint version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)"
+    if [ "$have" != "$want" ]; then
+        why="в PATH golangci-lint ${have:-без версии}, пин конвейера $want (go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$GOLANGCI_LINT_VERSION)"
+        return
+    fi
+    mkdir -p "$lint_cache" || return 1
+    GOLANGCI_LINT_CACHE="$lint_cache" golangci-lint run --timeout=5m --config=.github/golangci.yml ./...
+}
+
+# c_test — пробы -short с числовым вердиктом прогонщика задания unit. Код go
+# test берётся данными: вердикт выносит прогонщик, но зелёный разбор при
+# ненулевом коде — расхождение, а не зелёное. Ноль исполненных проб (их нет
+# либо все пропущены под -short) прогонщик называет БЕСПРЕДМЕТНЫМ, и проверка
+# красная — как у gofmt пустой обход: «отказов 0» при нуле исполненного не
+# зелёное. Поток JSON остаётся в каталоге git копии: по нему видно, ЧТО упало,
+# после того как хук отказал.
+c_test() {
+    need go || return
+    need python3 || return
+    local verdict_py=".github/scripts/go-test-verdict.py" json rc_go=0 rc_v diag
+    if [ ! -f "$verdict_py" ]; then
+        echo "прогонщика вердикта нет в дереве: $verdict_py — числа исполненного спросить не у кого"
+        return 1
+    fi
+    mkdir -p "$state_dir" || return 1
+    json="$state_dir/go-test.json"
+    go test ./... -short -count=1 -timeout 10m -json > "$json" 2>&1 || rc_go=$?
+    diag="$(grep -v '^{' "$json")"
+    if [ -n "$diag" ]; then
+        echo "вывод go test вне JSON (диагностика сборки):"
+        printf '%s\n' "$diag" | head -40
+    fi
+    python3 "$verdict_py" < "$json"; rc_v=$?
+    if [ "$rc_v" -eq 0 ] && [ "$rc_go" -ne 0 ]; then
+        echo "go test вышел кодом $rc_go при зелёном разборе — вердикт не сходится с кодом"
+        rc_v=1
+    fi
+    [ "$rc_v" -eq 0 ] || echo "поток проб: $json"
+    [ "$rc_v" -eq 0 ] || return 1
+}
+
+check "сборка" c_build
+check "vet" c_vet
+check "gofmt" c_gofmt
+check "golangci-lint (пин $GOLANGCI_LINT_VERSION)" c_lint
+check "go test -short" c_test
+
+echo ""
+echo "== перепись: проверок объявлено $declared · исполнено $executed (красных ${#red[@]}) · без условия ${#unmet[@]}"
+for u in "${unmet[@]}"; do echo "   без условия — $u"; done
+
+[ "${#red[@]}" -eq 0 ] ||
+    finish 1 "pre-push ОТКАЗ: красные — ${red[*]}. Отправка остановлена."
+[ "$executed" -gt 0 ] ||
+    finish 2 "pre-push ОТКАЗ: исполнено НОЛЬ проверок из $declared — зелёным «ноль осмотренного» не бывает."
+finish 0 "pre-push (corelib): исполнено $executed из $declared, красных 0 — отправляю"
