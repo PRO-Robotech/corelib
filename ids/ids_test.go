@@ -147,6 +147,7 @@ func TestKnownPrefixes_EveryConstantIsMember(t *testing.T) {
 		"PrefixOperationCompute": PrefixOperationCompute,
 		"PrefixOperationNLB":     PrefixOperationNLB,
 		"PrefixOperationApps":    PrefixOperationApps,
+		"PrefixOperationNotify":  PrefixOperationNotify,
 	}
 	for name, val := range consts {
 		if _, ok := knownPrefixes[val]; !ok {

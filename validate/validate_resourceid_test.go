@@ -58,6 +58,7 @@ var allIDPrefixes = func() map[string]string {
 		"PrefixOperationVPC":     ids.PrefixOperationVPC,
 		"PrefixOperationCompute": ids.PrefixOperationCompute,
 		"PrefixOperationNLB":     ids.PrefixOperationNLB,
+		"PrefixOperationNotify":  ids.PrefixOperationNotify,
 		// IAM domain constants (mirrored literals)
 		"iam.PrefixAccount":         "acc",
 		"iam.PrefixProject":         "prj",

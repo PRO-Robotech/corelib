@@ -120,6 +120,11 @@ const (
 	PrefixOperationNLB     = PrefixLoadBalancer // nlb: nlb
 	PrefixOperationApps    = "aop"              // apps op-root (декаплен от PrefixApplication)
 	PrefixOperationStorage = "sop"              // storage op-root (декаплен от PrefixVolume; opsproxy sop→storage)
+	// PrefixOperationNotify — op-root notify (NTF-4, правка Х1; kacho#2919):
+	// операции `Delete` записи подавления чеканятся NewID(PrefixOperationNotify),
+	// край маршрутизирует их Operation.Get/Cancel по записи prefixToBackend nop → notify.
+	// Ресурса со слитной формой у notify нет — префикс операций ни с чем не делится.
+	PrefixOperationNotify = "nop"
 )
 
 // NewID возвращает идентификатор формата "<prefix><17-char crockford-base32>"
@@ -265,6 +270,7 @@ func allKnownPrefixValues() []string {
 		PrefixLoadBalancer, PrefixListener, PrefixTargetGroup,
 		PrefixApplication, PrefixRegistry,
 		PrefixOperationVPC, PrefixOperationApps, PrefixOperationReg, PrefixOperationStorage,
+		PrefixOperationNotify,
 	}
 	return append(vals, domainStringPrefixes...)
 }
@@ -373,6 +379,16 @@ const (
 	// `notify` сама и выдала, и публичный и внутренний `Get` извещения отвечали
 	// бы `INVALID_ARGUMENT` на всяком входе.
 	PrefixNoticeHyphen = "ntc"
+	// PrefixSuppressionHyphen — notify Suppression (`nsp-…`): запись подавления
+	// доставки на адрес, заведённая обратной связью почты (NTF-4, правка Х1,
+	// PRO-Robotech/kacho#2919; приёмка NTF-4, ресурс `Suppression`).
+	// NewHyphenID(PrefixSuppressionHyphen) → nsp-<17-base32> (21 символ).
+	//
+	// Запись здесь обязательна по тому же классу, что у `lim`, `mbr`, `ak` и
+	// `ntc`: без неё `validate.ResourceID` отвергал бы корректный `id`, который
+	// служба `notify` сама и выдала, и `Get` и `Delete` записи отвечали бы
+	// `INVALID_ARGUMENT` на всяком входе.
+	PrefixSuppressionHyphen = "nsp"
 	// PrefixTokenFamilyHyphen — iam семейство токенов (`tfm-…`): грант OAuth 2.0
 	// службы доступа, под ключом которого живут код авторизации, токен доступа
 	// и токен обновления одной выдачи и по которому семейство отзывается
@@ -470,9 +486,12 @@ var hyphenFormPrefixes = []string{
 	// notify: Notice — извещение оператора (NTF-5, Р3). Именованная константа:
 	// единый источник истины с NewHyphenID-генерацией службы `notify`.
 	PrefixNoticeHyphen,
+	// notify: Suppression — запись подавления доставки (NTF-4, Х1). Именованная
+	// константа: единый источник истины с NewHyphenID-генерацией службы `notify`.
+	PrefixSuppressionHyphen,
 	// geo — НАМЕРЕННО отсутствует: Region/Zone используют human-slug (ru-central1,
 	// ru-central1-a), THE ONE документированный carve-out из <prefix>-<base32> (B3).
-	// per-domain Operation-prefix'ы (sop/enp/iop/rop/aop/epd) — тоже legacy-concat,
+	// per-domain Operation-prefix'ы (sop/enp/iop/rop/aop/epd/nop) — тоже legacy-concat,
 	// маршрутизируются opsproxy, НЕ hyphen-канон.
 }
 
