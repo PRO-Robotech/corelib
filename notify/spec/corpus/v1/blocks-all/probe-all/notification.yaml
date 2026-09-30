@@ -1,0 +1,13 @@
+# Корпус v1: все пять видов атрибута и все восемь видов блока.
+name: probe-all
+class: notice
+ttl: 720h
+attributes:
+  subject_name: {type: text, presence: required}
+  note: {type: text, presence: required}
+  code: {type: secret, presence: required}
+  target: {type: path, presence: required}
+  token: {type: token, presence: required}
+  issued_at: {type: timestamp, presence: required}
+subject:
+  ru: "Проба {{ subject_name }}"

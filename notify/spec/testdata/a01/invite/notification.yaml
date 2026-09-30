@@ -1,0 +1,12 @@
+# NTF1-A01: корректный шаблон класса security.
+name: invite
+class: security
+ttl: 168h
+limits:
+  - {scope: recipient, window: 24h, max: 3}
+  - {scope: initiator, window: 1h, max: 20}
+attributes:
+  inviter_name: {type: text, presence: required}
+  token: {type: token, presence: required}
+subject:
+  ru: "Приглашение в облако"

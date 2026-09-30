@@ -1,0 +1,10 @@
+# Корпус v1: атрибуты optional под when, кнопка под when.
+name: probe-opt
+class: notice
+ttl: 1s
+attributes:
+  subject_name: {type: text, presence: required}
+  inviter: {type: text, presence: optional}
+  target: {type: path, presence: optional}
+subject:
+  ru: "Проба {{ subject_name }}"

@@ -1,0 +1,10 @@
+blocks:
+  - heading: "Проба {{ subject_name }}"
+  - p: "{{ note }} — {{ issued_at }}"
+  - code: "{{ code }}"
+  - button: {text: "Открыть", path: target}
+  - button: {text: "Принять", token: token, path: "/iam/invitations/accept"}
+  - list: ["первый", "{{ note }}"]
+  - kv: [{key: "Когда", value: "{{ issued_at }}"}, {key: "Что", value: "проба"}]
+  - warning: "Если это были не вы, {{ subject_name }}, проигнорируйте письмо."
+  - divider: {}

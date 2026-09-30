@@ -65,6 +65,13 @@ linters:
     - revive
     - bodyclose
     - copyloopvar
+    # Полнота разбора закрытых перечней формата извещений (замысел issue-2915,
+    # З2 и З4): вид атрибута (form.Kind) и вид блока (spec.BlockKind) разбирает
+    # исчерпывающий switch БЕЗ ветки default, и новый вид без ветки обязан
+    # давать красный линт, а не молча падать мимо проверки. Область — только
+    # notify/ (правило исключений ниже); на прочем дереве линтер не включался
+    # и находок там не судит.
+    - exhaustive
 
   settings:
     misspell:
@@ -86,6 +93,12 @@ linters:
           disabled: true
         - name: unused-receiver
           disabled: true
+    exhaustive:
+      # default НЕ считается полнотой: ветка default и есть «принять без
+      # проверки», которую З2 запрещает.
+      default-signifies-exhaustive: false
+      check:
+        - switch
     errcheck:
       # defer X.Close() — стандартная практика, не дефект: ошибка на закрытии
       # неисполнима, мы уже выходим из функции.
@@ -165,6 +178,10 @@ linters:
                   ineffassign, bodyclose, copyloopvar]
       - path: '_test\.go$'
         linters: [revive, errcheck, unused, staticcheck, bodyclose]
+      # exhaustive судит только notify/: закрытые перечни формата извещений.
+      # Предикат предметности: `git ls-files 'notify/*.go' | wc -l` > 0.
+      - path-except: '^notify/'
+        linters: [exhaustive]
       # Косметические quickfix'ы staticcheck. QF1011 вдобавок воюет с
       # НАМЕРЕННЫМИ compile-time type-assertion'ами.
       - linters: [staticcheck]
