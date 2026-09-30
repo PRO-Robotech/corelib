@@ -8,11 +8,13 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/anypb"
+	"google.golang.org/protobuf/types/known/timestamppb"
 
 	subscriptionv1 "github.com/PRO-Robotech/corelib/api/corelib/subscription"
 	"github.com/PRO-Robotech/corelib/listnarrow"
@@ -387,13 +389,26 @@ func (s *Server) read(
 		fmt.Fprintf(&where, " AND %s = $%d", st.ProjectColumn, len(args))
 	}
 
+	// Колонки атрибуции читаются, только если журнал их объявил: у журнала
+	// прежней формы их нет, и выражение-заглушка даёт пустое значение, а не
+	// отказ запроса.
+	initiatorExpr := "''"
+	if st.InitiatorColumn != "" {
+		initiatorExpr = st.InitiatorColumn
+	}
+	occurredExpr := "NULL::timestamptz"
+	if st.OccurredAtColumn != "" {
+		occurredExpr = st.OccurredAtColumn
+	}
+
 	q := fmt.Sprintf(`
-		SELECT %s, %s, %s, %s, %s, %s
+		SELECT %s, %s, %s, %s, %s, %s, %s, %s
 		FROM %s
 		WHERE %s > $1 AND %s <= $2%s
 		ORDER BY %s ASC
 		LIMIT %d`,
 		st.PositionColumn, st.KindColumn, st.IDColumn, projectExpr, st.ChangeColumn, st.PayloadColumn,
+		initiatorExpr, occurredExpr,
 		st.Table,
 		st.PositionColumn, st.PositionColumn, where.String(),
 		st.PositionColumn, readBatch)
@@ -407,8 +422,13 @@ func (s *Server) read(
 	out := make([]Row, 0, readBatch)
 	for pgRows.Next() {
 		var r Row
-		if err := pgRows.Scan(&r.Position, &r.Kind, &r.ID, &r.ProjectID, &r.Change, &r.Payload); err != nil {
+		var occurred *time.Time
+		if err := pgRows.Scan(&r.Position, &r.Kind, &r.ID, &r.ProjectID, &r.Change, &r.Payload,
+			&r.Initiator, &occurred); err != nil {
 			return nil, err
+		}
+		if occurred != nil {
+			r.OccurredAt = *occurred
 		}
 		out = append(out, r)
 	}
@@ -480,6 +500,17 @@ func (s *Server) mapRows(rows []Row, filter Filter) ([]*subscriptionv1.Subscript
 			ResourceId: row.ID,
 			ProjectId:  project,
 			Change:     change,
+			Initiator:  row.Initiator,
+		}
+		if !row.OccurredAt.IsZero() {
+			// Время строки журнала, усечённое до секунды: одно написание на
+			// событие и на строку ленты (`occurred_at`).
+			ev.OccurredAt = timestamppb.New(row.OccurredAt.Truncate(time.Second))
+		}
+		if name, complaint := deletedName(m.Kinds[row.Kind], change, row.Payload); complaint != "" {
+			s.log.Warn("subscription: "+complaint, "position", row.Position, "kind", row.Kind)
+		} else {
+			ev.Name = name
 		}
 		state, absence, err := m.State(row)
 		if complaint := setStateCarrier(ev, state, absence, err); complaint != "" {

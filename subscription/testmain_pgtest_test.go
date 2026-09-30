@@ -19,7 +19,7 @@ import (
 func TestMain(m *testing.M) {
 	os.Exit(pgtest.Run(m, pgtest.Config{
 		Name:    "subscription",
-		Migrate: pgtest.SQL(journalSchema),
+		Migrate: pgtest.SQL(journalSchema, attributedJournalSchema),
 	}))
 }
 
@@ -49,4 +49,36 @@ $fn$;
 CREATE TRIGGER probe_outbox_notify_trigger
 AFTER INSERT ON probe_outbox
 FOR EACH ROW EXECUTE FUNCTION probe_outbox_notify();
+`
+
+// attributedChannel / attributedJournalSchema — журнал формы З2 замысла NTF-3:
+// проектная колонка, колонка инициатора с умолчанием из настройки транзакции
+// помощника и `NOT NULL`, колонка времени строки. Отдельная таблица, а не
+// правка `probe_outbox`: прочие пробы пакета стоят на форме журналов до
+// миграций NTF-3, и она обязана оставаться проверяемой.
+const attributedChannel = "subscription_attributed_outbox"
+
+const attributedJournalSchema = `
+CREATE TABLE attributed_outbox (
+    sequence_no   bigserial    PRIMARY KEY,
+    resource_kind text         NOT NULL,
+    resource_id   text         NOT NULL,
+    project_id    text         NOT NULL DEFAULT '',
+    event_type    text         NOT NULL,
+    payload       jsonb        NOT NULL DEFAULT '{}'::jsonb,
+    initiator     text         NOT NULL DEFAULT NULLIF(current_setting('kacho_journal.initiator', true), ''),
+    created_at    timestamptz  NOT NULL DEFAULT now()
+);
+
+CREATE OR REPLACE FUNCTION attributed_outbox_notify() RETURNS trigger
+LANGUAGE plpgsql AS $fn$
+BEGIN
+    PERFORM pg_notify('` + attributedChannel + `', '');
+    RETURN NEW;
+END;
+$fn$;
+
+CREATE TRIGGER attributed_outbox_notify_trigger
+AFTER INSERT ON attributed_outbox
+FOR EACH ROW EXECUTE FUNCTION attributed_outbox_notify();
 `

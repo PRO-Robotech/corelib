@@ -8,6 +8,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"time"
 
 	"google.golang.org/protobuf/types/known/anypb"
 
@@ -96,6 +97,19 @@ type Storage struct {
 	// Обе стороны отвергает [Journal.Validate]; уборщик, который эту колонку
 	// читает, — `retention.go`.
 	AgeColumn string
+
+	// InitiatorColumn — колонка инициатора изменения (`text`, форма
+	// `auth.Initiator`). Её значение даёт умолчание колонки из настройки
+	// транзакции помощника `journaltx`; писатель её не называет (NTF-3, З2).
+	// Названа — событие несёт `initiator`; пуста — журнал инициатора не несёт
+	// (форма до миграции журнала NTF-3), и поле события пусто, а не выдумано.
+	InitiatorColumn string
+
+	// OccurredAtColumn — колонка времени строки журнала (`timestamptz`,
+	// `DEFAULT now()`): время транзакции изменения. Событие несёт его
+	// `occurred_at`, усечённым до секунды; часы процесса не участвуют. Пуста —
+	// поле события не выставляется.
+	OccurredAtColumn string
 }
 
 // ProjectDimension — откуда берётся проектный якорь события. Состояния ТРИ, и
@@ -143,6 +157,10 @@ const (
 type Row struct {
 	// Position — номер строки в журнале владельца.
 	Position int64
+	// Initiator — инициатор изменения; пуст, если журнал колонки не объявил.
+	Initiator string
+	// OccurredAt — время строки журнала; нулевое, если журнал колонки не объявил.
+	OccurredAt time.Time
 	// Kind — вид предмета в словаре владельца.
 	Kind string
 	// ID — идентификатор предмета.
@@ -164,7 +182,54 @@ type Row struct {
 type Kind struct {
 	ObjectType string
 	Action     string
+
+	// NameForm — есть ли у вида имя формы DNS-метки. Это объявление, а не
+	// проверка значения: у вида [NameFormNone] имя снятия пусто по объявлению,
+	// у [NameFormDNS] снятие обязано нести имя (NTF-3, З2).
+	NameForm NameForm
+
+	// Scope — якорь вида: проектный или уровня кластера. Пустой якорь у
+	// проектного вида — отказ записи с именем вида, а не подстановка уровня
+	// кластера (NTF-3, З2).
+	Scope Scope
 }
+
+// NameForm — объявление вида о его имени.
+//
+// Нулевое значение — «не объявлено»: сервер потока у такого вида имени снятия
+// не отдаёт, а функция фундамента [Journal.Emit] запись такого вида отвергает.
+// [Journal.Validate] его пропускает ради журналов, чьи объявления заводятся
+// после подъёма фундамента (NTF-3, полоса S1-A3).
+type NameForm uint8
+
+const (
+	// NameFormUnset — вид не объявил, есть ли у него имя.
+	NameFormUnset NameForm = iota
+	// NameFormDNS — имя вида — DNS-метка; снятие несёт его снимок из полезной
+	// нагрузки (ключ [NamePayloadKey]).
+	NameFormDNS
+	// NameFormNone — имени формы DNS-метки у вида нет; событие снятия несёт
+	// пустое `name` по объявлению.
+	NameFormNone
+)
+
+// NamePayloadKey — ключ полезной нагрузки строки снятия, несущий снимок имени.
+// Писатель берёт значение из `RETURNING` удаляющего оператора, а не чтением до
+// удаления.
+const NamePayloadKey = "name"
+
+// Scope — объявление вида о его якоре. Нулевое значение — «не объявлено», с тем
+// же чтением, что у [NameFormUnset].
+type Scope uint8
+
+const (
+	// ScopeUnset — вид не объявил якорь.
+	ScopeUnset Scope = iota
+	// ScopeProject — предмет живёт в проекте; запись без якоря отвергается.
+	ScopeProject
+	// ScopeCluster — предмет уровня кластера; якоря у записи нет.
+	ScopeCluster
+)
 
 // Mapping — отображение строки журнала в событие общей формы.
 type Mapping struct {
@@ -439,6 +504,15 @@ func (s Storage) validate() error {
 		}
 	}
 
+	for name, col := range map[string]string{
+		"Storage.InitiatorColumn":  s.InitiatorColumn,
+		"Storage.OccurredAtColumn": s.OccurredAtColumn,
+	} {
+		if col != "" && !sqlIdent.MatchString(col) {
+			return fmt.Errorf("subscription: %s %q негодно как имя колонки Postgres", name, col)
+		}
+	}
+
 	switch s.Project {
 	case ProjectDimensionUnset:
 		return fmt.Errorf("subscription: Storage.Project не объявлен — у якорной оси project_id умолчания не бывает: назовите ProjectInColumn, ProjectFromMapping либо ProjectAbsent")
@@ -504,6 +578,18 @@ func (m Mapping) validate(project ProjectDimension) error {
 		}
 		if binding.Action == "" {
 			return fmt.Errorf("subscription: Mapping.Kinds[%q].Action пуст — действие несётся в той же записи, чтобы вид не унаследовал чужой глагол", kind)
+		}
+		if binding.NameForm > NameFormNone {
+			return fmt.Errorf("subscription: Mapping.Kinds[%q].NameForm = %d — такого состояния нет", kind, binding.NameForm)
+		}
+		switch binding.Scope {
+		case ScopeUnset, ScopeCluster:
+		case ScopeProject:
+			if project == ProjectAbsent {
+				return fmt.Errorf("subscription: Mapping.Kinds[%q].Scope = ScopeProject, но у журнала проектного измерения нет (ProjectAbsent) — якорь брать неоткуда", kind)
+			}
+		default:
+			return fmt.Errorf("subscription: Mapping.Kinds[%q].Scope = %d — такого состояния нет", kind, binding.Scope)
 		}
 	}
 

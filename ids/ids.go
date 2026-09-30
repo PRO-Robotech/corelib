@@ -125,6 +125,16 @@ const (
 	// край маршрутизирует их Operation.Get/Cancel по записи prefixToBackend nop → notify.
 	// Ресурса со слитной формой у notify нет — префикс операций ни с чем не делится.
 	PrefixOperationNotify = "nop"
+
+	// Приставки двух семейств принципала: пользователь и сервисный аккаунт.
+	// Идентификаторы выпускает служба доступа (своими константами домена, ниже
+	// этого пакета в графе сборки её не видно); здесь приставки объявлены для
+	// тех, кто судит форму субъекта в фундаменте: нормализация субъекта в
+	// инициатора журнала (`auth.InitiatorOf`) и выражение `CHECK` колонки
+	// инициатора, которое генератор миграции выводит из этого каталога
+	// (NTF-3, З2, З3). Обе формы записи — слитная и дефисная — в каталоге есть.
+	PrefixUser           = "usr"
+	PrefixServiceAccount = "sva"
 )
 
 // NewID возвращает идентификатор формата "<prefix><17-char crockford-base32>"
@@ -238,6 +248,24 @@ func IsValid(id, prefix string) bool {
 	return true
 }
 
+// IsValidHyphen проверяет дефисную форму "<prefix>-<17 lowercase
+// crockford-base32-chars>" — ту, что выпускает NewHyphenID. Приставка 2..3
+// символа, как у NewHyphenID; тело судится тем же алфавитом, что у IsValid.
+func IsValidHyphen(id, prefix string) bool {
+	if n := len(prefix); n < 2 || n > 3 {
+		return false
+	}
+	if len(id) != len(prefix)+1+idBodyLen || id[:len(prefix)] != prefix || id[len(prefix)] != '-' {
+		return false
+	}
+	for i := len(prefix) + 1; i < len(id); i++ {
+		if !isCrockfordChar(id[i]) {
+			return false
+		}
+	}
+	return true
+}
+
 // domainStringPrefixes — 3-символьные prefix'ы доменов, чьи prefix-КОНСТАНТЫ
 // живут не в ids, а в internal/ соответствующего сервиса (kaname — downstream
 // в build-графе, его internal-константы сюда не импортируются, см. запрет
@@ -247,7 +275,7 @@ func IsValid(id, prefix string) bool {
 // prefix e9b (backward-compat для id переходного периода).
 var domainStringPrefixes = []string{
 	// iam: Account/Project/User/ServiceAccount/Group/Role/AccessBinding/Operation/UserOAuthClient/Condition
-	"acc", "prj", "usr", "sva", "grp", "rol", "acb", "iop", "uoc", "cnd",
+	"acc", "prj", PrefixUser, PrefixServiceAccount, "grp", "rol", "acb", "iop", "uoc", "cnd",
 	// iam: ServiceAccountOAuthClient — удостоверение служебной учётки. Отсутствие
 	// его префикса в каталоге найдено пробой BAT-1-67: идентификатор одного из
 	// двух видов принципала не классифицировался там, где второй классифицировался.
@@ -418,7 +446,7 @@ const (
 // а часть — новые ресурсы редизайна, ещё без generation-константы).
 var hyphenFormPrefixes = []string{
 	// iam: Account/Project/User/ServiceAccount/Group/Role/AccessBinding/UserInvitation
-	"acc", "prj", "usr", "sva", "grp", "rol", "acb", "inv",
+	"acc", "prj", PrefixUser, PrefixServiceAccount, "grp", "rol", "acb", "inv",
 	// iam: InteractiveClient (IAM-INT-1) — именованная константа: единый источник
 	// истины с NewHyphenID-генерацией.
 	PrefixInteractiveClientHyphen,
