@@ -356,6 +356,13 @@ const (
 	// служба и выдала, и снятие ключа отвечало бы `INVALID_ARGUMENT` на всяком
 	// входе.
 	PrefixAccessKeyHyphen = "ak"
+	// PrefixNotificationHyphen — строка ленты уведомлений notify (`ntf-…`,
+	// NTF-1, Р8; kacho#2915). NewHyphenID("ntf") → "ntf-<17-base32>".
+	//
+	// Запись здесь обязательна по тому же классу, что у `lim`, `mbr` и `ak`:
+	// без неё `validate.ResourceID` отвергал бы корректный `id` строки, который
+	// сама служба и выдала.
+	PrefixNotificationHyphen = "ntf"
 )
 
 // hyphenFormPrefixes — going-forward hyphen-form id prefixes (B3, redesign-2026
@@ -389,6 +396,9 @@ var hyphenFormPrefixes = []string{
 	// iam: AccessKey — ключ доступа человека (WebAuthn). Именованная константа:
 	// единый источник истины с NewHyphenID-генерацией (Ф7, Р10).
 	PrefixAccessKeyHyphen,
+	// notify: строка ленты уведомлений. Именованная константа: единый источник
+	// истины с NewHyphenID-генерацией (NTF-1, Р8).
+	PrefixNotificationHyphen,
 	// compute: Instance/MachineType/PlacementGroup/VolumeType (ins/mt — именованные
 	// константы: единый источник истины с NewHyphenID-генерацией).
 	PrefixInstanceHyphen, PrefixMachineTypeHyphen, "plg", "vt",

@@ -203,6 +203,18 @@ var forbiddenObjectTypes = map[string]struct{}{
 	// TestProxyAdmittedObjectTypesAreInTheCatalog: правило приёма не вправе
 	// допускать тип, которого каталог не знает.
 	"iam_fgaproxy": {},
+	// служебный принципал и объекты права на уведомления (NTF-1, Р2 п.5).
+	// `service` — субъект служебного принципала, `notification_feed` и
+	// `notification_namespace` — объекты права читать ленту и отправлять из
+	// пространства. Все три заводит только манифест модели при посеве kaname,
+	// ни один не принадлежит домену эмитента; без записи здесь модуль при
+	// неизвестном домене вызывающего либо по слову словаря владения выписал бы
+	// себе право отправлять уведомления от чужого имени. Держится
+	// notification_types_test.go и стороной Б гейта kacho
+	// TestForbiddenProxyObjectTypesAgreeWithTheModel.
+	"service":                {},
+	"notification_feed":      {},
+	"notification_namespace": {},
 }
 
 // IsPublicReadGrant reports whether the pair is «anybody reads this resource»
