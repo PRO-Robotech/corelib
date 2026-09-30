@@ -92,11 +92,12 @@ type MetadataFinalizer interface {
 	MarkDoneWithMetadata(ctx context.Context, id string, metadata, response *anypb.Any) error
 }
 
-// FullRepo — то, что действительно возвращает NewRepo: Repo плюс все
-// опциональные апгрейды конкретной pgxpool-реализации. Метод-сет шире Repo,
-// поэтому значение присваивается в любую переменную/поле/параметр типа Repo —
-// расширение обратно совместимо, а use-case, которому апгрейд НУЖЕН, получает
-// его проверку на компиляции, а не type-assert'ом в рантайме.
+// FullRepo — Repo плюс все опциональные апгрейды конкретной pgxpool-реализации
+// на пуле. Метод-сет шире Repo, поэтому значение присваивается в любую
+// переменную/поле/параметр типа Repo — расширение обратно совместимо, а
+// use-case, которому апгрейд НУЖЕН, получает его проверку на компиляции, а не
+// type-assert'ом в рантайме. NewRepo возвращает TxRepo — FullRepo плюс запись в
+// транзакции вызывающего (TxWriter, txwriter.go); TxWriter в FullRepo не входит.
 type FullRepo interface {
 	Repo
 	OwnedOperationRepo
@@ -309,10 +310,11 @@ type pgRepo struct {
 // schema используется как квалификатор таблицы (schema.operations).
 // Для схемы "public" передавайте "public".
 //
-// Возвращает FullRepo (Repo + опциональные апгрейды реализации) — присваивается
-// в любое место, ожидающее Repo; composition root, которому нужен апгрейд,
-// получает его без type-assert'а.
-func NewRepo(pool *pgxpool.Pool, schema string) FullRepo {
+// Возвращает TxRepo (FullRepo + TxWriter) — присваивается в любое место,
+// ожидающее Repo или FullRepo; composition root, которому нужен апгрейд или
+// запись в транзакции вызывающего, получает их без type-assert'а. Других входов,
+// кроме пула и схемы, у хранилища нет (перепись storage_inputs_test.go).
+func NewRepo(pool *pgxpool.Pool, schema string) TxRepo {
 	return &pgRepo{pool: pool, schema: schema}
 }
 
@@ -365,55 +367,13 @@ func (r *pgRepo) Create(ctx context.Context, op Operation) error {
 // CreateWithPrincipal вставляет операцию с явно переданным principal'ом.
 // Если каноничный путь use-case'а — PrincipalFromContext(ctx) → этот метод.
 func (r *pgRepo) CreateWithPrincipal(ctx context.Context, op Operation, p Principal) error {
-	metaType, metaData, err := marshalAny(op.Metadata)
-	if err != nil {
-		return fmt.Errorf("repo.Create: marshal metadata: %w", err)
-	}
-
-	// Денормализованный индекс resource_id: предпочитаем ЯВНО заданный
-	// op.ResourceID (use-case знает owning-ресурс точно); только если он пуст —
-	// reflection-fallback на первое `*_id`-поле метаданных.
-	resourceID := resolveResourceID(op)
-	// Извлекаем account_id по ТОЧНОМУ имени поля — additive
-	// денормализация для account-scoped IAM operation-listing. Метаданные без
-	// account_id (не-IAM / категория II) → "" → SQL NULL (back-compat).
-	accountID := extractAccountID(op.Metadata)
-
-	// Fallback на SystemPrincipal если передан пустой p (defensive).
+	// Fallback на SystemPrincipal если передан пустой p (defensive). Запасной
+	// путь живёт здесь, а не в построителе: Ф1/Ф2 (txwriter.go) зовут тот же
+	// построитель без запасного и пустой принципал отвергают.
 	if p == (Principal{}) {
 		p = SystemPrincipal()
 	}
-
-	q := fmt.Sprintf(`
-		INSERT INTO %s
-		  (id, description, created_at, created_by, modified_at, done,
-		   metadata_type, metadata_data, resource_id, account_id,
-		   principal_type, principal_id, principal_display_name)
-		VALUES
-		  ($1, $2, $3, $4, $5, false, $6, $7, $8, $9, $10, $11, $12)`,
-		r.tableName(),
-	)
-
-	createdBy := op.CreatedBy
-	if createdBy == "" {
-		createdBy = "anonymous"
-	}
-
-	_, err = r.pool.Exec(ctx, q,
-		op.ID,
-		op.Description,
-		op.CreatedAt,
-		createdBy,
-		op.ModifiedAt,
-		metaType,
-		metaData,
-		nullableString(resourceID),
-		nullableString(accountID),
-		p.Type,
-		p.ID,
-		p.DisplayName,
-	)
-	if err != nil {
+	if err := insertOperationTx(ctx, r.pool, r.tableName(), op, p, false, nil); err != nil {
 		return fmt.Errorf("repo.Create: %w", err)
 	}
 	return nil
