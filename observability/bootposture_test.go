@@ -277,3 +277,29 @@ func TestOwnRESTFrontFrom_DerivesFromTheDeclarationThatRaisesTheSurface(t *testi
 		})
 	}
 }
+
+// TestLogBootPosture_HostFormIsEmittedAsGiven — форма хоста едет в строку
+// самоотчёта ключом host_form ровно тем написанием, которое дал принятый
+// дескриптор (`d.HostForm().String()`); своего словаря у самоотчёта нет, и
+// второго литерала здесь не заводится. Пустое значение тоже эмитится, а не
+// пропадает: гейт посадки отличает «форма не доложена» от «ключа нет».
+func TestLogBootPosture_HostFormIsEmittedAsGiven(t *testing.T) {
+	for _, give := range []string{"no-grpc", "pair", ""} {
+		var buf bytes.Buffer
+		observability.LogBootPosture(observability.NewSlogger(&buf), observability.BootPosture{
+			Service:  "notify",
+			HostForm: give,
+		})
+		var line map[string]any
+		if err := json.Unmarshal(buf.Bytes(), &line); err != nil {
+			t.Fatalf("unmarshal: %v (raw=%q)", err, buf.String())
+		}
+		got, ok := line["host_form"]
+		if !ok {
+			t.Fatalf("host_form отсутствует в строке самоотчёта: %v", line)
+		}
+		if got != give {
+			t.Fatalf("host_form = %v, дано %q", got, give)
+		}
+	}
+}
