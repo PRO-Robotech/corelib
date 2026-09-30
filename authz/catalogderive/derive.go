@@ -176,8 +176,11 @@ type Annotations struct {
 	ScopeObjectType            string
 	ScopeFromRequestField      string
 	ScopeObjectTypeFromRequest string
-	HideExistence              bool
-	ScopeFiltered              bool
+	// ScopeBoundToServer — форма ScopeBound: объект проверки — экземпляр типа
+	// ScopeObjectType, к которому процесс привязал сервер (З14).
+	ScopeBoundToServer bool
+	HideExistence      bool
+	ScopeFiltered      bool
 }
 
 // Exempt reports the lane where the edge runs no per-RPC Check at all.
@@ -201,6 +204,7 @@ func AnnotationsOf(md protoreflect.MethodDescriptor) Annotations {
 		a.ScopeObjectType = se.GetObjectType()
 		a.ScopeFromRequestField = se.GetFromRequestField()
 		a.ScopeObjectTypeFromRequest = se.GetObjectTypeFromRequestField()
+		a.ScopeBoundToServer = se.GetBoundToServer()
 	}
 	return a
 }
@@ -225,9 +229,11 @@ func RangeAnnotated(protoPackages []string, fn func(fullMethod string, md protor
 }
 
 // entryFor turns one method's annotations into the RPCEntry the interceptor
-// consumes. The three lanes are mutually exclusive and exhaustive; there is no
-// fourth, and a method that fits none of them is an error rather than a default,
-// because every default here is a decision about access taken by nobody.
+// consumes. The four lanes — scope-filtered, exempt, bound to the server's
+// instance (ScopeBound), and scoped by the request — are mutually exclusive and
+// exhaustive; there is no fifth, and a method that fits none of them is an error
+// rather than a default, because every default here is a decision about access
+// taken by nobody.
 func entryFor(md protoreflect.MethodDescriptor) (authz.RPCEntry, error) {
 	a := AnnotationsOf(md)
 
@@ -256,7 +262,15 @@ func entryFor(md protoreflect.MethodDescriptor) (authz.RPCEntry, error) {
 		if a.RequiredRelation != "" {
 			return authz.RPCEntry{}, fmt.Errorf("exempt row also names relation %q", a.RequiredRelation)
 		}
+		if a.ScopeBoundToServer {
+			return authz.RPCEntry{}, fmt.Errorf("exempt row (%s) also carries scope_extractor.bound_to_server: "+
+				"no Check runs here, so naming the object it would ask about states a check that does not "+
+				"happen", ExemptPermission)
+		}
 		return authz.RPCEntry{Public: true}, nil
+
+	case a.ScopeBoundToServer:
+		return boundEntry(a)
 
 	default:
 		extract, err := buildExtractor(md, a)
@@ -270,6 +284,46 @@ func entryFor(md protoreflect.MethodDescriptor) (authz.RPCEntry, error) {
 			Permission:    a.Permission,
 		}, nil
 	}
+}
+
+// boundEntry — форма ScopeBound (З14): объект проверки есть экземпляр типа
+// `object_type`, к которому процесс привязал сервер при подъёме.
+//
+// Идентификатора экземпляра в аннотации нет и быть не может: его знает только
+// корень, поднявший сервер. Поэтому извлекатель здесь НЕ строится — его
+// заполняет [Bind] значением, которое приносит сам сервер, а запись без него
+// носитель не пускает в старт.
+//
+// Отношение здесь всегда непусто: строка без него — полоса `<exempt>`, и там
+// `bound_to_server` отвергается раньше (entryFor).
+//
+// Поле запроса рядом с этой формой невыразимо, и это отказ, а не выбор одного
+// из двух: аннотация называла бы два объекта проверки сразу — экземпляр сервера
+// и объект из запроса, — и решать, о котором спрашивать, пришлось бы молча.
+// Хуже того, объект из запроса вернул бы вызывающему то, что форма у него
+// отнимает: возможность назвать ЧУЖОЙ экземпляр.
+func boundEntry(a Annotations) (authz.RPCEntry, error) {
+	if a.ScopeFromRequestField != "" {
+		return authz.RPCEntry{}, fmt.Errorf("scope_extractor.bound_to_server is set together with "+
+			"from_request_field %q: the object is the instance the server is bound to, and the request "+
+			"must not name another one — drop from_request_field", a.ScopeFromRequestField)
+	}
+	if a.ScopeObjectTypeFromRequest != "" {
+		return authz.RPCEntry{}, fmt.Errorf("scope_extractor.bound_to_server is set together with "+
+			"object_type_from_request_field %q: the object type is fixed by the binding, and the request "+
+			"must not pick another one — drop object_type_from_request_field", a.ScopeObjectTypeFromRequest)
+	}
+	if a.ScopeObjectType == "" {
+		return authz.RPCEntry{}, fmt.Errorf("scope_extractor.bound_to_server names no object_type: "+
+			"there is no type to bind the server to, and relation %q would be checked against nothing",
+			a.RequiredRelation)
+	}
+	return authz.RPCEntry{
+		Relation:      a.RequiredRelation,
+		BoundType:     a.ScopeObjectType,
+		HideExistence: a.HideExistence,
+		Permission:    a.Permission,
+	}, nil
 }
 
 // buildExtractor resolves the request fields the annotation names, ONCE, and

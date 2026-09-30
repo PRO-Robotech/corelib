@@ -48,6 +48,9 @@ type Entry struct {
 		ObjectType                 string `json:"object_type"`
 		FromRequestField           string `json:"from_request_field"`
 		ObjectTypeFromRequestField string `json:"object_type_from_request_field"`
+		// BoundToServer — форма ScopeBound (З14): объект — экземпляр типа,
+		// к которому процесс привязал сервер; запрос его не называет.
+		BoundToServer bool `json:"bound_to_server"`
 	} `json:"scope_extractor"`
 	// ScopeFiltered — the catalog's own declaration that the OWNING SERVICE
 	// authorizes this call over the data it answers with, so the edge

@@ -287,6 +287,10 @@ func (i *Interceptor) Stream() grpc.StreamServerInterceptor {
 	}
 }
 
+// errNoObjectExtractor — у записи карты нет извлекателя объекта (см. authorize, шаг 4).
+// Наружу не уходит: DecisionDenied отвечает фиксированным «permission denied».
+var errNoObjectExtractor = errors.New("authz: rights map entry carries no object extractor")
+
 // authorize — основная логика (вне зависимости от unary/stream). Возвращает
 // verdict: решение ПЛЮС объект, к которому оно относится (нужен для текста
 // existence-hiding — см. hide_existence.go).
@@ -371,6 +375,17 @@ func (i *Interceptor) authorize(ctx context.Context, fullMethod string, req any)
 	}
 
 	// 4. Object extract.
+	//
+	// Запись без извлекателя объекта спросить не о чем — это отказ, а не вызов
+	// nil-функции. Производитель такой записи — форма ScopeBound (RPCEntry.BoundType):
+	// вывод оставляет извлекатель пустым, заполняет его привязка сервера. Носитель
+	// непривязанную запись в старт не пускает, но перехватчик строят и без
+	// носителя, и паника в горутине запроса вместо отказа — не та дверь.
+	if entry.Extract == nil {
+		logger.Warn("authz_object_extractor_absent", slog.String("bound_type", entry.BoundType))
+		atomic.AddUint64(&i.deniedTotal, 1)
+		return verdict{decision: DecisionDenied, err: errNoObjectExtractor}
+	}
 	objectType, objectID, err := entry.Extract(req)
 	if err != nil {
 		logger.Warn("authz_object_extract_failed", slog.String("err", err.Error()))

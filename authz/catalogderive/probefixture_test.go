@@ -80,6 +80,10 @@ func TestMain(m *testing.M) {
 		fmt.Fprintf(os.Stderr, "нейтральный дескриптор не построен: %v\n", err)
 		os.Exit(1)
 	}
+	if err := registerBoundFiles(); err != nil {
+		fmt.Fprintf(os.Stderr, "дескрипторы формы ScopeBound не построены: %v\n", err)
+		os.Exit(1)
+	}
 	os.Exit(m.Run())
 }
 
