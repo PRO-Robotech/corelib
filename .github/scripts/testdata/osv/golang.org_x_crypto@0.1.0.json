@@ -1,0 +1,811 @@
+{
+  "vulns": [
+    {
+      "affected": [
+        {
+          "package": {
+            "ecosystem": "Go",
+            "name": "golang.org/x/crypto"
+          }
+        }
+      ],
+      "aliases": [
+        "CVE-2026-39828",
+        "GO-2026-5014"
+      ],
+      "id": "GHSA-45gg-vh54-h5m9"
+    },
+    {
+      "affected": [
+        {
+          "package": {
+            "ecosystem": "crates.io",
+            "name": "russh"
+          }
+        },
+        {
+          "package": {
+            "ecosystem": "Go",
+            "name": "golang.org/x/crypto"
+          }
+        },
+        {
+          "package": {
+            "ecosystem": "PyPI",
+            "name": "paramiko"
+          }
+        },
+        {
+          "package": {
+            "ecosystem": "Go",
+            "name": "golang.org/x/crypto"
+          }
+        }
+      ],
+      "aliases": [
+        "CVE-2023-48795",
+        "GO-2023-2402",
+        "PYSEC-2026-1758"
+      ],
+      "id": "GHSA-45x7-px36-x8w8"
+    },
+    {
+      "affected": [
+        {
+          "package": {
+            "ecosystem": "Go",
+            "name": "golang.org/x/crypto"
+          }
+        }
+      ],
+      "aliases": [
+        "CVE-2026-42508",
+        "GO-2026-5021"
+      ],
+      "id": "GHSA-5cgq-3rg8-m6cv"
+    },
+    {
+      "affected": [
+        {
+          "package": {
+            "ecosystem": "Go",
+            "name": "golang.org/x/crypto"
+          }
+        }
+      ],
+      "aliases": [
+        "CVE-2026-39835",
+        "GO-2026-5015"
+      ],
+      "id": "GHSA-78mq-xcr3-xm33"
+    },
+    {
+      "affected": [
+        {
+          "package": {
+            "ecosystem": "Go",
+            "name": "golang.org/x/crypto"
+          }
+        }
+      ],
+      "aliases": [
+        "CVE-2026-39831",
+        "GO-2026-5019"
+      ],
+      "id": "GHSA-89gr-r52h-f8rx"
+    },
+    {
+      "affected": [
+        {
+          "package": {
+            "ecosystem": "Go",
+            "name": "golang.org/x/crypto"
+          }
+        }
+      ],
+      "aliases": [
+        "CVE-2026-46598",
+        "GO-2026-5033"
+      ],
+      "id": "GHSA-9m57-25v3-79x9"
+    },
+    {
+      "affected": [
+        {
+          "package": {
+            "ecosystem": "Go",
+            "name": "golang.org/x/crypto"
+          }
+        }
+      ],
+      "aliases": [
+        "CVE-2026-39832",
+        "GO-2026-5006"
+      ],
+      "id": "GHSA-f5wc-c3c7-36mc"
+    },
+    {
+      "affected": [
+        {
+          "package": {
+            "ecosystem": "Go",
+            "name": "golang.org/x/crypto"
+          }
+        }
+      ],
+      "aliases": [
+        "CVE-2025-47914",
+        "GO-2025-4135"
+      ],
+      "id": "GHSA-f6x5-jh6r-wrfv"
+    },
+    {
+      "affected": [
+        {
+          "package": {
+            "ecosystem": "Go",
+            "name": "golang.org/x/crypto"
+          }
+        }
+      ],
+      "aliases": [
+        "CVE-2025-22869",
+        "GO-2025-3487"
+      ],
+      "id": "GHSA-hcg3-q754-cr77"
+    },
+    {
+      "affected": [
+        {
+          "package": {
+            "ecosystem": "Go",
+            "name": "golang.org/x/crypto"
+          }
+        }
+      ],
+      "aliases": [
+        "CVE-2025-58181",
+        "GO-2025-4134"
+      ],
+      "id": "GHSA-j5w8-q4qc-rx2x"
+    },
+    {
+      "affected": [
+        {
+          "package": {
+            "ecosystem": "Go",
+            "name": "golang.org/x/crypto"
+          }
+        }
+      ],
+      "aliases": [
+        "CVE-2026-39833",
+        "GO-2026-5005"
+      ],
+      "id": "GHSA-jppx-rxg9-jmrx"
+    },
+    {
+      "affected": [
+        {
+          "package": {
+            "ecosystem": "Go",
+            "name": "golang.org/x/crypto"
+          }
+        }
+      ],
+      "aliases": [
+        "CVE-2026-46597",
+        "GO-2026-5013"
+      ],
+      "id": "GHSA-q4h4-gmj2-qvw2"
+    },
+    {
+      "affected": [
+        {
+          "package": {
+            "ecosystem": "Go",
+            "name": "golang.org/x/crypto"
+          }
+        }
+      ],
+      "aliases": [
+        "CVE-2026-39827",
+        "GO-2026-5016"
+      ],
+      "id": "GHSA-qpw4-5x99-6vjp"
+    },
+    {
+      "affected": [
+        {
+          "package": {
+            "ecosystem": "Go",
+            "name": "golang.org/x/crypto"
+          }
+        }
+      ],
+      "aliases": [
+        "CVE-2026-39834",
+        "GO-2026-5020"
+      ],
+      "id": "GHSA-rm3j-f69w-wqmq"
+    },
+    {
+      "affected": [
+        {
+          "package": {
+            "ecosystem": "Go",
+            "name": "golang.org/x/crypto"
+          }
+        }
+      ],
+      "aliases": [
+        "CVE-2024-45337",
+        "GO-2024-3321"
+      ],
+      "id": "GHSA-v778-237x-gjrc"
+    },
+    {
+      "affected": [
+        {
+          "package": {
+            "ecosystem": "Go",
+            "name": "golang.org/x/crypto"
+          }
+        }
+      ],
+      "aliases": [
+        "CVE-2026-39830",
+        "GO-2026-5017"
+      ],
+      "id": "GHSA-vgwf-h737-ff37"
+    },
+    {
+      "affected": [
+        {
+          "package": {
+            "ecosystem": "Go",
+            "name": "golang.org/x/crypto"
+          }
+        }
+      ],
+      "aliases": [
+        "CVE-2026-39829",
+        "GO-2026-5018"
+      ],
+      "id": "GHSA-w879-237q-wc7r"
+    },
+    {
+      "affected": [
+        {
+          "package": {
+            "ecosystem": "Go",
+            "name": "golang.org/x/crypto"
+          }
+        }
+      ],
+      "aliases": [
+        "CVE-2026-46595",
+        "GO-2026-5023"
+      ],
+      "id": "GHSA-x527-x647-q7gg"
+    },
+    {
+      "affected": [
+        {
+          "ecosystem_specific": {
+            "imports": [
+              {
+                "path": "golang.org/x/crypto/ssh"
+              }
+            ]
+          },
+          "package": {
+            "ecosystem": "Go",
+            "name": "golang.org/x/crypto"
+          }
+        }
+      ],
+      "aliases": [
+        "CVE-2023-48795",
+        "GHSA-45x7-px36-x8w8",
+        "PYSEC-2026-1758"
+      ],
+      "id": "GO-2023-2402"
+    },
+    {
+      "affected": [
+        {
+          "ecosystem_specific": {
+            "imports": [
+              {
+                "path": "golang.org/x/crypto/ssh"
+              }
+            ]
+          },
+          "package": {
+            "ecosystem": "Go",
+            "name": "golang.org/x/crypto"
+          }
+        }
+      ],
+      "aliases": [
+        "CVE-2024-45337",
+        "GHSA-v778-237x-gjrc"
+      ],
+      "id": "GO-2024-3321"
+    },
+    {
+      "affected": [
+        {
+          "ecosystem_specific": {
+            "imports": [
+              {
+                "path": "golang.org/x/crypto/ssh"
+              }
+            ]
+          },
+          "package": {
+            "ecosystem": "Go",
+            "name": "golang.org/x/crypto"
+          }
+        }
+      ],
+      "aliases": [
+        "CVE-2025-22869",
+        "GHSA-hcg3-q754-cr77"
+      ],
+      "id": "GO-2025-3487"
+    },
+    {
+      "affected": [
+        {
+          "ecosystem_specific": {
+            "imports": [
+              {
+                "path": "golang.org/x/crypto/ssh/agent"
+              }
+            ]
+          },
+          "package": {
+            "ecosystem": "Go",
+            "name": "golang.org/x/crypto"
+          }
+        }
+      ],
+      "aliases": [
+        "CVE-2025-47913",
+        "GHSA-56w8-48fp-6mgv"
+      ],
+      "id": "GO-2025-4116"
+    },
+    {
+      "affected": [
+        {
+          "ecosystem_specific": {
+            "imports": [
+              {
+                "path": "golang.org/x/crypto/ssh"
+              }
+            ]
+          },
+          "package": {
+            "ecosystem": "Go",
+            "name": "golang.org/x/crypto"
+          }
+        }
+      ],
+      "aliases": [
+        "CVE-2025-58181",
+        "GHSA-j5w8-q4qc-rx2x"
+      ],
+      "id": "GO-2025-4134"
+    },
+    {
+      "affected": [
+        {
+          "ecosystem_specific": {
+            "imports": [
+              {
+                "path": "golang.org/x/crypto/ssh/agent"
+              }
+            ]
+          },
+          "package": {
+            "ecosystem": "Go",
+            "name": "golang.org/x/crypto"
+          }
+        }
+      ],
+      "aliases": [
+        "CVE-2025-47914",
+        "GHSA-f6x5-jh6r-wrfv"
+      ],
+      "id": "GO-2025-4135"
+    },
+    {
+      "affected": [
+        {
+          "ecosystem_specific": {
+            "imports": [
+              {
+                "path": "golang.org/x/crypto/ssh/agent"
+              }
+            ]
+          },
+          "package": {
+            "ecosystem": "Go",
+            "name": "golang.org/x/crypto"
+          }
+        }
+      ],
+      "aliases": [
+        "CVE-2026-39833",
+        "GHSA-jppx-rxg9-jmrx"
+      ],
+      "id": "GO-2026-5005"
+    },
+    {
+      "affected": [
+        {
+          "ecosystem_specific": {
+            "imports": [
+              {
+                "path": "golang.org/x/crypto/ssh/agent"
+              }
+            ]
+          },
+          "package": {
+            "ecosystem": "Go",
+            "name": "golang.org/x/crypto"
+          }
+        }
+      ],
+      "aliases": [
+        "CVE-2026-39832",
+        "GHSA-f5wc-c3c7-36mc"
+      ],
+      "id": "GO-2026-5006"
+    },
+    {
+      "affected": [
+        {
+          "ecosystem_specific": {
+            "imports": [
+              {
+                "path": "golang.org/x/crypto/ssh"
+              }
+            ]
+          },
+          "package": {
+            "ecosystem": "Go",
+            "name": "golang.org/x/crypto"
+          }
+        }
+      ],
+      "aliases": [
+        "CVE-2026-46597",
+        "GHSA-q4h4-gmj2-qvw2"
+      ],
+      "id": "GO-2026-5013"
+    },
+    {
+      "affected": [
+        {
+          "ecosystem_specific": {
+            "imports": [
+              {
+                "path": "golang.org/x/crypto/ssh"
+              }
+            ]
+          },
+          "package": {
+            "ecosystem": "Go",
+            "name": "golang.org/x/crypto"
+          }
+        }
+      ],
+      "aliases": [
+        "CVE-2026-39828",
+        "GHSA-45gg-vh54-h5m9"
+      ],
+      "id": "GO-2026-5014"
+    },
+    {
+      "affected": [
+        {
+          "ecosystem_specific": {
+            "imports": [
+              {
+                "path": "golang.org/x/crypto/ssh"
+              }
+            ]
+          },
+          "package": {
+            "ecosystem": "Go",
+            "name": "golang.org/x/crypto"
+          }
+        }
+      ],
+      "aliases": [
+        "CVE-2026-39835",
+        "GHSA-78mq-xcr3-xm33"
+      ],
+      "id": "GO-2026-5015"
+    },
+    {
+      "affected": [
+        {
+          "ecosystem_specific": {
+            "imports": [
+              {
+                "path": "golang.org/x/crypto/ssh"
+              }
+            ]
+          },
+          "package": {
+            "ecosystem": "Go",
+            "name": "golang.org/x/crypto"
+          }
+        }
+      ],
+      "aliases": [
+        "CVE-2026-39827",
+        "GHSA-qpw4-5x99-6vjp"
+      ],
+      "id": "GO-2026-5016"
+    },
+    {
+      "affected": [
+        {
+          "ecosystem_specific": {
+            "imports": [
+              {
+                "path": "golang.org/x/crypto/ssh"
+              }
+            ]
+          },
+          "package": {
+            "ecosystem": "Go",
+            "name": "golang.org/x/crypto"
+          }
+        }
+      ],
+      "aliases": [
+        "CVE-2026-39830",
+        "GHSA-vgwf-h737-ff37"
+      ],
+      "id": "GO-2026-5017"
+    },
+    {
+      "affected": [
+        {
+          "ecosystem_specific": {
+            "imports": [
+              {
+                "path": "golang.org/x/crypto/ssh"
+              }
+            ]
+          },
+          "package": {
+            "ecosystem": "Go",
+            "name": "golang.org/x/crypto"
+          }
+        }
+      ],
+      "aliases": [
+        "CVE-2026-39829",
+        "GHSA-w879-237q-wc7r"
+      ],
+      "id": "GO-2026-5018"
+    },
+    {
+      "affected": [
+        {
+          "ecosystem_specific": {
+            "imports": [
+              {
+                "path": "golang.org/x/crypto/ssh"
+              }
+            ]
+          },
+          "package": {
+            "ecosystem": "Go",
+            "name": "golang.org/x/crypto"
+          }
+        }
+      ],
+      "aliases": [
+        "CVE-2026-39831",
+        "GHSA-89gr-r52h-f8rx"
+      ],
+      "id": "GO-2026-5019"
+    },
+    {
+      "affected": [
+        {
+          "ecosystem_specific": {
+            "imports": [
+              {
+                "path": "golang.org/x/crypto/ssh"
+              }
+            ]
+          },
+          "package": {
+            "ecosystem": "Go",
+            "name": "golang.org/x/crypto"
+          }
+        }
+      ],
+      "aliases": [
+        "CVE-2026-39834",
+        "GHSA-rm3j-f69w-wqmq"
+      ],
+      "id": "GO-2026-5020"
+    },
+    {
+      "affected": [
+        {
+          "ecosystem_specific": {
+            "imports": [
+              {
+                "path": "golang.org/x/crypto/ssh/knownhosts"
+              }
+            ]
+          },
+          "package": {
+            "ecosystem": "Go",
+            "name": "golang.org/x/crypto"
+          }
+        }
+      ],
+      "aliases": [
+        "CVE-2026-42508",
+        "GHSA-5cgq-3rg8-m6cv"
+      ],
+      "id": "GO-2026-5021"
+    },
+    {
+      "affected": [
+        {
+          "ecosystem_specific": {
+            "imports": [
+              {
+                "path": "golang.org/x/crypto/ssh"
+              }
+            ]
+          },
+          "package": {
+            "ecosystem": "Go",
+            "name": "golang.org/x/crypto"
+          }
+        }
+      ],
+      "aliases": [
+        "CVE-2026-46595",
+        "GHSA-x527-x647-q7gg"
+      ],
+      "id": "GO-2026-5023"
+    },
+    {
+      "affected": [
+        {
+          "ecosystem_specific": {
+            "imports": [
+              {
+                "path": "golang.org/x/crypto/ssh/agent"
+              }
+            ]
+          },
+          "package": {
+            "ecosystem": "Go",
+            "name": "golang.org/x/crypto"
+          }
+        }
+      ],
+      "aliases": [
+        "CVE-2026-46598",
+        "GHSA-9m57-25v3-79x9"
+      ],
+      "id": "GO-2026-5033"
+    },
+    {
+      "affected": [
+        {
+          "ecosystem_specific": {
+            "imports": [
+              {
+                "path": "golang.org/x/crypto/openpgp"
+              },
+              {
+                "path": "golang.org/x/crypto/openpgp/packet"
+              },
+              {
+                "path": "golang.org/x/crypto/openpgp/armor"
+              },
+              {
+                "path": "golang.org/x/crypto/openpgp/clearsign"
+              },
+              {
+                "path": "golang.org/x/crypto/openpgp/errors"
+              },
+              {
+                "path": "golang.org/x/crypto/openpgp/elgamal"
+              },
+              {
+                "path": "golang.org/x/crypto/openpgp/s2k"
+              }
+            ]
+          },
+          "package": {
+            "ecosystem": "Go",
+            "name": "golang.org/x/crypto"
+          }
+        }
+      ],
+      "id": "GO-2026-5932"
+    },
+    {
+      "affected": [
+        {
+          "ecosystem_specific": {
+            "imports": [
+              {
+                "path": "golang.org/x/crypto/ssh"
+              }
+            ]
+          },
+          "package": {
+            "ecosystem": "Go",
+            "name": "golang.org/x/crypto"
+          }
+        }
+      ],
+      "aliases": [
+        "CVE-2026-56854"
+      ],
+      "id": "GO-2026-6303"
+    },
+    {
+      "affected": [
+        {
+          "ecosystem_specific": {
+            "imports": [
+              {
+                "path": "golang.org/x/crypto/ssh"
+              }
+            ]
+          },
+          "package": {
+            "ecosystem": "Go",
+            "name": "golang.org/x/crypto"
+          }
+        }
+      ],
+      "aliases": [
+        "CVE-2026-78662"
+      ],
+      "id": "GO-2026-6354"
+    },
+    {
+      "affected": [
+        {
+          "ecosystem_specific": {
+            "imports": [
+              {
+                "path": "golang.org/x/crypto/ssh"
+              }
+            ]
+          },
+          "package": {
+            "ecosystem": "Go",
+            "name": "golang.org/x/crypto"
+          }
+        }
+      ],
+      "aliases": [
+        "CVE-2026-56855"
+      ],
+      "id": "GO-2026-6355"
+    }
+  ]
+}

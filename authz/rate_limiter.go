@@ -25,7 +25,7 @@ import (
 // при этом НЕ списывается (баланс уходит в минус и отрабатывается пополнением),
 // поэтому перерасход возвращается, а не накапливается безнаказанно.
 //
-// Тhread-safe; eviction inactive subjects через periodic sweep.
+// Thread-safe; eviction inactive subjects через periodic sweep.
 type rateLimiter struct {
 	mu sync.Mutex
 
@@ -179,7 +179,7 @@ func (rl *rateLimiter) evictForInsertLocked() {
 }
 
 // EvictInactive удаляет subject-bucket'ы, у которых lastSeen старше maxAge.
-// Вызывается из background-loop'а раз в minуту, чтобы избежать unbounded
+// Вызывается из background-loop'а раз в минуту, чтобы избежать unbounded
 // memory-growth при большом subject-vocabulary.
 func (rl *rateLimiter) EvictInactive(maxAge time.Duration) int {
 	rl.mu.Lock()

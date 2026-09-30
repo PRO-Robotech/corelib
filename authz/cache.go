@@ -43,7 +43,7 @@ type Cache struct {
 	// инкрементально на insert/delete, чтобы решение об эвикции по потолку было O(1).
 	count int
 
-	// maxEntries — жёсткий потолок числа entry (CWE-770 защита от unbounded roста).
+	// maxEntries — жёсткий потолок числа entry (CWE-770 защита от unbounded роста).
 	maxEntries int
 
 	// now — функция текущего времени, переопределяема в тестах.

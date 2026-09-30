@@ -373,6 +373,18 @@ const (
 	// `notify` сама и выдала, и публичный и внутренний `Get` извещения отвечали
 	// бы `INVALID_ARGUMENT` на всяком входе.
 	PrefixNoticeHyphen = "ntc"
+	// PrefixTokenFamilyHyphen — iam семейство токенов (`tfm-…`): грант OAuth 2.0
+	// службы доступа, под ключом которого живут код авторизации, токен доступа
+	// и токен обновления одной выдачи и по которому семейство отзывается
+	// целиком. NewHyphenID("tfm") → "tfm-<17-base32>" (21 символ).
+	//
+	// Ключ чеканит служба крючком церемонии `oauthceremony.Config.NewGrantID`,
+	// и чеканит ИМЕННО NewHyphenID: слитная NewID("tfm") даёт `tfm<17>` без
+	// дефиса, и ограничение схемы служебной таблицы семейств (`^tfm-…`)
+	// отвергало бы вставку на каждой выдаче кода. Запись в каноне обязательна по
+	// тому же классу, что у `lim`, `mbr` и `ak`: без неё `validate.ResourceID`
+	// отвергал бы корректный ключ, который служба сама и выдала.
+	PrefixTokenFamilyHyphen = "tfm"
 )
 
 // hyphenFormPrefixes — going-forward hyphen-form id prefixes (B3, redesign-2026
@@ -409,6 +421,10 @@ var hyphenFormPrefixes = []string{
 	// notify: строка ленты уведомлений. Именованная константа: единый источник
 	// истины с NewHyphenID-генерацией (NTF-1, Р8).
 	PrefixNotificationHyphen,
+	// iam: семейство токенов — ключ гранта OAuth 2.0 службы доступа.
+	// Именованная константа: единый источник истины с NewHyphenID-генерацией в
+	// крючке чеканки церемонии (см. объявление выше).
+	PrefixTokenFamilyHyphen,
 	// compute: Instance/MachineType/PlacementGroup/VolumeType (ins/mt — именованные
 	// константы: единый источник истины с NewHyphenID-генерацией).
 	PrefixInstanceHyphen, PrefixMachineTypeHyphen, "plg", "vt",

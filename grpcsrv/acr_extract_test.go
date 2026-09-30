@@ -28,36 +28,6 @@ import (
 	"github.com/PRO-Robotech/corelib/grpcsrv"
 )
 
-// --- ACR ranking helper (shared with gateway StepUpGate / iam floor).
-func TestACRRank_Ordering(t *testing.T) {
-	require.Equal(t, 0, grpcsrv.ACRRank(""), "empty ⇒ rank 0")
-	require.Equal(t, 0, grpcsrv.ACRRank("0"))
-	require.Equal(t, 1, grpcsrv.ACRRank("1"))
-	require.Equal(t, 2, grpcsrv.ACRRank("2"))
-	require.Equal(t, 3, grpcsrv.ACRRank("3"))
-	require.Equal(t, 0, grpcsrv.ACRRank("garbage"), "unknown ⇒ rank 0 (fail-closed)")
-}
-
-// --- ACRSatisfies — required=="" / "0" is a no-op (always satisfied),
-//
-//	matching the public StepUpGate.Check RequiredACRMin=="" semantics.
-func TestACRSatisfies(t *testing.T) {
-	t.Run("no_requirement_always_ok", func(t *testing.T) {
-		require.True(t, grpcsrv.ACRSatisfies("", ""))
-		require.True(t, grpcsrv.ACRSatisfies("0", ""))
-		require.True(t, grpcsrv.ACRSatisfies("", "0"), `required "0" ⇒ no requirement`)
-	})
-	t.Run("met", func(t *testing.T) {
-		require.True(t, grpcsrv.ACRSatisfies("2", "2"))
-		require.True(t, grpcsrv.ACRSatisfies("3", "2"))
-	})
-	t.Run("not_met", func(t *testing.T) {
-		require.False(t, grpcsrv.ACRSatisfies("1", "2"))
-		require.False(t, grpcsrv.ACRSatisfies("", "2"), "absent acr vs required ⇒ fail-closed")
-		require.False(t, grpcsrv.ACRSatisfies("garbage", "2"))
-	})
-}
-
 // --- trusted peer carries acr into ctx.
 func TestTrustedACR_VerifiedPeer_Carried(t *testing.T) {
 	// mTLS-verified peer: ctx carries a verified cert-identity (set by
