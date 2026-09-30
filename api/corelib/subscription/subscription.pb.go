@@ -13,6 +13,7 @@ import (
 	protoreflect "google.golang.org/protobuf/reflect/protoreflect"
 	protoimpl "google.golang.org/protobuf/runtime/protoimpl"
 	anypb "google.golang.org/protobuf/types/known/anypb"
+	timestamppb "google.golang.org/protobuf/types/known/timestamppb"
 	reflect "reflect"
 	sync "sync"
 	unsafe "unsafe"
@@ -651,8 +652,9 @@ func (x *SubscriptionOpened) GetKnownKinds() []string {
 // # Что в оболочке, а что в нагрузке
 //
 // В оболочке лежит всё, по чему сервер принимает решения и по чему клиент ведёт
-// своё состояние: позиция, вид, идентификатор, ЯКОРЬ АВТОРИЗАЦИИ и род
-// изменения. В нагрузке — состояние предмета, специфичное для владельца.
+// своё состояние: позиция, вид, идентификатор, ЯКОРЬ АВТОРИЗАЦИИ, род
+// изменения, а также кто и когда изменение сделал и имя снятого предмета. В
+// нагрузке — состояние предмета, специфичное для владельца.
 //
 // # Причины остановки потока здесь НЕТ, и это намеренно
 //
@@ -699,6 +701,53 @@ type SubscriptionEvent struct {
 	// потребителя зависит именно от него, и различать снос от правки обязан уметь
 	// всякий подписчик, не зная домена.
 	Change SubscriptionEvent_Change `protobuf:"varint,5,opt,name=change,proto3,enum=corelib.subscription.SubscriptionEvent_Change" json:"change,omitempty"`
+	// initiator — КТО сделал изменение. Производит его владелец журнала, и оно
+	// есть у каждого события: строка журнала без инициатора не пишется вовсе.
+	//
+	// Форма закрыта, значений три:
+	//
+	//	user:<id>              — пользователь, id с приставкой пользователя;
+	//	service_account:<id>   — сервисный аккаунт, id с его приставкой;
+	//	system:<компонент>     — изменение, которое компонент сделал сам;
+	//	                         компонент — DNS-метка (`storage-reconciler`).
+	//
+	// Изменение, сделанное по вызову, пересланному под личностью начавшего, несёт
+	// ПЕРЕСЛАННЫЙ субъект, а не службу-отправителя.
+	//
+	// Это поле ОБОЛОЧКИ, а не нагрузки, по той же причине, что и `project_id`:
+	// у события снятия нагрузки нет, а «кто снял» подписчику нужно именно там.
+	//
+	// Пустого значения владелец не производит. Подписчик, всё же получивший
+	// пустое поле, читает его как «инициатор не сообщён» — не как «никто» и не
+	// как `system:`: подставлять инициатора за владельца он не вправе.
+	Initiator string `protobuf:"bytes,12,opt,name=initiator,proto3" json:"initiator,omitempty"`
+	// occurred_at — КОГДА изменение закоммичено: время строки журнала владельца,
+	// усечённое до секунды. Часы процесса, отдающего событие, не участвуют:
+	// время берётся из той же строки, что и само событие, поэтому одно
+	// изменение имеет одно время при любом числе чтений и реплик.
+	//
+	// Порядок событий задаёт `position`, а не это поле: две строки одной секунды
+	// неразличимы по времени и различимы по позиции.
+	//
+	// Незаданным владелец его не производит; незаданное подписчик читает как
+	// «время не сообщено», а не как начало эпохи.
+	OccurredAt *timestamppb.Timestamp `protobuf:"bytes,13,opt,name=occurred_at,json=occurredAt,proto3" json:"occurred_at,omitempty"`
+	// name — снимок имени снятого предмета. Заполняется ТОЛЬКО у `DELETED`.
+	//
+	// Зачем: у события снятия нагрузки нет (`StateUnavailable.NOT_PRODUCED`), а
+	// прочитать предмет по `resource_id` уже нельзя. Без снимка подписчик
+	// показал бы «удалён <id>», и человек не узнал бы, что именно.
+	//
+	// Снимок берётся из самой удаляемой строки в той же транзакции, а не чтением
+	// до удаления, — иначе переименование между чтением и снятием дало бы чужое
+	// имя.
+	//
+	// Форма — имя ресурса платформы (DNS-метка). Пусто у `DELETED` означает
+	// ровно одно: у вида нет имени этой формы, и владелец объявил это для ВИДА.
+	// У `CREATED` и `UPDATED` поле всегда пусто: живой предмет читается по
+	// `resource_id` (или берётся из `state`, если владелец состояние производит),
+	// и второго места об имени событие не заводит.
+	Name string `protobuf:"bytes,14,opt,name=name,proto3" json:"name,omitempty"`
 	// Носитель нагрузки — ВЫБОР ИЗ ДВУХ ВЕТВЕЙ: состояние ЛИБО признак, что
 	// состояния нет.
 	//
@@ -782,6 +831,27 @@ func (x *SubscriptionEvent) GetChange() SubscriptionEvent_Change {
 		return x.Change
 	}
 	return SubscriptionEvent_CHANGE_UNSPECIFIED
+}
+
+func (x *SubscriptionEvent) GetInitiator() string {
+	if x != nil {
+		return x.Initiator
+	}
+	return ""
+}
+
+func (x *SubscriptionEvent) GetOccurredAt() *timestamppb.Timestamp {
+	if x != nil {
+		return x.OccurredAt
+	}
+	return nil
+}
+
+func (x *SubscriptionEvent) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
 }
 
 func (x *SubscriptionEvent) GetCarrier() isSubscriptionEvent_Carrier {
@@ -885,7 +955,7 @@ var File_corelib_subscription_subscription_proto protoreflect.FileDescriptor
 
 const file_corelib_subscription_subscription_proto_rawDesc = "" +
 	"\n" +
-	"'corelib/subscription/subscription.proto\x12\x14corelib.subscription\x1a\x19google/protobuf/any.proto\"\xc7\x01\n" +
+	"'corelib/subscription/subscription.proto\x12\x14corelib.subscription\x1a\x19google/protobuf/any.proto\x1a\x1fgoogle/protobuf/timestamp.proto\"\xc7\x01\n" +
 	"\x13SubscriptionRequest\x12\x14\n" +
 	"\x05kinds\x18\x01 \x03(\tR\x05kinds\x12\x1d\n" +
 	"\n" +
@@ -902,7 +972,7 @@ const file_corelib_subscription_subscription_proto_rawDesc = "" +
 	"\x1bearliest_resumable_position\x18\x04 \x01(\tR\x19earliestResumablePosition\x12-\n" +
 	"\x12retains_everything\x18\x05 \x01(\bR\x11retainsEverything\x12\x1f\n" +
 	"\vknown_kinds\x18\x06 \x03(\tR\n" +
-	"knownKinds\"\x8e\x05\n" +
+	"knownKinds\"\xfd\x05\n" +
 	"\x11SubscriptionEvent\x12\x1a\n" +
 	"\bposition\x18\x01 \x01(\tR\bposition\x12\x12\n" +
 	"\x04kind\x18\x02 \x01(\tR\x04kind\x12\x1f\n" +
@@ -910,7 +980,11 @@ const file_corelib_subscription_subscription_proto_rawDesc = "" +
 	"resourceId\x12\x1d\n" +
 	"\n" +
 	"project_id\x18\x04 \x01(\tR\tprojectId\x12F\n" +
-	"\x06change\x18\x05 \x01(\x0e2..corelib.subscription.SubscriptionEvent.ChangeR\x06change\x12,\n" +
+	"\x06change\x18\x05 \x01(\x0e2..corelib.subscription.SubscriptionEvent.ChangeR\x06change\x12\x1c\n" +
+	"\tinitiator\x18\f \x01(\tR\tinitiator\x12;\n" +
+	"\voccurred_at\x18\r \x01(\v2\x1a.google.protobuf.TimestampR\n" +
+	"occurredAt\x12\x12\n" +
+	"\x04name\x18\x0e \x01(\tR\x04name\x12,\n" +
 	"\x05state\x18\n" +
 	" \x01(\v2\x14.google.protobuf.AnyH\x00R\x05state\x12g\n" +
 	"\x11state_unavailable\x18\v \x01(\v28.corelib.subscription.SubscriptionEvent.StateUnavailableH\x00R\x10stateUnavailable\x1a\xd5\x01\n" +
@@ -955,19 +1029,21 @@ var file_corelib_subscription_subscription_proto_goTypes = []any{
 	(*SubscriptionOpened)(nil),                     // 4: corelib.subscription.SubscriptionOpened
 	(*SubscriptionEvent)(nil),                      // 5: corelib.subscription.SubscriptionEvent
 	(*SubscriptionEvent_StateUnavailable)(nil),     // 6: corelib.subscription.SubscriptionEvent.StateUnavailable
-	(*anypb.Any)(nil),                              // 7: google.protobuf.Any
+	(*timestamppb.Timestamp)(nil),                  // 7: google.protobuf.Timestamp
+	(*anypb.Any)(nil),                              // 8: google.protobuf.Any
 }
 var file_corelib_subscription_subscription_proto_depIdxs = []int32{
 	0, // 0: corelib.subscription.SubscriptionRequest.anchor:type_name -> corelib.subscription.SubscriptionAnchor
 	1, // 1: corelib.subscription.SubscriptionEvent.change:type_name -> corelib.subscription.SubscriptionEvent.Change
-	7, // 2: corelib.subscription.SubscriptionEvent.state:type_name -> google.protobuf.Any
-	6, // 3: corelib.subscription.SubscriptionEvent.state_unavailable:type_name -> corelib.subscription.SubscriptionEvent.StateUnavailable
-	2, // 4: corelib.subscription.SubscriptionEvent.StateUnavailable.reason:type_name -> corelib.subscription.SubscriptionEvent.StateUnavailable.Reason
-	5, // [5:5] is the sub-list for method output_type
-	5, // [5:5] is the sub-list for method input_type
-	5, // [5:5] is the sub-list for extension type_name
-	5, // [5:5] is the sub-list for extension extendee
-	0, // [0:5] is the sub-list for field type_name
+	7, // 2: corelib.subscription.SubscriptionEvent.occurred_at:type_name -> google.protobuf.Timestamp
+	8, // 3: corelib.subscription.SubscriptionEvent.state:type_name -> google.protobuf.Any
+	6, // 4: corelib.subscription.SubscriptionEvent.state_unavailable:type_name -> corelib.subscription.SubscriptionEvent.StateUnavailable
+	2, // 5: corelib.subscription.SubscriptionEvent.StateUnavailable.reason:type_name -> corelib.subscription.SubscriptionEvent.StateUnavailable.Reason
+	6, // [6:6] is the sub-list for method output_type
+	6, // [6:6] is the sub-list for method input_type
+	6, // [6:6] is the sub-list for extension type_name
+	6, // [6:6] is the sub-list for extension extendee
+	0, // [0:6] is the sub-list for field type_name
 }
 
 func init() { file_corelib_subscription_subscription_proto_init() }
