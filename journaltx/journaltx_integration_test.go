@@ -160,7 +160,7 @@ func TestAfterCommit_RunsOnlyAfterASuccessfulCommit(t *testing.T) {
 			t.Fatalf("вставка: %v", err)
 		}
 		var runs, visible int
-		tx.AfterCommit(func() {
+		if err := tx.AfterCommit(func() {
 			runs++
 			// Видимость из ДРУГОГО соединения доказывает порядок: хук идёт после
 			// фиксации, а не перед ней.
@@ -175,7 +175,9 @@ func TestAfterCommit_RunsOnlyAfterASuccessfulCommit(t *testing.T) {
 			if err := conn.QueryRow(vctx, `SELECT count(*) FROM probe_journal WHERE resource_id = 'committed'`).Scan(&visible); err != nil {
 				t.Errorf("чтение из хука: %v", err)
 			}
-		})
+		}); err != nil {
+			t.Fatalf("AfterCommit на открытой транзакции: %v", err)
+		}
 		if runs != 0 {
 			t.Fatal("хук исполнен при регистрации")
 		}
@@ -196,7 +198,9 @@ func TestAfterCommit_RunsOnlyAfterASuccessfulCommit(t *testing.T) {
 			t.Fatalf("Begin: %v", err)
 		}
 		runs := 0
-		tx.AfterCommit(func() { runs++ })
+		if err := tx.AfterCommit(func() { runs++ }); err != nil {
+			t.Fatalf("AfterCommit на открытой транзакции: %v", err)
+		}
 		if err := tx.Rollback(ctx); err != nil {
 			t.Fatalf("Rollback: %v", err)
 		}
@@ -214,7 +218,9 @@ func TestAfterCommit_RunsOnlyAfterASuccessfulCommit(t *testing.T) {
 			t.Fatalf("Begin: %v", err)
 		}
 		runs := 0
-		tx.AfterCommit(func() { runs++ })
+		if err := tx.AfterCommit(func() { runs++ }); err != nil {
+			t.Fatalf("AfterCommit на открытой транзакции: %v", err)
+		}
 		// Ошибка оператора переводит транзакцию в прерванное состояние: Commit
 		// базы на ней — откат.
 		_, _ = tx.Exec(ctx, `INSERT INTO probe_journal (sequence_no, resource_id) VALUES (NULL, 'x')`)
@@ -247,5 +253,50 @@ func TestBegin_InitiatorComesFromTheComponentContext(t *testing.T) {
 	}
 	if tx.Initiator() != want || want.String() != "system:storage-reconciler" {
 		t.Errorf("Tx.Initiator() = %q, ожидалось %q", tx.Initiator().String(), want.String())
+	}
+}
+
+// TestAfterCommit_OnAFinishedTransactionIsRefused — регистрация хука на
+// завершённой транзакции (после Commit и после Rollback) — отказ
+// [journaltx.ErrTxFinished], а не паника: хуки регистрируются по ходу запроса,
+// и паника стояла бы в рабочем пути. Хук, поданный с отказом, не исполняется
+// никогда. Близнец — регистрация на открытой транзакции той же пробы — отказа не
+// даёт.
+func TestAfterCommit_OnAFinishedTransactionIsRefused(t *testing.T) {
+	ctx := context.Background()
+	pool := singleConnPool(t)
+	uctx := operations.WithPrincipal(ctx, operations.Principal{Type: "user", ID: ids.NewID(ids.PrefixUser)})
+
+	finishers := []struct {
+		name   string
+		finish func(*journaltx.Tx) error
+	}{
+		{"после коммита", func(tx *journaltx.Tx) error { return tx.Commit(ctx) }},
+		{"после отката", func(tx *journaltx.Tx) error { return tx.Rollback(ctx) }},
+	}
+	for _, f := range finishers {
+		t.Run(f.name, func(t *testing.T) {
+			tx, err := journaltx.Begin(uctx, pool, journaltx.NewOptions(true))
+			if err != nil {
+				t.Fatalf("Begin: %v", err)
+			}
+			before := 0
+			if err := tx.AfterCommit(func() { before++ }); err != nil {
+				t.Fatalf("близнец: AfterCommit на открытой транзакции отвергнут: %v", err)
+			}
+			if err := f.finish(tx); err != nil {
+				t.Fatalf("завершение: %v", err)
+			}
+
+			late := 0
+			err = tx.AfterCommit(func() { late++ })
+			if !errors.Is(err, journaltx.ErrTxFinished) {
+				t.Fatalf("AfterCommit на завершённой транзакции: отказ %v, ожидался ErrTxFinished", err)
+			}
+			_ = tx.Commit(ctx)
+			if late != 0 {
+				t.Errorf("хук, поданный с отказом, исполнен %d раз", late)
+			}
+		})
 	}
 }

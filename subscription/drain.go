@@ -391,10 +391,13 @@ func (s *Server) read(
 
 	// Колонки атрибуции читаются, только если журнал их объявил: у журнала
 	// прежней формы их нет, и выражение-заглушка даёт пустое значение, а не
-	// отказ запроса.
+	// отказ запроса. NULL в колонке инициатора (строки, лёгшие до того, как
+	// колонка появилась, либо писатель без помощника) читается как пустое
+	// значение — та же семантика, что у журнала без колонки: одна такая строка
+	// не останавливает поток.
 	initiatorExpr := "''"
 	if st.InitiatorColumn != "" {
-		initiatorExpr = st.InitiatorColumn
+		initiatorExpr = fmt.Sprintf("COALESCE(%s, '')", st.InitiatorColumn)
 	}
 	occurredExpr := "NULL::timestamptz"
 	if st.OccurredAtColumn != "" {
@@ -508,7 +511,8 @@ func (s *Server) mapRows(rows []Row, filter Filter) ([]*subscriptionv1.Subscript
 			ev.OccurredAt = timestamppb.New(row.OccurredAt.Truncate(time.Second))
 		}
 		if name, complaint := deletedName(m.Kinds[row.Kind], change, row.Payload); complaint != "" {
-			s.log.Warn("subscription: "+complaint, "position", row.Position, "kind", row.Kind)
+			s.log.Warn("subscription: deleted row of a named kind goes without a name",
+				"complaint", complaint, "position", row.Position, "kind", row.Kind)
 		} else {
 			ev.Name = name
 		}

@@ -66,6 +66,10 @@ var (
 	// Отказ стоит до `auth.SystemPrincipalFor`, чья запасная ветка на пустом
 	// входе отдала бы `{system, bootstrap}`.
 	ErrComponentUnnamed = errors.New("journaltx: component service or role is empty")
+
+	// ErrTxFinished — [Tx.AfterCommit] позван на транзакции, уже завершённой
+	// [Tx.Commit] либо [Tx.Rollback]: хук не исполнился бы никогда.
+	ErrTxFinished = errors.New("journaltx: AfterCommit on a finished transaction")
 )
 
 // Options — то, что корень модуля передаёт помощнику: флаг ленты модуля.
@@ -121,13 +125,16 @@ func (t *Tx) Initiator() auth.Initiator { return t.initiator }
 // в порядке регистрации. Откат и неудавшийся коммит хуков не исполняют: счётчик,
 // растущий хуком, не утверждает того, чего не было (NTF-3, CX3-07).
 //
-// Регистрация на завершённой транзакции — ошибка программы: хук не исполнился
-// бы никогда, и это было бы молчанием, поэтому она паникует.
-func (t *Tx) AfterCommit(f func()) {
+// Регистрация на завершённой (Commit или Rollback) транзакции — отказ
+// [ErrTxFinished]: хук не исполнился бы никогда, и принять его молча значило бы
+// промолчать. Хуки регистрируются по ходу запроса, поэтому отказ — ошибка, а не
+// паника; хук, поданный с отказом, не исполняется.
+func (t *Tx) AfterCommit(f func()) error {
 	if t.finished {
-		panic("journaltx: AfterCommit on a finished transaction")
+		return ErrTxFinished
 	}
 	t.hooks = append(t.hooks, f)
+	return nil
 }
 
 // Commit фиксирует транзакцию и при успехе исполняет хуки [Tx.AfterCommit].

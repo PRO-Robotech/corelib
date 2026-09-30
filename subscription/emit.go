@@ -21,6 +21,12 @@ import (
 // Отказ стоит ДО оператора вставки.
 var ErrEntryRefused = errors.New("subscription: journal entry refused by the owner's declaration")
 
+// ErrNotHelperTx — [Journal.Emit] позван не транзакцией, открытой
+// `journaltx.Begin`: nil либо `journaltx.Tx`, собранный в обход помощника. У
+// такой транзакции нет выставленного инициатора, и строка легла бы без него
+// (или оператор упал бы на пустой транзакции). Отказ стоит до оператора.
+var ErrNotHelperTx = errors.New("subscription: Journal.Emit needs a transaction opened by journaltx.Begin")
+
 // Entry — одна строка журнала в словаре владельца.
 type Entry struct {
 	// Kind — вид предмета словом хранилища (ключ [Mapping.Kinds]).
@@ -43,14 +49,18 @@ type Entry struct {
 // Транзакция — только транзакция помощника `journaltx`: колонка инициатора
 // оператором не называется, её значение даёт умолчание колонки из настройки,
 // выставленной [journaltx.Begin]. Колонка времени тоже не называется — её
-// значение ставит база (`DEFAULT now()`).
+// значение ставит база (`DEFAULT now()`). Иная транзакция — nil либо
+// `journaltx.Tx`, собранный в обход Begin, — отвергается [ErrNotHelperTx].
 //
 // Запись, противоречащая объявлению, отвергается [ErrEntryRefused] до
 // оператора; отказ называет вид (или род изменения), а не подставляет
 // значение.
 func (j Journal) Emit(ctx context.Context, tx *journaltx.Tx, e Entry) error {
-	if tx == nil {
-		return fmt.Errorf("subscription: Journal.Emit без транзакции помощника journaltx")
+	// Транзакцию помощника отличает выставленный инициатор: Begin без него
+	// транзакцию не открывает, а собранный в обход Begin `journaltx.Tx` его
+	// выставить не может (поле не экспортировано).
+	if tx == nil || tx.Initiator() == "" {
+		return ErrNotHelperTx
 	}
 	payload, err := j.admit(e)
 	if err != nil {
@@ -129,7 +139,10 @@ func (j Journal) admit(e Entry) ([]byte, error) {
 			return nil, fmt.Errorf("%w: якорь журнала даёт отображение, но Mapping.Anchor не назван (вид %s)", ErrEntryRefused, e.Kind)
 		}
 		derived, err := j.Mapping.Anchor(Row{Kind: e.Kind, ID: e.ID, Change: e.Change, Payload: payload})
-		if err != nil || derived != e.ProjectID {
+		if err != nil {
+			return nil, fmt.Errorf("%w: якорь вида %s не выведен: %w", ErrEntryRefused, e.Kind, err)
+		}
+		if derived != e.ProjectID {
 			return nil, fmt.Errorf("%w: якорь записи вида %s расходится с якорем, который выведет отображение", ErrEntryRefused, e.Kind)
 		}
 	}
