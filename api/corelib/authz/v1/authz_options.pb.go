@@ -52,8 +52,31 @@ type ScopeExtractor struct {
 	// account/cluster-scoped reads check `project:<id>` → 403). Empty for the
 	// overwhelming majority of RPCs, which have a fixed scope type.
 	ObjectTypeFromRequestField string `protobuf:"bytes,3,opt,name=object_type_from_request_field,json=objectTypeFromRequestField,proto3" json:"object_type_from_request_field,omitempty"`
-	unknownFields              protoimpl.UnknownFields
-	sizeCache                  protoimpl.SizeCache
+	// bound_to_server — объект проверки есть экземпляр типа `object_type`, к
+	// которому процесс ПРИВЯЗАЛ сервер при подъёме, а не значение из запроса.
+	//
+	// Зачем. Есть серверы, у которых предмет вопроса о правах назван не
+	// вызывающим, а самим процессом: сервер ленты уведомлений отдаёт строки ОДНОЙ
+	// ленты — той, которой владеет модуль, поднявший его. Взять идентификатор из
+	// запроса значило бы позволить вызывающему назвать чужую ленту и спросить о
+	// ней; взять его из имени процесса вне сервера — завести второе значение
+	// «имени модуля», способное разойтись с первым. Поэтому значение привязки
+	// (тип и идентификатор) приносит сам сервер при подъёме, а аннотация говорит
+	// только, что оно нужно.
+	//
+	// Сочетания. Поле невыразимо вместе с `from_request_field` и
+	// `object_type_from_request_field`: у проверки один источник идентификатора, и
+	// два источника — два ответа на один вопрос. Вывод каталога отвергает такую
+	// аннотацию с именем метода; метод этой формы, для типа которого процесс
+	// привязки не объявил, — отказ старта с именем метода; две привязки одного
+	// типа — тоже отказ старта. `object_type` при нём обязателен: он называет, к
+	// какому типу привязка относится.
+	//
+	// Значение по умолчанию `false` — прежнее поведение: идентификатор берётся из
+	// `from_request_field`.
+	BoundToServer bool `protobuf:"varint,4,opt,name=bound_to_server,json=boundToServer,proto3" json:"bound_to_server,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *ScopeExtractor) Reset() {
@@ -105,6 +128,13 @@ func (x *ScopeExtractor) GetObjectTypeFromRequestField() string {
 		return x.ObjectTypeFromRequestField
 	}
 	return ""
+}
+
+func (x *ScopeExtractor) GetBoundToServer() bool {
+	if x != nil {
+		return x.BoundToServer
+	}
+	return false
 }
 
 var file_corelib_authz_v1_authz_options_proto_extTypes = []protoimpl.ExtensionInfo{
@@ -188,12 +218,13 @@ var File_corelib_authz_v1_authz_options_proto protoreflect.FileDescriptor
 
 const file_corelib_authz_v1_authz_options_proto_rawDesc = "" +
 	"\n" +
-	"$corelib/authz/v1/authz_options.proto\x12\x10corelib.authz.v1\x1a google/protobuf/descriptor.proto\"\xa3\x01\n" +
+	"$corelib/authz/v1/authz_options.proto\x12\x10corelib.authz.v1\x1a google/protobuf/descriptor.proto\"\xcb\x01\n" +
 	"\x0eScopeExtractor\x12\x1f\n" +
 	"\vobject_type\x18\x01 \x01(\tR\n" +
 	"objectType\x12,\n" +
 	"\x12from_request_field\x18\x02 \x01(\tR\x10fromRequestField\x12B\n" +
-	"\x1eobject_type_from_request_field\x18\x03 \x01(\tR\x1aobjectTypeFromRequestField:@\n" +
+	"\x1eobject_type_from_request_field\x18\x03 \x01(\tR\x1aobjectTypeFromRequestField\x12&\n" +
+	"\x0fbound_to_server\x18\x04 \x01(\bR\rboundToServer:@\n" +
 	"\n" +
 	"permission\x12\x1e.google.protobuf.MethodOptions\x18ц\x03 \x01(\tR\n" +
 	"permission:M\n" +
