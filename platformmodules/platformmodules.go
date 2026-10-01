@@ -13,7 +13,9 @@
 // У большинства модулей все три совпадают. У балансировщика РАЗЛИЧНЫ ДВА из
 // трёх: служба `nlb`, контракт `loadbalancer`, типы `nlb_listener`. Соответствие
 // установлено решением, а не правилом, и вывести одно написание из другого
-// нельзя ничем.
+// нельзя ничем. У службы уведомлений `notify` двух написаний из трёх НЕТ вовсе:
+// домена контрактов и домена типов у неё нет, и пустая строка в обеих колонках
+// — проверяемый факт, а не пропуск.
 //
 // # Почему это отдельное объявление в продукте, а не литерал у каждого читателя
 //
@@ -48,6 +50,10 @@ type Module struct {
 	// имя SAN её клиентского сертификата.
 	Service string
 	// CatalogModule — сегмент пакета контрактов: `proto/kacho/cloud/<CatalogModule>`.
+	// ПУСТАЯ строка — не «неизвестно», а «домена контрактов у модуля нет»; так у
+	// notify. Пустое написание не является ни именем каталога, ни расхождением:
+	// обратный поиск по нему не отвечает службой, а карты расхождений его не
+	// несут.
 	CatalogModule string
 	// ObjectDomain — приставка типов объекта модели прав (`<ObjectDomain>_`).
 	// ПУСТАЯ строка — не «неизвестно», а «модель не объявляет ни одного типа
@@ -68,6 +74,15 @@ var modules = []Module{
 	{Service: "iam", CatalogModule: "iam", ObjectDomain: "iam"},
 	// nlb — единственный модуль, у которого различны ДВА написания из трёх.
 	{Service: "nlb", CatalogModule: "loadbalancer", ObjectDomain: "nlb"},
+	// notify — служба уведомлений платформы (NTF-1, решение Д73). Из трёх
+	// написаний у неё существует ОДНО — каталог `services/notify`:
+	//   - модуля каталога нет: её контракт `corelib.notify` лежит под
+	//     нейтральным корнем `corelib`, доменов `<корень>/cloud/<домен>` у
+	//     которого нет, а публичного слушателя у службы нет по построению (Д17);
+	//   - домена типов нет: `notification_feed` и `notification_namespace`
+	//     заводит манифест модели, модулю они не принадлежат, и запись их через
+	//     прокси запрещена перечнем (authz/proxytuple).
+	{Service: "notify", CatalogModule: "", ObjectDomain: ""},
 	{Service: "registry", CatalogModule: "registry", ObjectDomain: "registry"},
 	{Service: "storage", CatalogModule: "storage", ObjectDomain: "storage"},
 	{Service: "vpc", CatalogModule: "vpc", ObjectDomain: "vpc"},
@@ -93,8 +108,13 @@ func CatalogModuleOfService(service string) (string, bool) {
 }
 
 // ServiceOfCatalogModule — короткое имя службы по модулю каталога.
-// ok=false — модуль не объявлен.
+// ok=false — модуль не объявлен. Пустое написание — не имя модуля, и ответ на
+// него ok=false: иначе вызывающий, не нашедший имени каталога, получил бы в
+// ответ службу, у которой домена контрактов нет.
 func ServiceOfCatalogModule(catalogModule string) (string, bool) {
+	if catalogModule == "" {
+		return "", false
+	}
 	for _, m := range modules {
 		if m.CatalogModule == catalogModule {
 			return m.Service, true
@@ -132,13 +152,15 @@ func Services() []string {
 // картой. Совпадающие написания в карту НЕ ПОПАДАЮТ, и это часть контракта:
 // читатели таких карт трактуют отсутствие записи как «написания совпали», то
 // есть совпадающая запись изменила бы смысл карты, ничего к ней не добавив.
+// Пустой модуль каталога не попадает тоже: он не написание, а «домена
+// контрактов нет», и читатель подставил бы пустую строку вместо имени каталога.
 //
 // Отдана здесь, а не собирается у каждого читателя: собранная на месте, она
 // была бы шестой копией того же соответствия — ровно тем, что пакет и снял.
 func AliasesByService() map[string]string {
 	out := map[string]string{}
 	for _, m := range modules {
-		if m.CatalogModule != m.Service {
+		if m.CatalogModule != "" && m.CatalogModule != m.Service {
 			out[m.Service] = m.CatalogModule
 		}
 	}
@@ -149,7 +171,7 @@ func AliasesByService() map[string]string {
 func AliasesByCatalogModule() map[string]string {
 	out := map[string]string{}
 	for _, m := range modules {
-		if m.CatalogModule != m.Service {
+		if m.CatalogModule != "" && m.CatalogModule != m.Service {
 			out[m.CatalogModule] = m.Service
 		}
 	}
