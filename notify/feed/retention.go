@@ -50,6 +50,8 @@ func RetentionSubjects(db DB, svc string) []retention.Subject {
 			Name:  tablename.Of(svc, tablename.Outbox),
 			Grace: ClosedRetention,
 			Sweep: func(ctx context.Context, grace time.Duration, batch int) (int64, bool, error) {
+				ctx, cancel := context.WithTimeout(ctx, sweepCallTimeout)
+				defer cancel()
 				tag, err := db.Exec(ctx, closedSweepSQL(svc), grace.Seconds(), batch)
 				if err != nil {
 					return 0, false, err
@@ -61,6 +63,8 @@ func RetentionSubjects(db DB, svc string) []retention.Subject {
 			Name:  tablename.Of(svc, tablename.Window),
 			Grace: WindowRetention,
 			Sweep: func(ctx context.Context, grace time.Duration, batch int) (int64, bool, error) {
+				ctx, cancel := context.WithTimeout(ctx, sweepCallTimeout)
+				defer cancel()
 				tag, err := db.Exec(ctx, fmt.Sprintf(`DELETE FROM %[1]s
  WHERE (template, scope, window_seconds, key, window_start) IN (
   SELECT template, scope, window_seconds, key, window_start FROM %[1]s

@@ -33,6 +33,14 @@ const (
 	MaxDefer = 15 * time.Minute
 )
 
+// storeCallTimeout — свой срок каждого оператора хранилища сервера ленты
+// (arch-per-call-deadline): срок вызывающего может не быть вовсе. Аренда — один
+// оператор не больше MaxClaim строк с SKIP LOCKED, запись исхода — один
+// условный оператор по первичному ключу; 10 с — запас на медленный, но живой
+// источник, равный сроку вызова Claim у notify (sourceCallTimeout, §8), и
+// много меньше LeaseTTL: оператор, переживший срок, аренду не продлевает.
+const storeCallTimeout = 10 * time.Second
+
 // FeedObjectType — тип объекта модели прав ленты: объект проверки Claim и Ack
 // — notification_feed:<модуль>, к которому привязан сервер (З14).
 const FeedObjectType servicecontract.ObjectType = "notification_feed"

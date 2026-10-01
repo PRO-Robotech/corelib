@@ -25,6 +25,11 @@ const (
 	SweepBatch = 1000
 )
 
+// sweepCallTimeout — свой срок одного оператора уборки (arch-per-call-deadline):
+// пачка истечения (SweepBatch строк и замки их окон) либо партия уборки. Меньше
+// SweepInterval: зависший оператор не съедает следующий проход.
+const sweepCallTimeout = 30 * time.Second
+
 // expireSQL — один оператор решает причину истечения и возврат вклада
 // (З10, CX1-53 (б), CX1-16):
 //
@@ -223,6 +228,8 @@ func (s *Sweeper) Pass(ctx context.Context) error {
 
 // expireBatch — один оператор истечения; возвращает число переведённых строк.
 func (s *Sweeper) expireBatch(ctx context.Context) (int, error) {
+	ctx, cancel := context.WithTimeout(ctx, sweepCallTimeout)
+	defer cancel()
 	rows, err := s.db.Query(ctx, expireSQL(s.service), SweepBatch, s.refunds)
 	if err != nil {
 		return 0, err
@@ -262,6 +269,8 @@ func (s *Sweeper) expireBatch(ctx context.Context) (int, error) {
 
 // observe — наблюдение ленты: возраст старейшей строки pending и отсроченные.
 func (s *Sweeper) observe(ctx context.Context) error {
+	ctx, cancel := context.WithTimeout(ctx, storeCallTimeout)
+	defer cancel()
 	rows, err := s.db.Query(ctx, pendingSQL(s.service))
 	if err != nil {
 		return err

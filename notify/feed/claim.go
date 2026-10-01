@@ -69,25 +69,8 @@ func (s *Server) Claim(ctx context.Context, req *notifyv1.ClaimRequest) (*notify
 	if err != nil {
 		return nil, err
 	}
-	rows, err := s.db.Query(ctx, claimSQL(s.service), classes, int64(req.GetMax()), LeaseTTL.Seconds())
+	got, err := s.lease(ctx, classes, int64(req.GetMax()))
 	if err != nil {
-		return nil, s.internalError(ctx, "claim", err)
-	}
-	var got []leased
-	for rows.Next() {
-		var l leased
-		var leaseUS, expiresUS int64
-		if err := rows.Scan(&l.id, &l.token, &l.template, &l.rev, &l.class, &l.address, &l.attrs, &l.secret,
-			&l.enqueued, &leaseUS, &expiresUS); err != nil {
-			rows.Close()
-			return nil, s.internalError(ctx, "claim scan", err)
-		}
-		l.leaseLeft = time.Duration(leaseUS) * time.Microsecond
-		l.expiresLeft = time.Duration(expiresUS) * time.Microsecond
-		got = append(got, l)
-	}
-	rows.Close()
-	if err := rows.Err(); err != nil {
 		return nil, s.internalError(ctx, "claim", err)
 	}
 	// Отсчёт времени ответа — от возврата оператора: расшифровка и закрытие
@@ -130,6 +113,31 @@ func (s *Server) Claim(ctx context.Context, req *notifyv1.ClaimRequest) (*notify
 		n.ExpiresIn = durationpb.New(max(kept[i].expiresLeft-spent, 0))
 	}
 	return &notifyv1.ClaimResponse{Notifications: out}, nil
+}
+
+// lease — оператор аренды под своим сроком; строки прочитаны и соединение
+// возвращено пулу до возврата.
+func (s *Server) lease(ctx context.Context, classes []string, limit int64) ([]leased, error) {
+	ctx, cancel := context.WithTimeout(ctx, storeCallTimeout)
+	defer cancel()
+	rows, err := s.db.Query(ctx, claimSQL(s.service), classes, limit, LeaseTTL.Seconds())
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var got []leased
+	for rows.Next() {
+		var l leased
+		var leaseUS, expiresUS int64
+		if err := rows.Scan(&l.id, &l.token, &l.template, &l.rev, &l.class, &l.address, &l.attrs, &l.secret,
+			&l.enqueued, &leaseUS, &expiresUS); err != nil {
+			return nil, err
+		}
+		l.leaseLeft = time.Duration(leaseUS) * time.Microsecond
+		l.expiresLeft = time.Duration(expiresUS) * time.Microsecond
+		got = append(got, l)
+	}
+	return got, rows.Err()
 }
 
 // claimClasses — границы Claim (NTF1-B21, B24): max в [1..MaxClaim], набор
@@ -213,6 +221,8 @@ func (s *Server) open(l leased) (map[string]string, Reason, error) {
 // Отказ закрытия строку не выдаёт: она остаётся под арендой и после её конца
 // выдаётся и закрывается снова.
 func (s *Server) closeSealed(ctx context.Context, l leased, reason Reason) {
+	ctx, cancel := context.WithTimeout(ctx, storeCallTimeout)
+	defer cancel()
 	tag, err := s.db.Exec(ctx, sealedCloseSQL(s.service), l.id, l.token, string(reason))
 	if err != nil {
 		s.log.WarnContext(ctx, "notification feed row with an unopenable secret was not closed",

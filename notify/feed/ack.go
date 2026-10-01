@@ -77,14 +77,8 @@ func (s *Server) Ack(ctx context.Context, req *notifyv1.AckRequest) (*notifyv1.A
 	if err != nil {
 		return nil, err
 	}
-	var row pgx.Row
-	if a.outcome.Kind == KindDefer {
-		row = s.db.QueryRow(ctx, ackDeferSQL(s.service), a.id, a.token, string(a.outcome.Reason), a.deferFor.Seconds())
-	} else {
-		row = s.db.QueryRow(ctx, ackTerminalSQL(s.service), a.id, a.token, string(a.outcome.Kind), string(a.outcome.Reason))
-	}
-	var class string
-	switch err := row.Scan(&class); {
+	class, err := s.record(ctx, a)
+	switch {
 	case err == nil:
 		s.metrics.observeOutcome(Class(class), a.outcome)
 		return &notifyv1.AckResponse{}, nil
@@ -94,13 +88,31 @@ func (s *Server) Ack(ctx context.Context, req *notifyv1.AckRequest) (*notifyv1.A
 	return s.classifyRepeat(ctx, a)
 }
 
+// record — один записывающий оператор под своим сроком; возвращает класс
+// изменённой строки либо pgx.ErrNoRows.
+func (s *Server) record(ctx context.Context, a ackRequest) (string, error) {
+	ctx, cancel := context.WithTimeout(ctx, storeCallTimeout)
+	defer cancel()
+	var row pgx.Row
+	if a.outcome.Kind == KindDefer {
+		row = s.db.QueryRow(ctx, ackDeferSQL(s.service), a.id, a.token, string(a.outcome.Reason), a.deferFor.Seconds())
+	} else {
+		row = s.db.QueryRow(ctx, ackTerminalSQL(s.service), a.id, a.token, string(a.outcome.Kind), string(a.outcome.Reason))
+	}
+	var class string
+	err := row.Scan(&class)
+	return class, err
+}
+
 // classifyRepeat — ноль строк записи: строки нет — NOT_FOUND; тот же токен и
 // та же пара — успех без изменения; тот же токен и иная пара —
 // OUTCOME_ALREADY_RECORDED; иначе — LEASE_LOST. Срок аренды в классификацию
 // не входит (повтор после конца аренды — успех).
 func (s *Server) classifyRepeat(ctx context.Context, a ackRequest) (*notifyv1.AckResponse, error) {
 	var token, kind, reason string
-	err := s.db.QueryRow(ctx, ackRecordedSQL(s.service), a.id).Scan(&token, &kind, &reason)
+	rctx, cancel := context.WithTimeout(ctx, storeCallTimeout)
+	err := s.db.QueryRow(rctx, ackRecordedSQL(s.service), a.id).Scan(&token, &kind, &reason)
+	cancel()
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, coreerrors.ReasonResourceNotFound.Errf(coreerrors.PeerRef{
 			Service: s.module, ResourceType: "notification", ResourceID: a.id,
