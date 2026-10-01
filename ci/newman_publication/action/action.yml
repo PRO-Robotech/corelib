@@ -1,0 +1,27 @@
+name: Newman publication
+description: Check and publish one immutable Newman publication archive
+inputs:
+  archive-path:
+    description: Private publication ZIP path
+    required: true
+  manifest-path:
+    description: Private source manifest path
+    required: true
+  run-id:
+    description: Numeric workflow run identifier
+    required: true
+  run-attempt:
+    description: Numeric workflow run attempt
+    required: true
+  shard-index:
+    description: Numeric shard index starting at zero
+    required: true
+  max-archive-bytes:
+    description: Archive byte limit, at most 67108864
+    default: '67108864'
+  checker-timeout-ms:
+    description: Checker timeout, at most 120000 milliseconds
+    default: '120000'
+runs:
+  using: node24
+  main: main.mjs

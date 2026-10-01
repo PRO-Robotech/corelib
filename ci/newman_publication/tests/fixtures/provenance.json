@@ -1,0 +1,480 @@
+{
+  "source_sha": "b5fa093341f1fdbe96adfc6a9555482690968253",
+  "newman_version": "6.2.2",
+  "origin": "Real loopback HTTP Newman executions; all report bytes unchanged from independently reviewed capture",
+  "captures": {
+    "subject_sha": "b5fa093341f1fdbe96adfc6a9555482690968253",
+    "newman_version": "6.2.2",
+    "scope": "Constructibility and actual reader baseline only; no projection implementation, publication holder RED, production runtime, or artifact upload",
+    "readers_sha256": {
+      "assert-suites-green.sh": "063bf9748227d5c07a5c3e4ffe589495943760f4b184402a0bbd83047daa15c0",
+      "exec-coverage.py": "286f511da88be7b09604d2791a91b43d3d333145688c20b87184009bae4e0c80"
+    },
+    "rows": [
+      {
+        "case": "green",
+        "newman_rc": 0,
+        "coverage_rc": 0,
+        "suite_gate_rc": 0,
+        "report_bytes": 16787,
+        "summary": [
+          "CENSUS: 1 collection(s) matched; judged 1; not judged 0 (no usable report)",
+          "TOTAL executed 3/3 (100.0%)",
+          "SKIPS: 0 RECORDED-SKIP (пропуск записан падающим утверждением стража), 0 explained-skip (немой пропуск: skipRequest без утверждения / перепрыгнут литеральным setNextRequest)",
+          "TOTAL: 1/1 collection(s) reported, 3 request(s), 3 assertion(s), 0 failed, 0 SCRIPT FAILED, 0 UNANSWERED, 0 report(s) with no assertions",
+          "TOTAL(категории): находок 0, УСЛОВИЕ НЕ СОЗДАНО 0 (метка «[УСЛОВИЕ НЕ СОЗДАНО]», производитель scripts/gen.py)",
+          "All 1 suites GREEN."
+        ],
+        "stats": {
+          "iterations": {
+            "total": 1,
+            "pending": 0,
+            "failed": 0
+          },
+          "items": {
+            "total": 3,
+            "pending": 0,
+            "failed": 0
+          },
+          "scripts": {
+            "total": 3,
+            "pending": 0,
+            "failed": 0
+          },
+          "prerequests": {
+            "total": 3,
+            "pending": 0,
+            "failed": 0
+          },
+          "requests": {
+            "total": 3,
+            "pending": 0,
+            "failed": 0
+          },
+          "tests": {
+            "total": 3,
+            "pending": 0,
+            "failed": 0
+          },
+          "assertions": {
+            "total": 3,
+            "pending": 0,
+            "failed": 0
+          },
+          "testScripts": {
+            "total": 3,
+            "pending": 0,
+            "failed": 0
+          },
+          "prerequestScripts": {
+            "total": 0,
+            "pending": 0,
+            "failed": 0
+          }
+        },
+        "execution_count": 3,
+        "failure_count": 0,
+        "execution_cursors": [
+          {
+            "position": 0,
+            "length": 3,
+            "has_response": true,
+            "has_request_error": false
+          },
+          {
+            "position": 1,
+            "length": 3,
+            "has_response": true,
+            "has_request_error": false
+          },
+          {
+            "position": 2,
+            "length": 3,
+            "has_response": true,
+            "has_request_error": false
+          }
+        ],
+        "failure_fields": []
+      },
+      {
+        "case": "finding",
+        "newman_rc": 1,
+        "coverage_rc": 0,
+        "suite_gate_rc": 1,
+        "report_bytes": 23003,
+        "summary": [
+          "CENSUS: 1 collection(s) matched; judged 1; not judged 0 (no usable report)",
+          "TOTAL executed 3/3 (100.0%)",
+          "SKIPS: 0 RECORDED-SKIP (пропуск записан падающим утверждением стража), 0 explained-skip (немой пропуск: skipRequest без утверждения / перепрыгнут литеральным setNextRequest)",
+          "TOTAL: 1/1 collection(s) reported, 3 request(s), 3 assertion(s), 1 failed, 0 SCRIPT FAILED, 0 UNANSWERED, 0 report(s) with no assertions",
+          "TOTAL(категории): находок 1, УСЛОВИЕ НЕ СОЗДАНО 0 (метка «[УСЛОВИЕ НЕ СОЗДАНО]», производитель scripts/gen.py)",
+          "FAIL: suites with failures: fixture"
+        ],
+        "stats": {
+          "iterations": {
+            "total": 1,
+            "pending": 0,
+            "failed": 0
+          },
+          "items": {
+            "total": 3,
+            "pending": 0,
+            "failed": 0
+          },
+          "scripts": {
+            "total": 3,
+            "pending": 0,
+            "failed": 0
+          },
+          "prerequests": {
+            "total": 3,
+            "pending": 0,
+            "failed": 0
+          },
+          "requests": {
+            "total": 3,
+            "pending": 0,
+            "failed": 0
+          },
+          "tests": {
+            "total": 3,
+            "pending": 0,
+            "failed": 0
+          },
+          "assertions": {
+            "total": 3,
+            "pending": 0,
+            "failed": 1
+          },
+          "testScripts": {
+            "total": 3,
+            "pending": 0,
+            "failed": 0
+          },
+          "prerequestScripts": {
+            "total": 0,
+            "pending": 0,
+            "failed": 0
+          }
+        },
+        "execution_count": 3,
+        "failure_count": 1,
+        "execution_cursors": [
+          {
+            "position": 0,
+            "length": 3,
+            "has_response": true,
+            "has_request_error": false
+          },
+          {
+            "position": 1,
+            "length": 3,
+            "has_response": true,
+            "has_request_error": false
+          },
+          {
+            "position": 2,
+            "length": 3,
+            "has_response": true,
+            "has_request_error": false
+          }
+        ],
+        "failure_fields": [
+          {
+            "failure_keys": [
+              "at",
+              "cursor",
+              "error",
+              "parent",
+              "source"
+            ],
+            "error_keys": [
+              "checksum",
+              "id",
+              "index",
+              "message",
+              "name",
+              "stack",
+              "stacktrace",
+              "test",
+              "timestamp"
+            ],
+            "source_keys": [
+              "event",
+              "id",
+              "name",
+              "request",
+              "response"
+            ],
+            "parent_keys": [
+              "event",
+              "id",
+              "item",
+              "name"
+            ]
+          }
+        ]
+      },
+      {
+        "case": "precondition",
+        "newman_rc": 1,
+        "coverage_rc": 0,
+        "suite_gate_rc": 3,
+        "report_bytes": 20434,
+        "summary": [
+          "CENSUS: 1 collection(s) matched; judged 1; not judged 0 (no usable report)",
+          "TOTAL executed 2/3 (66.7%)",
+          "SKIPS: 1 RECORDED-SKIP (пропуск записан падающим утверждением стража), 0 explained-skip (немой пропуск: skipRequest без утверждения / перепрыгнут литеральным setNextRequest)",
+          "TOTAL: 1/1 collection(s) reported, 2 request(s), 3 assertion(s), 1 failed, 0 SCRIPT FAILED, 0 UNANSWERED, 0 report(s) with no assertions",
+          "TOTAL(категории): находок 0, УСЛОВИЕ НЕ СОЗДАНО 1 (метка «[УСЛОВИЕ НЕ СОЗДАНО]», производитель scripts/gen.py)"
+        ],
+        "stats": {
+          "iterations": {
+            "total": 1,
+            "pending": 0,
+            "failed": 0
+          },
+          "items": {
+            "total": 3,
+            "pending": 0,
+            "failed": 0
+          },
+          "scripts": {
+            "total": 3,
+            "pending": 0,
+            "failed": 0
+          },
+          "prerequests": {
+            "total": 3,
+            "pending": 0,
+            "failed": 0
+          },
+          "requests": {
+            "total": 2,
+            "pending": 0,
+            "failed": 0
+          },
+          "tests": {
+            "total": 2,
+            "pending": 0,
+            "failed": 0
+          },
+          "assertions": {
+            "total": 3,
+            "pending": 0,
+            "failed": 1
+          },
+          "testScripts": {
+            "total": 2,
+            "pending": 0,
+            "failed": 0
+          },
+          "prerequestScripts": {
+            "total": 1,
+            "pending": 0,
+            "failed": 0
+          }
+        },
+        "execution_count": 2,
+        "failure_count": 1,
+        "execution_cursors": [
+          {
+            "position": 0,
+            "length": 3,
+            "has_response": true,
+            "has_request_error": false
+          },
+          {
+            "position": 1,
+            "length": 3,
+            "has_response": true,
+            "has_request_error": false
+          }
+        ],
+        "failure_fields": [
+          {
+            "failure_keys": [
+              "at",
+              "cursor",
+              "error",
+              "parent",
+              "source"
+            ],
+            "error_keys": [
+              "checksum",
+              "id",
+              "index",
+              "message",
+              "name",
+              "stack",
+              "stacktrace",
+              "test",
+              "timestamp"
+            ],
+            "source_keys": [
+              "event",
+              "id",
+              "name",
+              "request",
+              "response"
+            ],
+            "parent_keys": [
+              "event",
+              "id",
+              "item",
+              "name"
+            ]
+          }
+        ]
+      },
+      {
+        "case": "script-error",
+        "newman_rc": 1,
+        "coverage_rc": 0,
+        "suite_gate_rc": 1,
+        "report_bytes": 22308,
+        "summary": [
+          "CENSUS: 1 collection(s) matched; judged 1; not judged 0 (no usable report)",
+          "TOTAL executed 3/3 (100.0%)",
+          "SKIPS: 0 RECORDED-SKIP (пропуск записан падающим утверждением стража), 0 explained-skip (немой пропуск: skipRequest без утверждения / перепрыгнут литеральным setNextRequest)",
+          "TOTAL: 1/1 collection(s) reported, 3 request(s), 2 assertion(s), 0 failed, 1 SCRIPT FAILED, 0 UNANSWERED, 0 report(s) with no assertions",
+          "TOTAL(категории): находок 0, УСЛОВИЕ НЕ СОЗДАНО 0 (метка «[УСЛОВИЕ НЕ СОЗДАНО]», производитель scripts/gen.py)",
+          "FAIL: suites with failures: fixture"
+        ],
+        "stats": {
+          "iterations": {
+            "total": 1,
+            "pending": 0,
+            "failed": 0
+          },
+          "items": {
+            "total": 3,
+            "pending": 0,
+            "failed": 0
+          },
+          "scripts": {
+            "total": 3,
+            "pending": 0,
+            "failed": 1
+          },
+          "prerequests": {
+            "total": 3,
+            "pending": 0,
+            "failed": 0
+          },
+          "requests": {
+            "total": 3,
+            "pending": 0,
+            "failed": 0
+          },
+          "tests": {
+            "total": 3,
+            "pending": 0,
+            "failed": 0
+          },
+          "assertions": {
+            "total": 2,
+            "pending": 0,
+            "failed": 0
+          },
+          "testScripts": {
+            "total": 3,
+            "pending": 0,
+            "failed": 1
+          },
+          "prerequestScripts": {
+            "total": 0,
+            "pending": 0,
+            "failed": 0
+          }
+        },
+        "execution_count": 3,
+        "failure_count": 1,
+        "execution_cursors": [
+          {
+            "position": 0,
+            "length": 3,
+            "has_response": true,
+            "has_request_error": false
+          },
+          {
+            "position": 1,
+            "length": 3,
+            "has_response": true,
+            "has_request_error": false
+          },
+          {
+            "position": 2,
+            "length": 3,
+            "has_response": true,
+            "has_request_error": false
+          }
+        ],
+        "failure_fields": [
+          {
+            "failure_keys": [
+              "at",
+              "cursor",
+              "error",
+              "parent",
+              "source"
+            ],
+            "error_keys": [
+              "checksum",
+              "id",
+              "message",
+              "name",
+              "stacktrace",
+              "timestamp",
+              "type"
+            ],
+            "source_keys": [
+              "event",
+              "id",
+              "name",
+              "request",
+              "response"
+            ],
+            "parent_keys": [
+              "event",
+              "id",
+              "item",
+              "name"
+            ]
+          }
+        ]
+      },
+      {
+        "case": "missing-report",
+        "newman_rc": null,
+        "coverage_rc": 3,
+        "suite_gate_rc": 1,
+        "report_bytes": 0,
+        "summary": [
+          "CENSUS: 1 collection(s) matched; judged 0; not judged 1 (no usable report)",
+          "SKIPS: 0 RECORDED-SKIP (пропуск записан падающим утверждением стража), 0 explained-skip (немой пропуск: skipRequest без утверждения / перепрыгнут литеральным setNextRequest)",
+          "TOTAL: 0/1 collection(s) reported, 0 request(s), 0 assertion(s), 0 failed, 0 SCRIPT FAILED, 0 UNANSWERED, 0 report(s) with no assertions",
+          "TOTAL(категории): находок 0, УСЛОВИЕ НЕ СОЗДАНО 0 (метка «[УСЛОВИЕ НЕ СОЗДАНО]», производитель scripts/gen.py)",
+          "FAIL: suites with failures: execution-coverage(did-not-run) fixture(no-report)"
+        ]
+      }
+    ]
+  },
+  "files": {
+    "readers/assert-suites-green.sh": "063bf9748227d5c07a5c3e4ffe589495943760f4b184402a0bbd83047daa15c0",
+    "readers/newman-live.py": "9b1438a49f3ce6c67905f6b5b67e3f2dbfe629149dbe3041ea57935b73b87ea9",
+    "readers/exec-coverage.py": "286f511da88be7b09604d2791a91b43d3d333145688c20b87184009bae4e0c80",
+    "script-error/scripts/gen.py": "e1953357297a792c710f879a50aa169fd00b2f5de7ef1260d1dfede3182710a3",
+    "script-error/collections/fixture.postman_collection.json": "37834c0e79735a5a62612e58623a69c8e3b1e6baf582390e7cd71097eecdedef",
+    "script-error/out/fixture.json": "ad76609304043d334962ef0a216725921216df294303708d66242e40f9a6e052",
+    "green/scripts/gen.py": "e1953357297a792c710f879a50aa169fd00b2f5de7ef1260d1dfede3182710a3",
+    "green/collections/fixture.postman_collection.json": "1b44bce34205f71cff645676874e6823031753ac52a460ce61c2fb19e40e5714",
+    "green/out/fixture.json": "5aa1e2c88993204fb580b0d13d2f3c2e563323bd3585b1e3ad5046614f615deb",
+    "finding/scripts/gen.py": "e1953357297a792c710f879a50aa169fd00b2f5de7ef1260d1dfede3182710a3",
+    "finding/collections/fixture.postman_collection.json": "07087a4e84585546e35bc17be688f7b525414155dd6d5225ebb22949adaeccc2",
+    "finding/out/fixture.json": "7a1330d66d62dcbae90f5788139496441e0cd9ec6c63ac1421de73be55b8d755",
+    "precondition/scripts/gen.py": "e1953357297a792c710f879a50aa169fd00b2f5de7ef1260d1dfede3182710a3",
+    "precondition/collections/fixture.postman_collection.json": "3b2e9cddf2aaa37bce32b7a0bf7a170f796998630b906db2c55e7dca56483501",
+    "precondition/out/fixture.json": "e173c0bfa3d9c6729136b2eb083381f17a125bd8777246bc3c50c62669bf7a87"
+  }
+}

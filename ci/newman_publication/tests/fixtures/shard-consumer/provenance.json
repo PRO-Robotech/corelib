@@ -1,0 +1,15 @@
+{
+  "repository": "PRO-Robotech/kacho",
+  "revision": "b5fa093341f1fdbe96adfc6a9555482690968253",
+  "files": {
+    "shard-verdict.py": {
+      "source_path": ".github/scripts/shard-verdict.py",
+      "sha256": "632867f73d93e3d5927326bf7c6ddae6a7993efdd74f65c0fbae4246cb00a813"
+    },
+    "aggregate-shard-verdicts.py": {
+      "source_path": ".github/scripts/aggregate-shard-verdicts.py",
+      "sha256": "da5ccdfe224ec9bfb1a35a696822e78615c87e3ec6427390efd65c30bffe5bac"
+    }
+  },
+  "role": "unchanged real producer and direct verdict reader, independent fixture prerequisites"
+}
