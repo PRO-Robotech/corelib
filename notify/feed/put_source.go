@@ -30,9 +30,9 @@ type Signal interface {
 // префиксом службы service (Config.Service): секрет живёт только в строке
 // ленты, и префикс однозначно называет её таблицу <service>_notification_outbox.
 // Имя таблицы целиком сюда не передаётся — результат tablename.Of
-// употребляется только аргументом оператора (УК90). Открытие (полоса C5)
-// собирает AAD из того же Config.Service. Кольцо и его ключи — полоса сервера
-// ленты; Put зовёт его через этот порт.
+// употребляется только аргументом оператора (УК90). Открытие (Keyring.Open
+// на сервере ленты) собирает AAD из того же префикса. Боевая реализация —
+// Keyring (З11); Put зовёт её через этот порт.
 type Sealer interface {
 	Seal(service, id, template string, plaintext []byte) ([]byte, error)
 }
@@ -109,12 +109,12 @@ type Source struct {
 	signal  Signal
 	sealer  Sealer
 	gauge   prometheus.Gauge
-	defects *prometheus.CounterVec
+	metrics *metrics
 }
 
 // NewSource судит конфигурацию и регистрирует метрики источника:
-// kacho_notifications_enabled{module} (NTF1-N09) и
-// kacho_notification_feed_put_defects_total{module, cause} (CX1-67).
+// kacho_notifications_enabled{module} (NTF1-N09) и метрики ленты (З27), среди
+// них kacho_notification_feed_put_defects_total{module, cause} (CX1-67).
 func NewSource(cfg Config) (*Source, error) {
 	if !moduleForm.MatchString(cfg.Module) {
 		return nil, fmt.Errorf("feed: Config.Module %q не DNS-метка", cfg.Module)
@@ -141,12 +141,9 @@ func NewSource(cfg Config) (*Source, error) {
 	if err != nil {
 		return nil, fmt.Errorf("feed: метрика флага модуля %s: %w", cfg.Module, err)
 	}
-	defects, err := registerOrReuse(cfg.Metrics, prometheus.NewCounterVec(prometheus.CounterOpts{
-		Name: "kacho_notification_feed_put_defects_total",
-		Help: "Дефекты программы вызывающего, отвергнутые Put; ноль за всю жизнь — норма.",
-	}, []string{"module", "cause"}))
+	m, err := newMetrics(cfg.Metrics, cfg.Module)
 	if err != nil {
-		return nil, fmt.Errorf("feed: метрика дефектов модуля %s: %w", cfg.Module, err)
+		return nil, err
 	}
 	g := gaugeVec.WithLabelValues(cfg.Module)
 	if cfg.Enabled.On() {
@@ -156,7 +153,7 @@ func NewSource(cfg Config) (*Source, error) {
 	}
 	return &Source{
 		module: cfg.Module, service: cfg.Service, enabled: cfg.Enabled.On(),
-		signal: cfg.Signal, sealer: cfg.Sealer, gauge: g, defects: defects,
+		signal: cfg.Signal, sealer: cfg.Sealer, gauge: g, metrics: m,
 	}, nil
 }
 
@@ -180,7 +177,7 @@ func (s *Source) Enabled() bool { return s.enabled }
 func (s *Source) EnabledGauge() prometheus.Gauge { return s.gauge }
 
 // DefectCounter — kacho_notification_feed_put_defects_total.
-func (s *Source) DefectCounter() *prometheus.CounterVec { return s.defects }
+func (s *Source) DefectCounter() *prometheus.CounterVec { return s.metrics.defects }
 
 // DeliveryConfigured — первый вопрос глагола, ставящего письмо (З12,
 // NTF1-N06): ErrDeliveryNotConfigured при выключенном флаге. Проверка стоит до

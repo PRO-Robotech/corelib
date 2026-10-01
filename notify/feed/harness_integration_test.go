@@ -84,7 +84,7 @@ func probeJournal() subscription.Journal {
 }
 
 // randomSealer — запечатывание фикстуры: шифротекст не несёт открытого
-// текста. Настоящее кольцо — З11 (полоса C5); Put зовёт его через порт.
+// текста. Настоящее кольцо — Keyring (З11); пробы сервера ленты берут его.
 type randomSealer struct{}
 
 func (randomSealer) Seal(service, id, template string, plaintext []byte) ([]byte, error) {
@@ -110,6 +110,13 @@ func newFixture(t *testing.T, enabled bool) *fixture {
 
 func fixtureOn(t *testing.T, pool *pgxpool.Pool, enabled bool) *fixture {
 	t.Helper()
+	return fixtureSealed(t, pool, enabled, randomSealer{})
+}
+
+// fixtureSealed — источник probe с заданным запечатыванием (кольцо З11 у проб
+// сервера ленты).
+func fixtureSealed(t *testing.T, pool *pgxpool.Pool, enabled bool, sealer feed.Sealer) *fixture {
+	t.Helper()
 	word := "false"
 	if enabled {
 		word = "true"
@@ -122,7 +129,7 @@ func fixtureOn(t *testing.T, pool *pgxpool.Pool, enabled bool) *fixture {
 	reg := prometheus.NewRegistry()
 	src, err := feed.NewSource(feed.Config{
 		Module: "probe", Service: "probe", Enabled: en,
-		Signal: sig, Sealer: randomSealer{}, Metrics: reg,
+		Signal: sig, Sealer: sealer, Metrics: reg,
 	})
 	require.NoError(t, err)
 	ctx := operations.WithPrincipal(context.Background(),

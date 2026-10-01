@@ -1,8 +1,11 @@
 // Copyright (c) PRO-Robotech
 // SPDX-License-Identifier: Apache-2.0
 
-// Package feed — лента почтовых извещений у источника (NTF-1, З6–З12):
-// постановка Put в транзакции вызывающего, окно лимита, флаг источника.
+// Package feed — лента почтовых извещений у источника (NTF-1, З6–З12, З27):
+// постановка Put в транзакции вызывающего, окно лимита, флаг источника;
+// сервер ленты Claim/Ack (Server), уборщик истечения и уборка закрытых строк
+// и прошедших окон (StartSweeper, RetentionSubjects), кольцо ключей секрета
+// (Keyring), словарь исходов и метрики ленты.
 //
 // Порядок внутри Put несущий (З7): всё, что может отвергнуть вызов, стоит до
 // первого оператора SQL либо выражено нулём строк условного оператора под
@@ -197,7 +200,7 @@ func (s *Source) markLimitedPut(ctx context.Context, sp pgx.Tx, desc TemplateDes
 		return fmt.Errorf("feed: отметка постановки с лимитами: %w", err)
 	}
 	if prior != "" {
-		s.defects.WithLabelValues(s.module, "second_limited_put").Inc()
+		s.metrics.observePutDefect(PutDefectSecondLimitedPut)
 		return fmt.Errorf("%w: шаблон %s", ErrSecondLimitedPut, desc.Name)
 	}
 	return nil
