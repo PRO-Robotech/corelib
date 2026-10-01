@@ -101,7 +101,7 @@ if ! n="$(git_rule_subject_task "$PR_TITLE")"; then
     GIT_RULE_FINDINGS+=("заголовок не начинается с «#<N> »: «$PR_TITLE»")
 else
     GIT_RULE_NUMBERS+=("$n")
-    if git_rule_is_number "$head" && [ "$n" != "$head" ]; then
+    if git_rule_is_number "$head" && [ "$n" != "$(git_rule_task "$head")" ]; then
         GIT_RULE_FINDINGS+=("заголовок «#$n» у головы «$head»: заголовок — акт ветки, и номер у него её")
     fi
 fi
@@ -109,7 +109,7 @@ if attr="$(git_rule_attribution "$PR_BODY")"; then
     GIT_RULE_FINDINGS+=("тело: атрибуция «$attr»")
 fi
 if [ "$head" != main ] && ! git_rule_is_number "$head" && ! git_rule_range_pre_rule "${range[@]}"; then
-    GIT_RULE_FINDINGS+=("голова «$head»: ветка называется номером задачи (^[0-9]+\$), исключения — main и ветка, открытая до правила (её коммит записан до правила)")
+    GIT_RULE_FINDINGS+=("голова «$head»: ветка называется номером задачи (^[0-9]+\$ либо ^[0-9]+-<суть>\$), исключения — main и ветка, открытая до правила (её коммит записан до правила)")
 fi
 # ── API ПЛОЩАДКИ — трекер и коммиты ──────────────────────────────────────────
 api="${GITHUB_API_URL:-https://api.github.com}"

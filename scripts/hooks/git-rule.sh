@@ -13,8 +13,10 @@
 # Экземпляр свой, не копия (ban20): форма взята у стража kacho, байты не перенесены.
 #
 # Правило:
-#   · ветка — номер задачи ЭТОГО репозитория, `^[0-9]+$`; исключение одно —
-#     `main`; ветка, открытая до правила, не переименовывается;
+#   · ветка — номер задачи ЭТОГО репозитория, `^[0-9]+$`, либо номер с сутью
+#     через дефис, `^[0-9]+-[a-z0-9][a-z0-9-]*$` (`77-notify`; решение Д59
+#     эпика PRO-Robotech/kacho#2914; номер ветки — до первого дефиса);
+#     исключение одно — `main`; ветка, открытая до правила, не переименовывается;
 #   · первая строка — `#<N> …`, не длиннее 72 СИМВОЛОВ (не байт), одно
 #     утверждение; слияние — `#<N> merge #<M>: …` либо `#<N> merge main: …`;
 #     серверное слияние — `#<N> …` либо `Merge pull request #<P> from
@@ -157,7 +159,15 @@ git_rule_t0_text() {
     fi
 }
 
-git_rule_is_number() { [[ "$1" =~ ^[0-9]+$ ]]; }
+# git_rule_is_number <имя> — ветка названа задачей: `<N>` либо `<N>-<суть>`
+# (Д59). Суть — строчная латиница, цифры и дефис, первым не дефис.
+git_rule_is_number() { [[ "$1" =~ ^[0-9]+$ || "$1" =~ ^[0-9]+-[a-z0-9][a-z0-9-]*$ ]]; }
+
+# git_rule_task <имя> — печатает N задачи ветки; 1 — имя не задачи.
+git_rule_task() {
+    git_rule_is_number "$1" || return 1
+    printf '%s' "${1%%-*}"
+}
 
 # git_rule_subject_task <первая строка> — печатает N из `#<N> …`; 1 — формы нет.
 git_rule_subject_task() {
@@ -188,7 +198,7 @@ git_rule_server_form() {
 git_rule_subject_numbers() {
     local n
     if n="$(git_rule_server_pull_form "$1")"; then
-        ! git_rule_is_number "$n" || printf '%s\n' "$n"
+        ! git_rule_is_number "$n" || printf '%s\n' "$(git_rule_task "$n")"
         return 0
     fi
     n="$(git_rule_subject_task "$1")" || return 0
@@ -244,7 +254,7 @@ git_rule_form() {
     elif [ "$merge" != 0 ]; then
         git_rule_merge_form "$subj" ||
             printf '%s\n' "слияние — «#<N> merge #<M>: …» либо «#<N> merge main: …», а не «$subj»"
-        if git_rule_is_number "$branch" && [ "$n" != "$branch" ]; then
+        if git_rule_is_number "$branch" && [ "$n" != "$(git_rule_task "$branch")" ]; then
             printf '%s\n' "слияние «#$n» на ветке «$branch»: слияние — акт ветки, и номер у него её"
         fi
     fi
@@ -272,13 +282,13 @@ git_rule_form() {
 # (подпись), branch, editor, date (дата автора до T0).
 git_rule_howto() {
     local class="$1" branch="$2" attr="${3:-}" b="<N>"
-    git_rule_is_number "$branch" && b="$branch"
+    git_rule_is_number "$branch" && b="$(git_rule_task "$branch")"
     case "$class" in
         form) printf '%s\n' "сообщение: git commit -m \"#<N> <одно утверждение>\" -m \"<тело>\" — первая строка начинается с «#<N> » (<N> — номер задачи этого репозитория), не длиннее $GIT_RULE_SUBJECT_MAX символов, без «;» и без точки в конце; тело — после пустой строки, не длиннее $GIT_RULE_BODY_MAX строк" ;;
         merge) printf '%s\n' "слияние: git merge --no-ff <ветка> -m \"#$b merge #<M>: <что влито>\" либо -m \"#$b merge main: <что влито>\" — номер слияния — номер этой ветки; первая строка не длиннее $GIT_RULE_SUBJECT_MAX символов, тело — не длиннее $GIT_RULE_BODY_MAX строк" ;;
         attribution) printf '%s\n' "атрибуция: удалите строку «$attr» — трейлеры Co-Authored-By с любым значением, Claude-Session:, «Generated with Claude Code» и ссылки claude.ai/code в сообщение не пишутся" ;;
         ident) printf '%s\n' "подпись: коммит без --author, -c user.*/author.*/committer.*, GIT_COMMITTER_* и GIT_CONFIG_GLOBAL; настройку подписи уровня local/worktree снимите (git config --local --unset <ключ>); подпись задаётся один раз — git config --global user.name / user.email" ;;
-        branch) printf '%s\n' "ветка: git branch -m <N> — ветка называется номером задачи этого репозитория (^[0-9]+\$), исключение одно — main" ;;
+        branch) printf '%s\n' "ветка: git branch -m <N> — ветка называется номером задачи этого репозитория (^[0-9]+\$ либо ^[0-9]+-<суть>\$), исключение одно — main" ;;
         editor) printf '%s\n' "сообщение — через -m или -F, без редактора: git commit -m \"#<N> …\" — строку «#…» git вырезает как комментарий" ;;
         date) printf '%s\n' "дата автора — текущая: коммит без --date и GIT_AUTHOR_DATE в прошлом; у --amend и -C вершины с датой до T0 — с --reset-author" ;;
     esac

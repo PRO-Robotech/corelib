@@ -77,7 +77,7 @@ while read -r _lref lsha rref rsha; do
     case "$rref" in refs/heads/*) name="${rref#refs/heads/}" ;; esac
     if [ -n "$name" ] && [ "$existed" = 0 ] && [ "$name" != main ] &&
         ! git_rule_is_number "$name" && ! git_rule_before_rule "$tip"; then
-        GIT_RULE_FINDINGS+=("ветка «$name»: новая ветка называется номером задачи (^[0-9]+\$), исключение одно — main; ветка до правила несёт свой коммит, записанный до правила (обе даты до T0, в истории нет добавления правила)")
+        GIT_RULE_FINDINGS+=("ветка «$name»: новая ветка называется номером задачи (^[0-9]+\$ либо ^[0-9]+-<суть>\$), исключение одно — main; ветка до правила несёт свой коммит, записанный до правила (обе даты до T0, в истории нет добавления правила)")
     fi
     if [ -n "$cannot" ]; then
         git_rule_judge_range "$name" - "$tip" "${neg[@]}"
