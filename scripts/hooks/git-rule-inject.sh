@@ -492,6 +492,11 @@ on 7; merge 8 -m "#9 merge #8: предмет восьмой"
 refused "слияние на ветке 7 с номером 9 — отказ: слияние — акт ветки, номер её" "«#9» на ветке «7»"
 on 7; merge 8 -m "#7 merge #8:"
 refused "слияние без текста после двоеточия — отказ" "слияние"
+# Вторая форма имени (Д59): `<N>-<суть>`, номер ветки — до первого дефиса.
+on 7-notify; merge 8 -m "#7 merge #8: предмет восьмой"
+accepted "слияние «#7 merge #8: …» на ветке 7-notify — номер ветки до дефиса" "#7 merge #8: предмет восьмой"
+on 7-notify; merge 8 -m "#9 merge #8: предмет восьмой"
+refused "слияние «#9» на ветке 7-notify — отказ: номер слияния — номер ветки" "«#9» на ветке «7-notify»"
 on 7; merge 8
 refused "слияние с сообщением git по умолчанию («Merge branch …») — отказ" "Merge branch"
 on 7; merge 8 -m "#7 merge #8: предмет" -m "Co-Authored-By: Claude <noreply@example.invalid>"
@@ -532,7 +537,12 @@ on batch-late "$late_m"; commit -m "#7 x"
 refused "дата автора до T0, записан после T0 на основании старше правила — не «до правила», отказ по имени" "ветка «batch-late»"
 on 7 "$pre_m"; on issue-8 "$pre_m"; commit -m "#8 x"
 refused "ветка «issue-8» от вершины, лежащей на ветке-номере, — отказ" "ветка «issue-8»"
-drop 7 batch-quota-fate batch-late issue-7 issue-8 lane/oauth2-engine
+# Вторая форма имени (Д59) и её близнец вне формы — один факт: знак и регистр.
+on 7-notify; commit -m "#7 x"
+accepted "ветка «7-notify» — вторая форма имени задачи, после правила законна" "#7 x"
+on 7_Notify; commit -m "#7 x"
+refused "ветка «7_Notify» — вне обеих форм, отказ" "ветка «7_Notify»" "номером задачи"
+drop 7 7-notify 7_Notify batch-quota-fate batch-late issue-7 issue-8 lane/oauth2-engine
 
 # ── РЕВИЗИЯ СТАРШЕ ПРАВИЛА (R8): отказ без обхода, выход — слияние ───────────
 # Переходник провязан в общем каталоге клона и видит ВСЕ рабочие копии, а в
@@ -740,6 +750,10 @@ on 114 "$bc_c"; push 114
 stopped "чужой коммиттер, обе даты до T0 поверх правила — отказ по коммиттеру" refs/heads/114 "коммиттер «bot <bot@example.invalid>»"
 on issue-106; nv -m "#106 x"; push issue-106
 stopped "новая ветка «issue-106» — отказ по имени" refs/heads/issue-106 "ветка «issue-106»"
+on 109-notify; commit -m "#109 x"; push 109-notify
+delivered "новая ветка «109-notify» — вторая форма имени (Д59), доехала" refs/heads/109-notify "нарушений нет"
+on 110_Notify; nv -m "#110 x"; push 110_Notify
+stopped "новая ветка «110_Notify» — вне обеих форм, отказ по имени" refs/heads/110_Notify "ветка «110_Notify»"
 on 25; commit -m "#58 гейт целевых веток"; push 25
 delivered "T1: «#58 …» на ветке пачки 25 — доехала" refs/heads/25
 on 107; attempt git merge -q --no-ff --no-verify "$h8" -m "#9 merge #8: предмет восьмой"; push 107
@@ -926,6 +940,12 @@ pr pull_request "#25 хуки и гейты" "Тело."$'\n\n'"Co-authored-by: 
 verdict "тело с соавтором-человеком — отказ: запрещён ключ (#861)" 1 "тело: атрибуция"
 pr pull_request "#25 хуки и гейты" "" issue-25 "$h1" "$pr25"
 verdict "голова «issue-25» без коммита до T0 — отказ по имени" 1 "голова «issue-25»"
+pr pull_request "#25 хуки и гейты" "" 25-notify "$h1" "$pr25"
+verdict "голова «25-notify» — вторая форма имени (Д59), номер до дефиса" 0 "нарушений нет"
+pr pull_request "#26 хуки и гейты" "" 25-notify "$h1" "$pr25"
+verdict "заголовок «#26» у головы 25-notify — отказ: заголовок — акт ветки" 1 "заголовок «#26» у головы «25-notify»"
+pr pull_request "#25 хуки и гейты" "" 25_Notify "$h1" "$pr25"
+verdict "голова «25_Notify» — вне обеих форм, отказ по имени" 1 "голова «25_Notify»"
 on batch-quota-fate "$pre_m"; commit -m "#57 x"
 bq="$(git -C "$F" rev-parse HEAD)"
 pr pull_request "#57 работа до правила" "" batch-quota-fate "$h1" "$bq"
