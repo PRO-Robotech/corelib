@@ -115,10 +115,9 @@ func outcomePairCheck() string {
 	return strings.Join(parts, "\n    OR ")
 }
 
+// v1Up — результат tablename.Of только аргументом Sprintf, повтор вида —
+// %[n]s (ведомость писателей таблиц ленты, УК90, УК92).
 func v1Up(svc string) string {
-	outbox := tablename.Of(svc, tablename.Outbox)
-	window := tablename.Of(svc, tablename.Window)
-	contrib := tablename.Of(svc, tablename.Contrib)
 	return fmt.Sprintf(`CREATE TABLE %[1]s (
   id                text        PRIMARY KEY,
   template          text        NOT NULL,
@@ -165,7 +164,8 @@ CREATE TABLE %[3]s (
   window_start    timestamptz NOT NULL,
   PRIMARY KEY (notification_id, scope, window_seconds)
 );
-`, outbox, window, contrib, quoteList(States()), outcomePairCheck(),
+`, tablename.Of(svc, tablename.Outbox), tablename.Of(svc, tablename.Window), tablename.Of(svc, tablename.Contrib),
+		quoteList(States()), outcomePairCheck(),
 		tablename.Index(svc, tablename.Outbox, tablename.Pending), tablename.Index(svc, tablename.Outbox, tablename.Closed))
 }
 
