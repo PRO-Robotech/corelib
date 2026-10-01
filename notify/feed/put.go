@@ -16,6 +16,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 
@@ -37,6 +38,13 @@ type Values struct {
 // limitedPutSetting — транзакционная отметка «постановка с лимитами уже была»
 // (УК85). Живёт внутри точки сохранения Put и откатывается вместе с ней.
 const limitedPutSetting = "kacho_feed.limited_put"
+
+// savepointRollbackTimeout — свой срок отката к точке сохранения после отказа
+// оператора постановки (arch-per-call-deadline). Откат отвязан от отмены
+// вызывающего — транзакция вызывающего обязана остаться пригодной к его
+// решению, — но не от предела: на зависшем соединении он возвращает ошибку не
+// позже этого срока. ROLLBACK TO SAVEPOINT — оператор без чтения данных.
+const savepointRollbackTimeout = 5 * time.Second
 
 // Put ставит письмо шаблона desc адресату to в транзакции вызывающего tx
 // (З7). Источник берётся из контекста (Source.Bind); без него —
@@ -117,7 +125,7 @@ func (s *Source) put(ctx context.Context, tx pgx.Tx, desc TemplateDesc, to strin
 	}); err != nil {
 		// Откат к точке сохранения снимает вклад, отметку и замки строк окна
 		// этой постановки; транзакция вызывающего остаётся пригодной.
-		if rbErr := sp.Rollback(context.WithoutCancel(ctx)); rbErr != nil {
+		if rbErr := rollbackSavepoint(ctx, sp); rbErr != nil {
 			return errors.Join(err, fmt.Errorf("feed: откат к точке сохранения: %w", rbErr))
 		}
 		return err
@@ -126,6 +134,14 @@ func (s *Source) put(ctx context.Context, tx pgx.Tx, desc TemplateDesc, to strin
 		return fmt.Errorf("feed: освобождение точки сохранения: %w", err)
 	}
 	return nil
+}
+
+// rollbackSavepoint откатывает точку сохранения под своим сроком
+// savepointRollbackTimeout, отвязанным от отмены вызывающего.
+func rollbackSavepoint(ctx context.Context, sp pgx.Tx) error {
+	rctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), savepointRollbackTimeout)
+	defer cancel()
+	return sp.Rollback(rctx)
 }
 
 type row struct {

@@ -71,7 +71,12 @@ func resolveBase(root, rev string) (*baseTree, error) {
 		return nil, notFound(err)
 	}
 	b := &baseTree{commit: commit, templates: map[string]baseTemplate{}}
-	for _, name := range strings.Split(string(names), "\x00") {
+	listed := strings.Split(string(names), "\x00")
+	inBase := make(map[string]bool, len(listed))
+	for _, name := range listed {
+		inBase[name] = true
+	}
+	for _, name := range listed {
 		if !strings.HasPrefix(name, prefix) || !baseNotification.MatchString(name) {
 			continue
 		}
@@ -84,10 +89,14 @@ func resolveBase(root, rev string) (*baseTree, error) {
 		if err != nil {
 			return nil, fmt.Errorf("notifygen: база %s: %s: %w", commit, dir, err)
 		}
-		revBytes, err := git(root, "show", commit+":"+dir+"/revision.yaml")
-		if err != nil {
+		revName := dir + "/revision.yaml"
+		if !inBase[revName] {
 			// Шаблон ствола без ревизии — до генератора; судится как новый.
 			continue
+		}
+		revBytes, err := git(root, "show", commit+":"+revName)
+		if err != nil {
+			return nil, fmt.Errorf("notifygen: база %s: %s: %w", commit, revName, err)
 		}
 		r, err := spec.ReadRevision(revBytes)
 		if err != nil {

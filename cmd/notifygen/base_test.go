@@ -200,3 +200,28 @@ func TestNTF1D07_BaseWithoutTemplates(t *testing.T) {
 	require.Equal(t, 0, r.code, r.stderr)
 	require.Contains(t, r.stdout, "в базе 1, в дереве 0, сверенных 0, новых 0, снятых 1")
 }
+
+// NTF1-D07 (база): отказ git при чтении revision.yaml, который в базе ЕСТЬ, —
+// не «ревизии в базе нет»: сверка не идёт, находка называет базу и файл.
+// Близнец — шаблон базы без revision.yaml судится как новый.
+func TestNTF1D07_UnreadableBaseRevisionIsAFailureNotAbsence(t *testing.T) {
+	tr, base := trunk(t)
+	blob := tr.git("rev-parse", base+":"+revPath)
+	require.NoError(t, os.Remove(tr.path(".git/objects/"+blob[:2]+"/"+blob[2:])))
+	r := tr.run("-check", "-base", base)
+	require.NotEqual(t, 0, r.code)
+	require.Contains(t, r.stderr, "notifygen: база "+base+": svc/notifications/invite/revision.yaml")
+	require.NotContains(t, r.stderr, "шаблона в базе нет")
+	require.NotContains(t, r.stdout, "сверенных")
+
+	twin := &tree{t: t, root: t.TempDir()}
+	twin.initGit()
+	twin.write("svc/svc.go", "package svc\n")
+	twin.write(notifPath, inviteNotification)
+	twin.write(bodyPath, inviteBody)
+	noRev := twin.commit("шаблон до генератора")
+	twin.generate()
+	r = twin.run("-check", "-base", noRev)
+	require.Equal(t, 0, r.code, r.stderr)
+	require.Contains(t, r.stdout, "в базе 0, в дереве 1, сверенных 0, новых 1")
+}

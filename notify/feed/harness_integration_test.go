@@ -87,7 +87,7 @@ func probeJournal() subscription.Journal {
 // текста. Настоящее кольцо — З11 (полоса C5); Put зовёт его через порт.
 type randomSealer struct{}
 
-func (randomSealer) Seal(table, id, template string, plaintext []byte) ([]byte, error) {
+func (randomSealer) Seal(service, id, template string, plaintext []byte) ([]byte, error) {
 	b := make([]byte, 32+len(plaintext))
 	_, err := rand.Read(b)
 	return b, err

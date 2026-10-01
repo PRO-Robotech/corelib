@@ -166,7 +166,7 @@ CREATE TABLE %[3]s (
   PRIMARY KEY (notification_id, scope, window_seconds)
 );
 `, outbox, window, contrib, quoteList(States()), outcomePairCheck(),
-		tablename.Index(svc, tablename.Outbox, "pending"), tablename.Index(svc, tablename.Outbox, "closed"))
+		tablename.Index(svc, tablename.Outbox, tablename.Pending), tablename.Index(svc, tablename.Outbox, tablename.Closed))
 }
 
 func v1Down(svc string) string {

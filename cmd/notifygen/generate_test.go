@@ -79,9 +79,6 @@ func types(e ast.Expr) string {
 // NTF1-D01: порождённый файл собирается против corelib этого дерева —
 // SendX действительно зовёт feed.Put с описанием feed.TemplateDesc.
 func TestNTF1D01_GeneratedFileCompilesAgainstFeed(t *testing.T) {
-	if testing.Short() {
-		t.Skip("сборка временного модуля — не в коротком прогоне")
-	}
 	corelib, err := filepath.Abs("../..")
 	require.NoError(t, err)
 	tr := newTree(t)
