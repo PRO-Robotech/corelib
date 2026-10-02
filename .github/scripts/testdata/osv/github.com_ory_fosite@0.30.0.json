@@ -1,0 +1,92 @@
+{
+  "vulns": [
+    {
+      "affected": [
+        {
+          "package": {
+            "ecosystem": "Go",
+            "name": "github.com/ory/fosite"
+          }
+        }
+      ],
+      "aliases": [
+        "CVE-2020-15223",
+        "GO-2021-0109"
+      ],
+      "id": "GHSA-7mqr-2v3q-v2wm"
+    },
+    {
+      "affected": [
+        {
+          "package": {
+            "ecosystem": "Go",
+            "name": "github.com/ory/fosite"
+          }
+        }
+      ],
+      "aliases": [
+        "CVE-2020-15234"
+      ],
+      "id": "GHSA-grfp-q2mm-hfp6"
+    },
+    {
+      "affected": [
+        {
+          "package": {
+            "ecosystem": "Go",
+            "name": "github.com/ory/fosite"
+          }
+        }
+      ],
+      "aliases": [
+        "CVE-2020-15222",
+        "GO-2021-0110"
+      ],
+      "id": "GHSA-v3q9-2p3m-7g43"
+    },
+    {
+      "affected": [
+        {
+          "ecosystem_specific": {
+            "imports": [
+              {
+                "path": "github.com/ory/fosite/handler/oauth2"
+              }
+            ]
+          },
+          "package": {
+            "ecosystem": "Go",
+            "name": "github.com/ory/fosite"
+          }
+        }
+      ],
+      "aliases": [
+        "CVE-2020-15223",
+        "GHSA-7mqr-2v3q-v2wm"
+      ],
+      "id": "GO-2021-0109"
+    },
+    {
+      "affected": [
+        {
+          "ecosystem_specific": {
+            "imports": [
+              {
+                "path": "github.com/ory/fosite"
+              }
+            ]
+          },
+          "package": {
+            "ecosystem": "Go",
+            "name": "github.com/ory/fosite"
+          }
+        }
+      ],
+      "aliases": [
+        "CVE-2020-15222",
+        "GHSA-v3q9-2p3m-7g43"
+      ],
+      "id": "GO-2021-0110"
+    }
+  ]
+}

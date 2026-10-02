@@ -24,7 +24,7 @@ import "testing"
 // норму и дефект.
 //
 // Обе стороны утверждаются в одной таблице намеренно: проба, спрашивающая
-// только про группу, зеленела бы на устройстве, которое ВСЁ зовёт usersetом.
+// только про группу, зеленела бы на устройстве, которое ВСЁ зовёт userset'ом.
 func TestNameTenantSubjectSeparatesUsersetKindFromUnnameable(t *testing.T) {
 	cases := []struct {
 		name        string

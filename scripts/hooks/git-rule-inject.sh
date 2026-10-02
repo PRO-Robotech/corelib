@@ -1064,6 +1064,52 @@ pr pull_request "#42 релиз" "" 42 "$pr25" "$pr42"
 verdict "перечень пуст — голова «42» отвергнута" 1 "голова «42»: голый номер «42»"
 git -C "$F" checkout -q -- scripts/hooks/git-rule-bare-branches.txt
 
+# ── T0 ПО ПОЛНОЙ ИСТОРИИ: два добавления правила на двух сторонах ────────────
+# Замер corelib#26 ← main (2026-10-01): ветка завела хук раньше ствола, ствол —
+# позже и своим текстом; слияние взяло версию ствола и для пути правила стало
+# TREESAME второму родителю. Упрощённая история `git log -- <путь>` идёт тогда
+# только по нему, добавление ветки из неё выпадает, T0 сдвигается на добавление
+# ствола, а коммит ветки между двумя добавлениями читается работой до правила:
+# на запросе эпика 26 судимых формой стало 1 вместо 39. Здесь та же форма:
+# sd_add — добавление на ветке, sd_bad — коммит ветки без «#<N> » после него,
+# h1 — добавление ствола, sd_m — слияние с версией ствола. Близнец sd_good
+# отличается от sd_bad одной первой строкой.
+sd_blob="$({ cat "$F/scripts/hooks/commit-msg"; echo '# текст хука на ветке'; } | git -C "$F" hash-object -w --stdin)" ||
+    void "текст хука ветки не записан"
+sd_tree="$(cd "$F" && GIT_INDEX_FILE="$work/sd.idx" git read-tree "$h1" &&
+    GIT_INDEX_FILE="$work/sd.idx" git update-index --cacheinfo "100755,$sd_blob,scripts/hooks/commit-msg" &&
+    GIT_INDEX_FILE="$work/sd.idx" git write-tree)" || void "дерево ветки с её хуком не собрано"
+sd_add="$(GIT_AUTHOR_DATE=2025-09-01T00:00:00Z GIT_COMMITTER_DATE=2025-09-01T00:00:00Z \
+    git -C "$F" commit-tree -p "$h0" -m "#26 правило git на ветке раньше ствола" "$sd_tree")" || void "добавление на ветке не собрано"
+sd_bad="$(GIT_AUTHOR_DATE=2025-10-01T00:00:00Z GIT_COMMITTER_DATE=2025-10-01T00:00:00Z \
+    git -C "$F" commit-tree -p "$sd_add" -m "hooks: no number" "$sd_tree")" || void "коммит ветки после её добавления не собран"
+sd_good="$(GIT_AUTHOR_DATE=2025-10-01T00:00:00Z GIT_COMMITTER_DATE=2025-10-01T00:00:00Z \
+    git -C "$F" commit-tree -p "$sd_add" -m "#26 x" "$sd_tree")" || void "близнец коммита ветки не собран"
+sd_m="$(git -C "$F" commit-tree -p "$sd_bad" -p "$h1" -m "#26 merge main: версия хука ствола" "$h1^{tree}")" ||
+    void "слияние сторон не собрано"
+sd_mg="$(git -C "$F" commit-tree -p "$sd_good" -p "$h1" -m "#26 merge main: версия хука ствола" "$h1^{tree}")" ||
+    void "слияние сторон близнеца не собрано"
+fact "фикстура: слияние сторон для пути правила TREESAME стволу, а не ветке" \
+    bash -c "git -C '$F' diff --quiet '$h1' '$sd_m' -- scripts/hooks/commit-msg &&
+             ! git -C '$F' diff --quiet '$sd_bad' '$sd_m' -- scripts/hooks/commit-msg"
+fact "предпосылка: упрощённая история пути правила у слияния сторон несёт одно добавление из двух" \
+    test "$(git -C "$F" log --diff-filter=A --format=%H "$sd_m" -- scripts/hooks/commit-msg | wc -l)" -eq 1
+fact "T0 слияния сторон — добавление ветки, добавлений правила в перечне два" \
+    bash -c "cd '$F' && . '$RULE' && git_rule_load_t0 '$sd_m' &&
+             [ \"\$GIT_RULE_T0\" = \"\$(git log -1 --format=%at '$sd_add')\" ] && [ \"\${#GIT_RULE_T0_ADDS[@]}\" -eq 2 ]"
+pr pull_request "#26 x" "" 26-sides "$h1" "$sd_m"
+verdict "запрос: коммит ветки между двумя добавлениями правила — после правила, форма судится" 1 \
+    "${sd_bad:0:10}" "не начинается с «#<N> »"
+pr pull_request "#26 x" "" 26-sides "$h1" "$sd_mg"
+verdict "близнец запроса: та же история с «#26 x» — законно, судимых формой три" 0 "нарушений нет" \
+    "коммитов в диапазоне 3, из них после правила (судимых формой) 3"
+on 26-sides "$sd_m"; P=(); push 26-sides
+stopped "отправка: коммит ветки между двумя добавлениями правила — отказ по форме" refs/heads/26-sides \
+    "не начинается с «#<N> »"
+on 26-sides-twin "$sd_mg"; P=(); push 26-sides-twin
+delivered "близнец отправки: та же история с «#26 x» — доехала" refs/heads/26-sides-twin "нарушений нет"
+drop 26-sides 26-sides-twin
+
 # ── СЕРВЕРНОЕ СЛИЯНИЕ (corelib#70) ───────────────────────────────────────────
 # Слияние запроса, собранное площадкой: два родителя, коммиттер «GitHub
 # <noreply@github.com>». Его сообщение составлено ПОСЛЕ проверки своего

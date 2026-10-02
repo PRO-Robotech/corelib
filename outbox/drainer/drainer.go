@@ -550,7 +550,7 @@ func (d *Drainer[T]) Run(ctx context.Context) error {
 	}()
 
 	// Стартовая попытка катч-апа — выгребаем все накопленное до начала LISTEN.
-	// Если в этот момент LISTEN еще не подключился и кто-то INSERTит — мы либо
+	// Если в этот момент LISTEN еще не подключился и кто-то делает INSERT — мы либо
 	// поймаем через NOTIFY (после connect), либо через PollFallback. Race ok.
 	d.drainBatch(ctx)
 

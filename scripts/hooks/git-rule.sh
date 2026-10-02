@@ -116,6 +116,11 @@ GIT_RULE_BARE_LOADED=0
 # git_rule_load_t0 [ревизия…] — выставляет GIT_RULE_T0 (эпохой),
 # GIT_RULE_T0_KNOWN и GIT_RULE_T0_ADDS — коммиты, заводившие путь правила в
 # историю ревизий. Не выведен — T0 0, KNOWN 0, добавлений нет: судится всё.
+# История — ПОЛНАЯ (--full-history): упрощённая у слияния, совпадающего по пути
+# правила с одним родителем, идёт только по нему, и добавление на другой
+# стороне выпадает — T0 сдвигался на позднее добавление, и коммиты между двумя
+# добавлениями читались работой до правила (замер corelib#26 ← main: судимых
+# формой на запросе эпика 1 вместо 39).
 git_rule_load_t0() {
     local recs h at min="" adds=()
     GIT_RULE_T0=0
@@ -123,7 +128,7 @@ git_rule_load_t0() {
     GIT_RULE_T0_ADDS=()
     [ "$#" -gt 0 ] || set -- HEAD
     [ "$(git rev-parse --is-shallow-repository 2>/dev/null)" != true ] || return 0
-    recs="$(git log --no-color --diff-filter=A --format='%H %at' "$@" -- "$GIT_RULE_T0_PATH" 2>/dev/null)" || return 0
+    recs="$(git log --no-color --full-history --diff-filter=A --format='%H %at' "$@" -- "$GIT_RULE_T0_PATH" 2>/dev/null)" || return 0
     while read -r h at; do
         [ -n "$h" ] || continue
         adds+=("$h")
