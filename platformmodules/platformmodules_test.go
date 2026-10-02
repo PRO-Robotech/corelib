@@ -7,24 +7,22 @@ package platformmodules_test
 //
 // # Предмет
 //
-// Служба уведомлений `notify` (замысел NTF-1, решение Д73) — модуль платформы:
-// каталог `services/notify` в дереве kacho есть, и гейт дерева
-// TestPlatformModuleVocabularyMatchesTheTree требует его записи. Но ни одно из
-// двух других написаний у неё НЕ существует:
+// Служба уведомлений `notify` (замысел NTF-1, решения Д73, Д79) — модуль
+// платформы с ДВУМЯ написаниями из трёх:
 //
-//   - модуля каталога нет: её контракт — `corelib.notify` под нейтральным
-//     корнем `corelib`, у которого доменов `<корень>/cloud/<домен>` нет и не
-//     предполагается (contractroot.Roots); слушателя с контрактом домена у
-//     службы нет по построению (Д17);
+//   - каталог службы `services/notify` и модуль каталога `notify` совпадают:
+//     пакет контрактов `kacho.cloud.notify.v1` лежит в
+//     `proto/kacho/cloud/notify/` (его заводит D4, kacho#2915);
 //   - домена типов нет: типы ленты `notification_feed` и
 //     `notification_namespace` заводит манифест модели, ни один не принадлежит
 //     модулю, и запись через прокси им запрещена перечнем
 //     (authz/proxytuple, NTF1-M10 (б)).
 //
-// Оба «нет» — проверяемые факты, а не пропуски. Пустой модуль каталога — новое
-// для объявления состояние, поэтому пробы ниже судят и ЧИТАТЕЛЕЙ этой колонки:
-// карты расхождений и обратный поиск обязаны не превращать пустую строку в
-// написание.
+// Колонка модуля каталога — сегмент пакета контрактов, а не признак
+// публичного слушателя. Пустое её значение утверждало бы «каталога контрактов
+// нет», а он есть, — и гейт дерева kacho TestPlatformModuleVocabularyMatchesTheTree
+// это и называл. Пустого модуля каталога в объявлении поэтому нет ни у одной
+// записи, и проба формы требует этого для всех.
 
 import (
 	"slices"
@@ -33,17 +31,21 @@ import (
 	"github.com/PRO-Robotech/corelib/platformmodules"
 )
 
-// TestNotifyIsDeclaredWithNoCatalogModuleAndNoObjectDomain — запись notify
-// есть, и оба её «нет» отвечены как «знаю, и этого нет», а не «не знаю такого».
-func TestNotifyIsDeclaredWithNoCatalogModuleAndNoObjectDomain(t *testing.T) {
+// TestNotifyIsDeclaredWithItsCatalogModuleAndNoObjectDomain — запись notify
+// есть, модуль каталога назван по пакету контрактов, а домен типов отвечен как
+// «знаю, и этого нет», а не «не знаю такого».
+func TestNotifyIsDeclaredWithItsCatalogModuleAndNoObjectDomain(t *testing.T) {
 	if !slices.Contains(platformmodules.Services(), "notify") {
 		t.Fatalf("служба notify словарём не объявлена: объявлены %v", platformmodules.Services())
 	}
 
 	module, known := platformmodules.CatalogModuleOfService("notify")
-	if !known || module != "" {
-		t.Fatalf("модуль каталога notify: known=%v module=%q, ожидалось known=true и пустое "+
-			"написание — у службы нет домена контрактов", known, module)
+	if !known || module != "notify" {
+		t.Fatalf("модуль каталога notify: known=%v module=%q, ожидалось known=true и "+
+			"\"notify\" — пакет контрактов kacho.cloud.notify.v1", known, module)
+	}
+	if svc, ok := platformmodules.ServiceOfCatalogModule("notify"); !ok || svc != "notify" {
+		t.Fatalf("ServiceOfCatalogModule(\"notify\") = %q, ok=%v, ожидалось notify", svc, ok)
 	}
 
 	domain, known := platformmodules.ObjectDomainOfService("notify")
@@ -64,44 +66,29 @@ func TestModuleWithACatalogModuleKeepsIt(t *testing.T) {
 	}
 }
 
-// TestEmptyCatalogModuleIsNotAnAlias — пустое написание не попадает в карты
-// расхождений. Читатели карт трактуют присутствие записи как «модуль каталога
-// называется иначе» и подставили бы пустую строку вместо имени каталога.
-func TestEmptyCatalogModuleIsNotAnAlias(t *testing.T) {
+// TestCoincidingSpellingsAreNotAliases — карты расхождений несут только
+// различные написания: notify (служба и модуль каталога совпадают) в них не
+// попадает, настоящее расхождение nlb ↔ loadbalancer — попадает в обе.
+func TestCoincidingSpellingsAreNotAliases(t *testing.T) {
 	byService := platformmodules.AliasesByService()
-	if v, ok := byService["notify"]; ok {
-		t.Fatalf("AliasesByService несёт notify → %q: пустое написание стало расхождением", v)
-	}
 	byCatalog := platformmodules.AliasesByCatalogModule()
-	if v, ok := byCatalog[""]; ok {
-		t.Fatalf("AliasesByCatalogModule несёт ключ пустой строки → %q", v)
+	if v, ok := byService["notify"]; ok {
+		t.Fatalf("AliasesByService несёт notify → %q: совпадающее написание стало расхождением", v)
 	}
-
-	// Близнец: настоящее расхождение остаётся в обеих картах.
 	if byService["nlb"] != "loadbalancer" || byCatalog["loadbalancer"] != "nlb" {
 		t.Fatalf("настоящее расхождение nlb ↔ loadbalancer выпало из карт: %v / %v",
 			byService, byCatalog)
 	}
-}
-
-// TestEmptyCatalogModuleResolvesToNoService — обратный поиск по пустой строке
-// отвечает «не знаю», а не службой, у которой модуля каталога нет: иначе
-// вызывающий, не нашедший имени каталога, получил бы в ответ notify.
-func TestEmptyCatalogModuleResolvesToNoService(t *testing.T) {
-	if svc, ok := platformmodules.ServiceOfCatalogModule(""); ok {
-		t.Fatalf("ServiceOfCatalogModule(\"\") = %q, ok=true — пустое написание "+
-			"разрешилось в службу", svc)
-	}
-	// Близнец: непустое написание разрешается.
-	if svc, ok := platformmodules.ServiceOfCatalogModule("loadbalancer"); !ok || svc != "nlb" {
-		t.Fatalf("ServiceOfCatalogModule(\"loadbalancer\") = %q, ok=%v, ожидалось nlb", svc, ok)
+	if len(byService) != 1 || len(byCatalog) != 1 {
+		t.Fatalf("расхождений ожидалось ровно одно (nlb): %v / %v", byService, byCatalog)
 	}
 }
 
 // TestDeclarationIsWellFormed — объявление однозначно: короткие имена и
-// непустые модули каталога не повторяются, и порядок объявления — по имени
+// модули каталога непусты и не повторяются, и порядок объявления — по имени
 // службы, как обещает шапка. Повтор сделал бы ответ поиска зависящим от
-// порядка строк.
+// порядка строк; пустой модуль каталога — способом снять с записи сверку
+// колонки с деревом контрактов.
 func TestDeclarationIsWellFormed(t *testing.T) {
 	all := platformmodules.All()
 	if len(all) == 0 {
@@ -118,7 +105,8 @@ func TestDeclarationIsWellFormed(t *testing.T) {
 		}
 		services[m.Service] = true
 		if m.CatalogModule == "" {
-			continue
+			t.Fatalf("запись %q без модуля каталога: колонка — сегмент пакета "+
+				"контрактов, и у каждой службы платформы он есть", m.Service)
 		}
 		if catalog[m.CatalogModule] {
 			t.Fatalf("модуль каталога %q объявлен дважды", m.CatalogModule)
@@ -128,5 +116,5 @@ func TestDeclarationIsWellFormed(t *testing.T) {
 	if !slices.IsSorted(platformmodules.Services()) {
 		t.Fatalf("Services() не отсортирован: %v", platformmodules.Services())
 	}
-	t.Logf("перепись: записей %d · непустых модулей каталога %d", len(all), len(catalog))
+	t.Logf("перепись: записей %d · модулей каталога %d", len(all), len(catalog))
 }

@@ -405,12 +405,8 @@ func ValidateTuple(callerDomain, subject, relation, object string, opts ...Optio
 		// «чей это тип» продолжало бы отвечать соглашение об именовании.
 		if p.owner != nil {
 			if module, known := p.owner.CatalogModuleOfObjectType(objType); known {
-				// Пустой модуль каталога вызывающего (служба без домена
-				// контрактов, notify) не совпадает ни с чем, в том числе с
-				// пустым ответом словаря владения: равенство двух «нет» не
-				// делает тип своим.
 				mine, ok := platformmodules.CatalogModuleOfService(callerDomain)
-				if !ok || mine == "" || module != mine {
+				if !ok || module != mine {
 					return ErrRefused
 				}
 				return nil
