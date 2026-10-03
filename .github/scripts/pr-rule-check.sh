@@ -30,9 +30,14 @@
 #     площадке: GET …/branches/<N> → 200; 404 — ветка влита и снята, запись
 #     пережила предмет и снимается (нарушение); строка не той формы — нарушение;
 #     прочий ответ — не сверено, исход 2;
-#   · коммиты base..head — git_rule_judge_range: атрибуция у любого, форма у
-#     коммитов не до правила, номер ветки у слияний клиента первой цепочки
-#     головы-номера;
+#   · коммиты base..head, которых НЕТ в origin/<ветка по умолчанию> —
+#     git_rule_judge_range: атрибуция у любого, форма у коммитов не до правила,
+#     номер ветки у слияний клиента первой цепочки головы-номера. Коммит,
+#     пришедший в голову слиянием ствола, судился проверкой СВОЕГО запроса при
+#     вливании в ствол и здесь повторно не судится (решение владельца
+#     2026-10-03, Д99): его сообщение не переписать без --force в стволе, и
+#     суд над ним красил бы каждый запрос, догоняющий ствол. Сколько коммитов
+#     так снято с суда — печатается; к суду ноль — исход 2, а не зелёное;
 #   · серверное слияние (шапка scripts/hooks/git-rule.sh, «СЕРВЕРНОЕ
 #     СЛИЯНИЕ») — слияние с коммиттером площадки, которое площадка о себе
 #     подтвердила: GET …/commits/<sha> (замер контракта — ниже, у
@@ -55,12 +60,15 @@
 #
 # Вход — окружение: GITHUB_EVENT_NAME; у запроса ещё PR_TITLE, PR_BODY,
 # HEAD_REF, BASE_SHA, HEAD_SHA (переменными, а не подстановкой в текст шага:
-# это ввод автора запроса), GITHUB_REPOSITORY, GITHUB_API_URL (по умолчанию
+# это ввод автора запроса), DEFAULT_BRANCH (ветка по умолчанию репозитория;
+# её копия refs/remotes/origin/<ветка> обязана быть в клоне — fetch-depth: 0
+# её приносит), GITHUB_REPOSITORY, GITHUB_API_URL (по умолчанию
 # https://api.github.com), GH_TOKEN (необязателен).
 #
 # Исходы: 0 — нарушений нет либо событие не запрос (судить нечего, и это
 # печатается); 1 — нарушения, названы поимённо; 2 — судить не смог (нет входа,
-# мелкий клон, коммита нет в клоне, T0 не выведен, API не ответило — о задаче,
+# мелкий клон, коммита нет в клоне, ветки по умолчанию нет в клоне, к суду ноль
+# коммитов, T0 не выведен, API не ответило — о задаче,
 # коммите или ветке переходного перечня, у записи послабления нет ссылки main
 # для проверки истечения).
 set -uo pipefail
@@ -77,7 +85,7 @@ case "$event" in
         exit 0
         ;;
 esac
-for v in PR_TITLE PR_BODY HEAD_REF BASE_SHA HEAD_SHA GITHUB_REPOSITORY; do
+for v in PR_TITLE PR_BODY HEAD_REF BASE_SHA HEAD_SHA DEFAULT_BRANCH GITHUB_REPOSITORY; do
     [ -n "${!v+x}" ] || cant "не задан $v — судить нечего"
 done
 for t in git curl python3; do
@@ -99,8 +107,22 @@ git_rule_load_t0 "$HEAD_SHA" "$BASE_SHA"
 [ "$GIT_RULE_T0_KNOWN" = 1 ] ||
     cant "T0 не выведен — коммита, заведшего $GIT_RULE_T0_PATH, в истории базы и головы нет: границы истории нет, судить коммиты до правила как новые было бы ложным красным"
 
+# ── СТВОЛ — коммиты, судившиеся при своём вливании (Д99) ─────────────────────
+# Исключение — ОДНИМ --not: второй --not в rev-list снимает действие первого, и
+# ствол стал бы положительным концом диапазона (замер corelib#87: «^base ^main»
+# через два --not дал 10 коммитов вместо 1).
+git check-ref-format --branch "$DEFAULT_BRANCH" >/dev/null 2>&1 ||
+    cant "DEFAULT_BRANCH «$DEFAULT_BRANCH» — не имя ветки"
+trunk_ref="refs/remotes/origin/$DEFAULT_BRANCH"
+trunk_sha="$(git rev-parse -q --verify "$trunk_ref^{commit}")" ||
+    cant "ветки по умолчанию $trunk_ref в клоне нет — что уже судилось при вливании в ствол, не отличить (нужен fetch-depth: 0)"
 head="$HEAD_REF"
-range=("$HEAD_SHA" --not "$BASE_SHA")
+range=("$HEAD_SHA" --not "$BASE_SHA" "$trunk_sha")
+in_base="$(git rev-list --count "$HEAD_SHA" --not "$BASE_SHA" 2>/dev/null)" || cant "диапазон base..head не читается git"
+to_judge="$(git rev-list --count "${range[@]}" 2>/dev/null)" || cant "диапазон без ствола не читается git"
+in_trunk=$((in_base - to_judge))
+[ "$to_judge" -gt 0 ] ||
+    cant "к суду коммитов 0: в base..head $in_base, все уже в $trunk_ref (${trunk_sha:0:10}) — своего у запроса нет, и это не зелёное"
 
 if attr="$(git_rule_attribution "$PR_TITLE")"; then
     GIT_RULE_FINDINGS+=("заголовок: атрибуция «$attr»")
@@ -321,7 +343,8 @@ done
 unasked_numbers=0
 for u in "${unasked[@]}"; do [[ "$u" != '#'* ]] || unasked_numbers=$((unasked_numbers + 1)); done
 
-say "== правило запроса (T0 $(git_rule_t0_text)): голова «$head», коммитов в диапазоне $GIT_RULE_SEEN, из них после правила (судимых формой) $GIT_RULE_AFTER_RULE, серверных слияний $servers из кандидатов $candidates, номеров сверено с трекером $((checked - unasked_numbers)) из $checked"
+say "== правило запроса (T0 $(git_rule_t0_text)): голова «$head», коммитов в base..head $in_base, из них уже в $trunk_ref (${trunk_sha:0:10}) и не судились $in_trunk"
+say "   коммитов в диапазоне $GIT_RULE_SEEN, из них после правила (судимых формой) $GIT_RULE_AFTER_RULE, серверных слияний $servers из кандидатов $candidates, номеров сверено с трекером $((checked - unasked_numbers)) из $checked"
 say "   судилось: заголовок, тело, имя головы, сообщения коммитов, номера задач; подпись — нет (её держат хуки)"
 say "   записей послабления $entries ($ledger_rel), прощено нарушений ${#forgiven[@]}"
 say "   переходный перечень голых номеров ($bare_rel): записей ${#GIT_RULE_BARE[@]}, ветка есть на площадке у $bare_alive"

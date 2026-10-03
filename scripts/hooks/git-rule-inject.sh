@@ -943,11 +943,16 @@ for _ in $(seq 100); do [ -s "$work/api.port" ] && break; sleep 0.05; done
 [ -s "$work/api.port" ] || void "подставной API не встал"
 api_port="$(cat "$work/api.port")"
 : > "$work/api.log"
+# Ствол фикстуры — refs/remotes/origin/main на коммите правила: ветка по
+# умолчанию (DEFAULT_BRANCH, PR_DEFAULT пробы) обязана быть в клоне, а коммит
+# правила — предок базы каждого запроса ниже, и вне раздела «ствол» он ничьего
+# диапазона не сужает.
+git -C "$F" update-ref refs/remotes/origin/main "$h1" || void "ствол фикстуры не встал"
 # pr <событие> <заголовок> <тело> <голова> <база> <вершина> [<клон>] — проверка запроса.
 pr() {
     out="$(cd "${7:-$F}" && env -i PATH="$PATH" HOME="$HOME" XDG_CONFIG_HOME="$XDG_CONFIG_HOME" \
         GIT_CONFIG_NOSYSTEM=1 GITHUB_EVENT_NAME="$1" PR_TITLE="$2" PR_BODY="$3" HEAD_REF="$4" \
-        BASE_SHA="$5" HEAD_SHA="$6" GITHUB_REPOSITORY=probe/corelib \
+        BASE_SHA="$5" HEAD_SHA="$6" DEFAULT_BRANCH="${PR_DEFAULT-main}" GITHUB_REPOSITORY=probe/corelib \
         GITHUB_API_URL="http://127.0.0.1:$api_port" GH_TOKEN=probe-token bash "$PRCHECK" 2>&1)"
     rc=$?
 }
@@ -1063,6 +1068,45 @@ verdict "перечень без записей — цель, а не отказ
 pr pull_request "#42 релиз" "" 42 "$pr25" "$pr42"
 verdict "перечень пуст — голова «42» отвергнута" 1 "голова «42»: голый номер «42»"
 git -C "$F" checkout -q -- scripts/hooks/git-rule-bare-branches.txt
+
+# ── СТВОЛ: коммит из origin/main судился при своём вливании (Д99, corelib#87) ─
+# Замер corelib#87 (77-sync-main → 77-notify, 2026-10-03): слияние main в ветку
+# принесло в base..head «#26 merge #84» и «#85 merge #86», номера влитых
+# ЗАПРОСОВ, и запрос краснел за коммиты, лежащие в main. tr46 — коммит ствола с
+# номером запроса #46 в первой строке; 26-sync сливает его в ветку. Пара
+# «тот же коммит в стволе / вне ствола» отличается одним фактом — положением
+# refs/remotes/origin/main.
+echo "== ствол: коммиты origin/<ветка по умолчанию> не судятся повторно"
+tr46="$(git -C "$F" commit-tree -p "$h1" -m "#46 x" "$h1^{tree}")" || void "коммит ствола не собран"
+on 26-sync "$pr25"; merge "$tr46" -m "#26 merge main: синхронизация со стволом"
+sync26="$(git -C "$F" rev-parse HEAD)"
+fact "фикстура: на ветке 26-sync записано слияние ствола (два родителя)" \
+    test "$(git -C "$F" log -1 --format=%P "$sync26" | wc -w)" -eq 2
+git -C "$F" update-ref refs/remotes/origin/main "$tr46" || void "ствол фикстуры не переставлен"
+: > "$work/api.log"
+pr pull_request "#26 x" "" 26-sync "$pr25" "$sync26"
+verdict "коммит из origin/main с номером запроса — судился при вливании, здесь молчит; снятое с суда названо числом" 0 \
+    "нарушений нет" "коммитов в base..head 2, из них уже в refs/remotes/origin/main" "и не судились 1" "коммитов в диапазоне 1,"
+fact "о номере #46 коммита ствола API трекера не спрашивали" \
+    not grep -qF "/issues/46 " "$work/api.log"
+git -C "$F" update-ref refs/remotes/origin/main "$h1" || void "ствол фикстуры не возвращён"
+pr pull_request "#26 x" "" 26-sync "$pr25" "$sync26"
+verdict "контроль: тот же коммит вне origin/main — судится, номер запроса: отказ" 1 \
+    "#46 — запрос, а не задача" "и не судились 0"
+git -C "$F" update-ref refs/remotes/origin/main "$tr46" || void "ствол фикстуры не переставлен"
+on 26-sync "$sync26"; nv -m "#46 x"
+pr pull_request "#26 x" "" 26-sync "$pr25" "$(git -C "$F" rev-parse HEAD)"
+verdict "свой коммит запроса с номером запроса в первой строке поверх слияния ствола — отказ" 1 \
+    "#46 — запрос, а не задача" "и не судились 1"
+pr pull_request "#46 x" "" 46-x "$h1" "$tr46"
+verdict "к суду ноль: все коммиты base..head уже в стволе — исход 2 с числом, а не зелёное" 2 \
+    "к суду коммитов 0: в base..head 1, все уже в refs/remotes/origin/main"
+PR_DEFAULT=trunk-absent pr pull_request "#26 x" "" 26-sync "$pr25" "$sync26"
+verdict "ветки по умолчанию в клоне нет — исход 2" 2 "refs/remotes/origin/trunk-absent в клоне нет"
+PR_DEFAULT="" pr pull_request "#26 x" "" 26-sync "$pr25" "$sync26"
+verdict "ветка по умолчанию пуста — исход 2" 2 "DEFAULT_BRANCH «» — не имя ветки"
+git -C "$F" update-ref refs/remotes/origin/main "$h1" || void "ствол фикстуры не возвращён"
+drop 26-sync
 
 # ── T0 ПО ПОЛНОЙ ИСТОРИИ: два добавления правила на двух сторонах ────────────
 # Замер corelib#26 ← main (2026-10-01): ветка завела хук раньше ствола, ствол —
@@ -1315,6 +1359,8 @@ fact "ci.yml исполняет bash scripts/hooks/git-rule-inject.sh строк
     grep -qxF "bash scripts/hooks/git-rule-inject.sh" <<<"$ci_runs"
 fact "ci.yml исполняет bash .github/scripts/pr-rule-check.sh строкой run:" \
     grep -qxF "bash .github/scripts/pr-rule-check.sh" <<<"$ci_runs"
+fact "ci.yml даёт проверке запроса ветку по умолчанию из события (DEFAULT_BRANCH)" \
+    grep -qE '^[[:space:]]+DEFAULT_BRANCH:[[:space:]]+\$\{\{ github\.event\.repository\.default_branch \}\}[[:space:]]*$' "$CI"
 # Заголовок и тело правятся без отправки: без `edited` вердикт о них остаётся
 # от прежнего текста. Строка `types:` блока pull_request — код, а не комментарий.
 pr_types="$(sed -n '/^  pull_request:/,/^  [a-z_]*:/p' "$CI" | grep -E '^    types:')"
