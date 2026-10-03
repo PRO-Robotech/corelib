@@ -1,44 +1,45 @@
 // Copyright (c) PRO-Robotech
 // SPDX-License-Identifier: Apache-2.0
 
-// Package grpcsrv — acr.go: THE step-up (ACR / MFA-freshness) rule. Single
-// implementation, two callers.
+// Package grpcsrv — acr.go: ЕДИНСТВЕННОЕ правило повышения уровня проверки
+// (ACR / свежесть MFA). Одна реализация, два вызывающих.
 //
-// The platform enforces the per-RPC catalog `required_acr_min` at TWO points:
+// Платформа исполняет поле каталога `required_acr_min` для каждого RPC в ДВУХ
+// точках:
 //
-//   - the public front door — api-gateway `middleware.StepUpGate.Check`
+//   - на публичном входе — api-gateway `middleware.StepUpGate.Check`
 //     (RFC 9470 `401` + `WWW-Authenticate: acr_values`);
-//   - the cluster-internal listener — kaname `authzguard.ACRFloor` (:9091,
-//     gateway-fronted internal RPCs → `PERMISSION_DENIED` + step-up detail),
-//     because the gateway re-dials :9091 and "internal = trusted" is a forbidden
-//     assumption.
+//   - на внутреннем слушателе кластера — kaname `authzguard.ACRFloor` (:9091,
+//     внутренние RPC, которые публикует край → `PERMISSION_DENIED` + деталь о
+//     повышении уровня), потому что край заново дозванивается до :9091, а
+//     «внутреннее = доверенное» — запрещённое допущение.
 //
-// Both points call EvaluateStepUp below. They do NOT re-derive the rule: neither
-// keeps its own ranking table and neither keeps its own machine-principal
-// exemption. Divergence is prevented BY CONSTRUCTION (there is one function),
-// not by agreement between two copies — a re-introduced local override is caught
-// by the verdict-parity guards on both sides (gateway
-// stepup_verdict_parity_test.go, iam acr_floor_stepup_parity_test.go), which
-// drive each REAL enforcement entrypoint — including the machine branch —
-// against this function.
+// Обе точки зовут EvaluateStepUp ниже. Правило они НЕ выводят заново: ни одна не
+// держит своей таблицы рангов и ни одна не держит своего исключения для
+// машинного субъекта. Расхождение исключено ПО ПОСТРОЕНИЮ (функция одна), а не
+// договорённостью двух копий: вновь заведённую местную подмену ловят пробы
+// совпадения вердикта с обеих сторон (на крае —
+// stepup_verdict_parity_test.go, в iam — acr_floor_stepup_parity_test.go),
+// которые гонят каждую НАСТОЯЩУЮ точку исполнения — включая машинную ветку —
+// против этой функции.
 //
-// WHY HERE: the gateway and the access service are different modules and cannot
-// import each other, so the shared rule has to live in the foundation. It
-// belongs in grpcsrv because grpcsrv owns the TRANSPORT inputs of the decision —
-// the trusted carriers the listener side reads (TrustedACRFromContext /
-// TrustedPrincipalFromContext) and the metadata key contract (MDKeyTokenACR /
-// MDKeyPrincipalType).
+// ПОЧЕМУ ЗДЕСЬ: край и служба доступа — разные модули и импортировать друг друга
+// не могут, поэтому общее правило обязано жить в фундаменте. Место ему в
+// grpcsrv, потому что grpcsrv владеет ТРАНСПОРТНЫМИ входами решения —
+// доверенными носителями, которые читает сторона слушателя
+// (TrustedACRFromContext / TrustedPrincipalFromContext), и договором о ключах
+// метаданных (MDKeyTokenACR / MDKeyPrincipalType).
 //
-// The ACR ranking itself is NOT here. It is a pure function whose readers
-// include layers with no transport at all (deployment-config validation, access
-// service use-cases), so it lives in the transport-free package `acrlevel`
-// (acrlevel.Rank / acrlevel.Satisfies, with the normative ordering), and this
-// rule takes it from there. That is one table, not a second home: grpcsrv keeps
-// no ranking of its own. ACRRank and ACRSatisfies below are the address the
-// ranking had in v1.9.0, kept as deprecated forwarders to acrlevel — the module
-// path carries no major-version suffix, so removing them in a v1 minor release
-// would break every consumer that raises its pin. They go away only with a
-// major release of the module.
+// Самого ранжирования ACR здесь НЕТ. Это чистая функция, среди читателей которой
+// есть слои вовсе без транспорта (проверка конфигурации посадки, сценарии службы
+// доступа), поэтому она живёт в бестранспортном пакете `acrlevel`
+// (acrlevel.Rank / acrlevel.Satisfies, с нормативным порядком), и это правило
+// берёт её оттуда. Таблица одна, второго дома нет: своего ранжирования grpcsrv не
+// держит. ACRRank и ACRSatisfies ниже — адрес, по которому ранжирование
+// находилось в v1.9.0; он сохранён устаревшими переадресациями к acrlevel: путь
+// модуля не несёт суффикса мажорной версии, и снятие этих имён в минорном
+// выпуске v1 сломало бы каждого потребителя, поднявшего пин. Уходят они только с
+// мажорным выпуском модуля.
 package grpcsrv
 
 import (
@@ -48,142 +49,146 @@ import (
 	"github.com/PRO-Robotech/corelib/principalwire"
 )
 
-// MDKeyTokenACR is the trusted metadata key carrying the validated JWT `acr`
-// claim, forwarded by the api-gateway on the mTLS-verified gateway→iam re-dial
-// (alongside x-kacho-principal-*). It is read ONLY under the trust invariant
-// (see UnaryTrustedPrincipalExtract) — on an unverified peer it is dropped with
-// the principal (anti-spoof).
+// MDKeyTokenACR — доверенный ключ метаданных, несущий проверенное утверждение
+// `acr` из JWT; его пересылает api-gateway при повторном дозвоне край→iam,
+// проверенном mTLS (вместе с x-kacho-principal-*). Читается он ТОЛЬКО под
+// инвариантом доверия (см. UnaryTrustedPrincipalExtract): от непроверенного
+// собеседника он отбрасывается вместе с субъектом (защита от подделки).
 // Имя ключа объявлено ОДИН раз — в `pkg/principalwire`; здесь оно только
 // переименовано под привычное вызывающему имя (см. разбор у MDKeyPrincipalType).
 const MDKeyTokenACR = principalwire.MetaTokenACR
 
-// PrincipalTypeServiceAccount is the `kaname_principal_type` value identifying a
-// MACHINE principal — the claim value stamped by the iam token-hook on a
-// client_credentials service-account token, and the
-// MDKeyPrincipalType metadata value the api-gateway forwards for it.
+// PrincipalTypeServiceAccount — значение `kaname_principal_type`, опознающее
+// МАШИННЫЙ субъект: его проставляет перехватчик выпуска токенов iam в токене
+// сервисного аккаунта, выданном по client_credentials, и его же как значение
+// метаданных MDKeyPrincipalType пересылает для такого субъекта api-gateway.
 //
-// It is the ONLY value that lifts the interactive-authentication floor (see
-// EvaluateStepUp). `user`, `system`, an empty/absent type and any unknown value
-// are NOT exempt (fail-closed).
+// Это ЕДИНСТВЕННОЕ значение, снимающее нижнюю границу интерактивной
+// аутентификации (см. EvaluateStepUp). `user`, `system`, пустой или
+// отсутствующий тип и любое незнакомое значение исключения НЕ получают (отказ по
+// умолчанию).
 const PrincipalTypeServiceAccount = "service_account"
 
-// ACRRank maps an ACR string to a comparable integer — the pre-acrlevel address
-// of the ranking, answering exactly what acrlevel.Rank answers. It holds no
-// table: the body forwards.
+// ACRRank отображает строку ACR в сравнимое целое — адрес ранжирования,
+// существовавший до acrlevel; отвечает ровно то же, что acrlevel.Rank. Таблицы
+// не держит: тело переадресует.
 //
-// Deprecated: use acrlevel.Rank. This address is kept for consumers pinned to
-// v1.9.0 and is removed only with a major release of the module.
+// Deprecated: используйте acrlevel.Rank. Адрес сохранён для потребителей,
+// закреплённых на v1.9.0, и снимается только мажорным выпуском модуля.
 func ACRRank(acr string) int {
 	return acrlevel.Rank(acr)
 }
 
-// ACRSatisfies reports whether a presented acr meets a required floor — the
-// pre-acrlevel address of the check, answering exactly what acrlevel.Satisfies
-// answers. Enforcement points call EvaluateStepUp, not this.
+// ACRSatisfies сообщает, достигает ли предъявленный acr требуемой нижней границы
+// — адрес проверки, существовавший до acrlevel; отвечает ровно то же, что
+// acrlevel.Satisfies. Точки исполнения зовут EvaluateStepUp, а не её.
 //
-// Deprecated: use acrlevel.Satisfies. This address is kept for consumers pinned
-// to v1.9.0 and is removed only with a major release of the module.
+// Deprecated: используйте acrlevel.Satisfies. Адрес сохранён для потребителей,
+// закреплённых на v1.9.0, и снимается только мажорным выпуском модуля.
 func ACRSatisfies(presented, required string) bool {
 	return acrlevel.Satisfies(presented, required)
 }
 
-// StepUpInput — every input of the step-up decision. Both enforcement points
-// build one of these and read nothing else.
+// StepUpInput — все входы решения о повышении уровня. Обе точки исполнения
+// строят такую структуру и ничего другого не читают.
 //
-// The caller supplies raw values from its own transport (a verified JWT's claims
-// at the gateway; the trust-filtered ctx carriers at iam) — extracting them is
-// transport plumbing and stays with the caller; DECIDING on them is this
-// package's job.
+// Сырые значения вызывающий берёт из своего транспорта (утверждения проверенного
+// JWT на крае; носители контекста после фильтра доверия в iam): извлечь их —
+// транспортная обвязка, и она остаётся у вызывающего; РЕШАТЬ по ним — дело этого
+// пакета.
 type StepUpInput struct {
-	// PrincipalType — the caller's `kaname_principal_type`
-	// ("user" | "service_account" | "system"). MUST already be trust-filtered by
-	// the caller: pass "" whenever the type came from an unverified peer, so a
-	// forged `service_account` can never buy the exemption (anti-spoof).
+	// PrincipalType — `kaname_principal_type` вызывающего
+	// ("user" | "service_account" | "system"). ОБЯЗАН уже пройти фильтр доверия у
+	// вызывающего: передавайте "", когда тип пришёл от непроверенного
+	// собеседника, чтобы поддельный `service_account` никогда не купил исключение
+	// (защита от подделки).
 	PrincipalType string
-	// PresentedACR — the `acr` the caller actually authenticated with. Absent /
-	// unknown ranks 0 (fail-closed). Like PrincipalType it must be trust-filtered.
+	// PresentedACR — `acr`, с которым вызывающий действительно аутентифицирован.
+	// Отсутствующий или незнакомый ранжируется в 0 (отказ по умолчанию). Как и
+	// PrincipalType, обязан пройти фильтр доверия.
 	PresentedACR string
-	// AuthTime — the token's `auth_time`. Consulted only when MFAMaxAge > 0.
+	// AuthTime — `auth_time` токена. Читается только при MFAMaxAge > 0.
 	AuthTime time.Time
-	// RequiredACR — the catalog `required_acr_min` for the RPC being called.
-	// "" / "0" → no step-up requirement.
+	// RequiredACR — значение `required_acr_min` из каталога для вызываемого RPC.
+	// "" / "0" → требования повышения уровня нет.
 	RequiredACR string
-	// MFAMaxAge — sliding freshness window on AuthTime. 0 → no freshness
-	// requirement.
+	// MFAMaxAge — скользящее окно свежести по AuthTime. 0 → требования свежести
+	// нет.
 	MFAMaxAge time.Duration
-	// Now — the evaluation instant. Required when MFAMaxAge > 0; a zero value
-	// there falls back to time.Now() rather than computing a negative age that
-	// would pass the window open (fail-closed defaulting).
+	// Now — момент вычисления. Обязателен при MFAMaxAge > 0; нулевое значение
+	// там заменяется на time.Now(), а не даёт отрицательный возраст, который
+	// держал бы окно открытым (умолчание с отказом по умолчанию).
 	Now time.Time
 }
 
-// StepUpVerdict — the outcome of EvaluateStepUp. Deny reasons are distinguished
-// so each enforcement point can emit its own protocol-appropriate error
-// (RFC 6750 challenge at the gateway, gRPC status detail at iam) WITHOUT
-// re-deciding anything.
+// StepUpVerdict — исход EvaluateStepUp. Причины отказа различаются, чтобы каждая
+// точка исполнения выдала свою ошибку, уместную для её протокола (вызов
+// RFC 6750 на крае, деталь статуса gRPC в iam), НИЧЕГО не решая заново.
 type StepUpVerdict uint8
 
 const (
-	// StepUpAllow — the call may proceed past the step-up floor. Grants no
-	// permission: the authorization Check runs independently and is unaffected.
+	// StepUpAllow — вызов может пройти нижнюю границу повышения уровня. Прав не
+	// даёт: проверка авторизации Check идёт независимо и не затрагивается.
 	StepUpAllow StepUpVerdict = iota
-	// StepUpDenyACR — presented acr ranks below the required floor.
+	// StepUpDenyACR — предъявленный acr ранжируется ниже требуемой границы.
 	StepUpDenyACR
-	// StepUpDenyAuthTimeMissing — a freshness window is required but the token
-	// carries no auth_time.
+	// StepUpDenyAuthTimeMissing — окно свежести требуется, но токен не несёт
+	// auth_time.
 	StepUpDenyAuthTimeMissing
-	// StepUpDenyMFAStale — auth_time is older than the freshness window.
+	// StepUpDenyMFAStale — auth_time старше окна свежести.
 	StepUpDenyMFAStale
 )
 
-// EvaluateStepUp is THE step-up rule. Both enforcement points call it and
-// neither may re-implement any arm of it.
+// EvaluateStepUp — ЕДИНСТВЕННОЕ правило повышения уровня. Обе точки исполнения
+// зовут его, и ни одна не вправе заново реализовать ни одну его ветвь.
 //
-// Arms, in order:
+// Ветви, по порядку:
 //
-//  1. MACHINE-PRINCIPAL EXEMPTION. A service-account principal is exempt from
-//     BOTH the acr floor and the MFA-freshness window. This is not a courtesy:
-//     a machine has no interactive authentication ceremony and can NEVER present
-//     acr ≥ 1 or a fresh auth_time, so gating it on assurance level does not
-//     protect the RPC — it makes the RPC permanently unreachable for machines
-//     (including the bootstrap-admin service account on the acr-gated
-//     credential/grant RPCs). Expressing "machines must not call X" belongs in
-//     the authorization MODEL as a relation, not in an assurance floor that no
-//     machine can satisfy.
+//  1. ИСКЛЮЧЕНИЕ ДЛЯ МАШИННОГО СУБЪЕКТА. Субъект — сервисный аккаунт освобождён
+//     и от нижней границы acr, и от окна свежести MFA. Это не любезность: у
+//     машины нет интерактивной церемонии аутентификации, и она НИКОГДА не
+//     предъявит acr ≥ 1 или свежий auth_time, поэтому ограничение её уровнем
+//     достоверности RPC не защищает — оно делает RPC навсегда недостижимым для
+//     машин (включая сервисный аккаунт начального администратора на RPC выдачи
+//     учётных данных и прав, закрытых по acr). Запрет «машинам нельзя вызывать
+//     X» выражается в МОДЕЛИ авторизации отношением, а не нижней границей
+//     достоверности, которой ни одна машина не достигнет.
 //
-//     The exemption lifts ONLY the assurance floor. It grants no permission
-//     whatsoever: the per-RPC authorization Check (FGA/ReBAC) runs independently
-//     and is untouched, and the machine path carries its own controls
-//     (credential lifetime, sender-constrained binding, narrow grant).
+//     Исключение снимает ТОЛЬКО нижнюю границу достоверности. Никаких прав оно
+//     не даёт: проверка авторизации Check для каждого RPC (FGA/ReBAC) идёт
+//     независимо и не затрагивается, а у машинного пути свои меры контроля
+//     (срок жизни учётных данных, привязка к отправителю, узкий грант).
 //
-//     It is NARROW: exactly PrincipalTypeServiceAccount exempts. A `user`, a
-//     `system` principal, an empty/absent type (which is also what a caller must
-//     pass for an untrusted peer) and any unknown value are NOT exempt.
+//     Оно УЗКОЕ: освобождает ровно PrincipalTypeServiceAccount. Субъект `user`,
+//     субъект `system`, пустой или отсутствующий тип (именно его вызывающий
+//     обязан передать для недоверенного собеседника) и любое незнакомое
+//     значение исключения НЕ получают.
 //
-//  2. ACR FLOOR — acrlevel.Satisfies(PresentedACR, RequiredACR).
+//  2. НИЖНЯЯ ГРАНИЦА ACR — acrlevel.Satisfies(PresentedACR, RequiredACR).
 //
-//  3. MFA FRESHNESS — when MFAMaxAge > 0, AuthTime must exist and be within the
-//     window.
+//  3. СВЕЖЕСТЬ MFA — при MFAMaxAge > 0 AuthTime обязан быть и укладываться в
+//     окно.
 func EvaluateStepUp(in StepUpInput) StepUpVerdict {
-	// 1. Machine principal — exempt from the interactive-authentication floor.
+	// 1. Машинный субъект — освобождён от нижней границы интерактивной
+	// аутентификации.
 	if in.PrincipalType == PrincipalTypeServiceAccount {
 		return StepUpAllow
 	}
 
-	// 2. ACR floor.
+	// 2. Нижняя граница ACR.
 	if !acrlevel.Satisfies(in.PresentedACR, in.RequiredACR) {
 		return StepUpDenyACR
 	}
 
-	// 3. MFA freshness.
+	// 3. Свежесть MFA.
 	if in.MFAMaxAge > 0 {
 		if in.AuthTime.IsZero() {
 			return StepUpDenyAuthTimeMissing
 		}
 		now := in.Now
 		if now.IsZero() {
-			// Fail-closed defaulting: a zero Now would make every age negative and
-			// silently hold the window open.
+			// Умолчание с отказом по умолчанию: нулевой Now сделал бы любой
+			// возраст отрицательным и молча держал бы окно открытым.
 			now = time.Now()
 		}
 		if now.Sub(in.AuthTime) > in.MFAMaxAge {

@@ -3,14 +3,14 @@
 
 package grpcsrv_test
 
-// acr_deprecated_test.go — the pre-acrlevel address of the ACR ranking stays
-// callable: grpcsrv.ACRRank and grpcsrv.ACRSatisfies keep their v1.9.0
-// signatures, answer exactly what acrlevel answers, and are deprecated
-// forwarders rather than a second table.
+// acr_deprecated_test.go — адрес ранжирования ACR, существовавший до acrlevel,
+// остаётся вызываемым: grpcsrv.ACRRank и grpcsrv.ACRSatisfies сохраняют
+// сигнатуры v1.9.0, отвечают ровно то же, что acrlevel, и являются устаревшими
+// переадресациями, а не второй таблицей.
 //
-// The module path carries no major-version suffix, so an exported name removed
-// in a v1 minor release breaks the build of every consumer that raises its pin.
-// The address goes away only with a major release of the module.
+// Путь модуля не несёт суффикса мажорной версии, поэтому экспортированное имя,
+// снятое в минорном выпуске v1, ломает сборку каждого потребителя, поднявшего
+// пин. Адрес уходит только с мажорным выпуском модуля.
 
 import (
 	"fmt"
@@ -26,20 +26,20 @@ import (
 	"github.com/PRO-Robotech/corelib/grpcsrv"
 )
 
-// Signatures of v1.9.0. A declaration of another type — a variable of func type
-// included — is caught by TestDeprecatedACRAddressesAreForwardingFunctions; a
-// different signature fails to compile here.
+// Сигнатуры v1.9.0. Объявление другого вида — в том числе переменную
+// функционального типа — ловит TestDeprecatedACRAddressesAreForwardingFunctions;
+// другая сигнатура не компилируется здесь.
 var (
 	_ func(string) int          = grpcsrv.ACRRank
 	_ func(string, string) bool = grpcsrv.ACRSatisfies
 )
 
-// acrProbeValues — every rung of the ordering and one value the table does not
-// know.
+// acrProbeValues — каждая ступень порядка и одно значение, которого таблица не
+// знает.
 var acrProbeValues = []string{"", "0", "1", "2", "3", "unknown-acr"}
 
-// TestDeprecatedACRAddressesAgreeWithAcrlevel — value parity on every value and
-// every ordered pair of values.
+// TestDeprecatedACRAddressesAgreeWithAcrlevel — совпадение ответов на каждом
+// значении и на каждой упорядоченной паре значений.
 func TestDeprecatedACRAddressesAgreeWithAcrlevel(t *testing.T) {
 	pairs := 0
 	for _, v := range acrProbeValues {
@@ -56,19 +56,20 @@ func TestDeprecatedACRAddressesAgreeWithAcrlevel(t *testing.T) {
 	t.Logf("values: %d; ordered pairs: %d", len(acrProbeValues), pairs)
 }
 
-// forwarder — what a deprecated address must be: a function whose doc carries a
-// `Deprecated:` paragraph naming the new address and whose body is one return
-// of the new address called with its own parameters in order.
+// forwarder — каким обязан быть устаревший адрес: функцией, чья документация
+// несёт абзац `Deprecated:` с именем нового адреса, а тело — один возврат
+// вызова нового адреса с её собственными параметрами по порядку.
 type forwarder struct {
-	name   string // e.g. ACRRank
-	target string // e.g. Rank, in package acrlevel
+	name   string // например, ACRRank
+	target string // например, Rank из пакета acrlevel
 }
 
 var acrForwarders = []forwarder{{"ACRRank", "Rank"}, {"ACRSatisfies", "Satisfies"}}
 
-// forwarderDefects judges the non-test Go files of dir and names every
-// forwarder that is absent, is not a function, lacks the paragraph, or does
-// more than forward. files is the census: zero files read is not a verdict.
+// forwarderDefects судит Go-файлы каталога dir, не являющиеся пробами, и
+// называет каждую переадресацию, которой нет, которая не функция, у которой нет
+// абзаца либо которая делает больше, чем переадресует. files — перепись: ноль
+// прочитанных файлов вердиктом не является.
 func forwarderDefects(dir string, want []forwarder) (files int, defects []string, err error) {
 	paths, err := filepath.Glob(filepath.Join(dir, "*.go"))
 	if err != nil {
@@ -134,7 +135,7 @@ func forwarderDefects(dir string, want []forwarder) (files int, defects []string
 	return files, defects, nil
 }
 
-// forwardsTo — the body is exactly `return acrlevel.<target>(p1, …, pn)`.
+// forwardsTo — тело в точности `return acrlevel.<target>(p1, …, pn)`.
 func forwardsTo(fn *ast.FuncDecl, target string) bool {
 	if fn.Body == nil || len(fn.Body.List) != 1 {
 		return false
@@ -171,7 +172,7 @@ func forwardsTo(fn *ast.FuncDecl, target string) bool {
 	return true
 }
 
-// TestDeprecatedACRAddressesAreForwardingFunctions — the package itself.
+// TestDeprecatedACRAddressesAreForwardingFunctions — сам пакет.
 func TestDeprecatedACRAddressesAreForwardingFunctions(t *testing.T) {
 	files, defects, err := forwarderDefects(".", acrForwarders)
 	if err != nil {
@@ -186,10 +187,10 @@ func TestDeprecatedACRAddressesAreForwardingFunctions(t *testing.T) {
 	t.Logf("files read: %d; forwarders judged: %d", files, len(acrForwarders))
 }
 
-// TestForwarderDefectIsFoundAndItsTwinIsSilent — injection both ways on a
-// synthetic package; each defect differs from the twin in one fact. The
-// synthetic forwarder is named LegacyRank, not ACRRank, so that no line of this
-// file reads as a declaration of the real address.
+// TestForwarderDefectIsFoundAndItsTwinIsSilent — инъекция в обе стороны на
+// синтетическом пакете; каждый дефект отличается от близнеца одним фактом.
+// Синтетическая переадресация названа LegacyRank, а не ACRRank, чтобы ни одна
+// строка этого файла не читалась как объявление настоящего адреса.
 func TestForwarderDefectIsFoundAndItsTwinIsSilent(t *testing.T) {
 	const decl = "func LegacyRank(acr string) int { return acrlevel.Rank(acr) }"
 	const twin = "package p\n\n" +
