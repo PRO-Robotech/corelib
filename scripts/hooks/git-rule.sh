@@ -13,10 +13,11 @@
 # Экземпляр свой, не копия (ban20): форма взята у стража kacho, байты не перенесены.
 #
 # Правило:
-#   · ветка — номер задачи ЭТОГО репозитория, `^[0-9]+$`, либо номер с сутью
-#     через дефис, `^[0-9]+-[a-z0-9][a-z0-9-]*$` (`77-notify`; решение Д59
-#     эпика PRO-Robotech/kacho#2914; номер ветки — до первого дефиса);
-#     исключение одно — `main`; ветка, открытая до правила, не переименовывается;
+#   · ветка — `<N>-<суть>`: N — номер задачи ЭТОГО репозитория, суть — латиница
+#     в kebab-case (`^[0-9]+-[a-z0-9]([a-z0-9-]*[a-z0-9])?$`, суть не длиннее
+#     GIT_RULE_BRANCH_SUFFIX_MAX символов); исключения — `main`, ветка, открытая
+#     до правила (не переименовывается), и голый номер из ПЕРЕХОДНОГО ПЕРЕЧНЯ
+#     (ниже). Решение владельца 2026-09-30, PRO-Robotech/corelib#79;
 #   · первая строка — `#<N> …`, не длиннее 72 СИМВОЛОВ (не байт), одно
 #     утверждение; слияние — `#<N> merge #<M>: …` либо `#<N> merge main: …`;
 #     серверное слияние — `#<N> …` либо `Merge pull request #<P> from
@@ -79,6 +80,16 @@
 # даже когда автор и дата автора у него старые (перенос старой работы; rebase
 # правило владельца запрещает).
 #
+# ПЕРЕХОДНЫЙ ПЕРЕЧЕНЬ — scripts/hooks/git-rule-bare-branches.txt, рядом с этим
+# файлом: ветки с голым номером `^[0-9]+$`, которые УЖЕ лежали на origin, когда
+# правило сменилось с голого номера на `<N>-<суть>` (T1 = 2026-09-30T16:13:10Z,
+# предикат перечня — `git ls-remote --heads origin`, голые номера). Они живут по
+# прежнему правилу до своего вливания: релиз в них идёт сейчас и не
+# переименовывается. Новый голый номер — отказ с подсказкой формы. Запись
+# снимается, когда ветки на площадке нет (влита и снята): проверка запроса
+# спрашивает площадку о каждой записи, и запись без предмета — нарушение. Файла
+# нет либо записей 0 — переходу конец, и это цель, а не отказ.
+#
 # ГРАНИЦА (измерена пробой, утверждения «граница:»): коммит, записанный после
 # правила МИМО хука коммита на основании СТАРШЕ правила с обеими датами до T0,
 # от работы до правила не отличим ничем из данных git — основание и обе даты
@@ -93,10 +104,23 @@ GIT_RULE_SUBJECT_MAX=72
 GIT_RULE_BODY_MAX=12
 GIT_RULE_SERVER_IDENT="GitHub <noreply@github.com>"
 GIT_RULE_SERVER_MERGES=""
+GIT_RULE_BRANCH_SUFFIX_MAX=40
+# Каталог предиката — разбором пути, без dirname: страж отправки исполняется в
+# PATH хука отправки, а dirname в его перечне инструментов нет.
+case "${BASH_SOURCE[0]}" in */*) GIT_RULE_DIR="${BASH_SOURCE[0]%/*}" ;; *) GIT_RULE_DIR=. ;; esac
+GIT_RULE_BARE_LIST="$GIT_RULE_DIR/git-rule-bare-branches.txt"
+GIT_RULE_BARE=()
+GIT_RULE_BARE_BAD=()
+GIT_RULE_BARE_LOADED=0
 
 # git_rule_load_t0 [ревизия…] — выставляет GIT_RULE_T0 (эпохой),
 # GIT_RULE_T0_KNOWN и GIT_RULE_T0_ADDS — коммиты, заводившие путь правила в
 # историю ревизий. Не выведен — T0 0, KNOWN 0, добавлений нет: судится всё.
+# История — ПОЛНАЯ (--full-history): упрощённая у слияния, совпадающего по пути
+# правила с одним родителем, идёт только по нему, и добавление на другой
+# стороне выпадает — T0 сдвигался на позднее добавление, и коммиты между двумя
+# добавлениями читались работой до правила (замер corelib#26 ← main: судимых
+# формой на запросе эпика 1 вместо 39).
 git_rule_load_t0() {
     local recs h at min="" adds=()
     GIT_RULE_T0=0
@@ -104,7 +128,7 @@ git_rule_load_t0() {
     GIT_RULE_T0_ADDS=()
     [ "$#" -gt 0 ] || set -- HEAD
     [ "$(git rev-parse --is-shallow-repository 2>/dev/null)" != true ] || return 0
-    recs="$(git log --no-color --diff-filter=A --format='%H %at' "$@" -- "$GIT_RULE_T0_PATH" 2>/dev/null)" || return 0
+    recs="$(git log --no-color --full-history --diff-filter=A --format='%H %at' "$@" -- "$GIT_RULE_T0_PATH" 2>/dev/null)" || return 0
     while read -r h at; do
         [ -n "$h" ] || continue
         adds+=("$h")
@@ -159,15 +183,65 @@ git_rule_t0_text() {
     fi
 }
 
-# git_rule_is_number <имя> — ветка названа задачей: `<N>` либо `<N>-<суть>`
-# (Д59). Суть — строчная латиница, цифры и дефис, первым не дефис.
-git_rule_is_number() { [[ "$1" =~ ^[0-9]+$ || "$1" =~ ^[0-9]+-[a-z0-9][a-z0-9-]*$ ]]; }
+git_rule_is_number() { [[ "$1" =~ ^[0-9]+$ ]]; }
 
-# git_rule_task <имя> — печатает N задачи ветки; 1 — имя не задачи.
-git_rule_task() {
-    git_rule_is_number "$1" || return 1
-    printf '%s' "${1%%-*}"
+# git_rule_load_bare — читает переходный перечень в GIT_RULE_BARE (номера) и
+# GIT_RULE_BARE_BAD (строки не той формы — их судит проверка запроса). Строка
+# записи — номер, дальше через пробел — что за ветка; пустые строки и строки с
+# `#` в начале — не записи. Файла нет — перечень пуст.
+git_rule_load_bare() {
+    local line n
+    [ "$GIT_RULE_BARE_LOADED" = 0 ] || return 0
+    GIT_RULE_BARE_LOADED=1
+    [ -f "$GIT_RULE_BARE_LIST" ] || return 0
+    while IFS= read -r line || [ -n "$line" ]; do
+        case "$line" in '' | '#'*) continue ;; esac
+        n="${line%%[[:space:]]*}"
+        if git_rule_is_number "$n"; then GIT_RULE_BARE+=("$n"); else GIT_RULE_BARE_BAD+=("$line"); fi
+    done <"$GIT_RULE_BARE_LIST"
 }
+
+# git_rule_branch_number <ветка> — печатает N ветки `<N>-<суть>` либо голого
+# `<N>`; 1 — номера у имени нет. Форму имени не судит: это номер для сверки
+# слияния и заголовка, а законность имени — git_rule_branch_ok.
+git_rule_branch_number() {
+    [[ "$1" =~ ^([0-9]+)(-[a-z0-9-]*)?$ ]] || return 1
+    printf '%s' "${BASH_REMATCH[1]}"
+}
+
+# git_rule_branch_bare_listed <ветка> — голый номер из переходного перечня.
+git_rule_branch_bare_listed() {
+    local n
+    git_rule_is_number "$1" || return 1
+    git_rule_load_bare
+    for n in "${GIT_RULE_BARE[@]}"; do [ "$n" != "$1" ] || return 0; done
+    return 1
+}
+
+# git_rule_branch_why <ветка> — печатает, чем имя нарушает правило; 1 — имя
+# законно: `main`, `<N>-<суть>` либо голый номер из переходного перечня. Ветку
+# до правила здесь не видно — её судит потребитель (git_rule_before_rule).
+git_rule_branch_why() {
+    local b="$1" suffix
+    [ "$b" != main ] || return 1
+    if git_rule_is_number "$b"; then
+        git_rule_branch_bare_listed "$b" && return 1
+        printf 'голый номер «%s» — не в переходном перечне (%s): новая ветка — «%s-<суть>»' \
+            "$b" "scripts/hooks/git-rule-bare-branches.txt" "$b"
+        return 0
+    fi
+    if [[ "$b" =~ ^[0-9]+-([a-z0-9]|[a-z0-9][a-z0-9-]*[a-z0-9])$ ]]; then
+        suffix="${b#*-}"
+        [ "${#suffix}" -gt "$GIT_RULE_BRANCH_SUFFIX_MAX" ] || return 1
+        printf 'суть «%s» — %s символов, предел %s' "$suffix" "${#suffix}" "$GIT_RULE_BRANCH_SUFFIX_MAX"
+        return 0
+    fi
+    printf 'имя не в форме «<N>-<суть>» (^[0-9]+-[a-z0-9]([a-z0-9-]*[a-z0-9])?$: номер задачи, дефис, суть латиницей в нижнем регистре через дефис)'
+    return 0
+}
+
+# git_rule_branch_ok <ветка> — имя законно (git_rule_branch_why молчит).
+git_rule_branch_ok() { ! git_rule_branch_why "$1" >/dev/null; }
 
 # git_rule_subject_task <первая строка> — печатает N из `#<N> …`; 1 — формы нет.
 git_rule_subject_task() {
@@ -198,7 +272,7 @@ git_rule_server_form() {
 git_rule_subject_numbers() {
     local n
     if n="$(git_rule_server_pull_form "$1")"; then
-        ! git_rule_is_number "$n" || printf '%s\n' "$(git_rule_task "$n")"
+        ! n="$(git_rule_branch_number "$n")" || printf '%s\n' "$n"
         return 0
     fi
     n="$(git_rule_subject_task "$1")" || return 0
@@ -238,11 +312,11 @@ git_rule_second_statement() {
 # сообщения (уже после git stripspace), по строке на каждое; пусто — форма
 # соблюдена. server — серверное слияние: первая строка — git_rule_server_form,
 # форма и номер слияния клиента не судятся. Номер слияния сверяется с <веткой>,
-# только когда она — номер; пусто — нет.
+# только когда у неё есть номер (git_rule_branch_number); пусто — нет.
 # Единица счёта тела — строка после git stripspace, СЧИТАЯ пустые между
 # абзацами: так тело видит читатель `git log`.
 git_rule_form() {
-    local msg="$1" merge="$2" branch="$3" subj rest n len why lines
+    local msg="$1" merge="$2" branch="$3" subj rest n bn len why lines
     subj="${msg%%$'\n'*}"
     rest=""
     [ "$subj" = "$msg" ] || rest="${msg#*$'\n'}"
@@ -254,8 +328,8 @@ git_rule_form() {
     elif [ "$merge" != 0 ]; then
         git_rule_merge_form "$subj" ||
             printf '%s\n' "слияние — «#<N> merge #<M>: …» либо «#<N> merge main: …», а не «$subj»"
-        if git_rule_is_number "$branch" && [ "$n" != "$(git_rule_task "$branch")" ]; then
-            printf '%s\n' "слияние «#$n» на ветке «$branch»: слияние — акт ветки, и номер у него её"
+        if bn="$(git_rule_branch_number "$branch")" && [ "$n" != "$bn" ]; then
+            printf '%s\n' "слияние «#$n» на ветке «$branch»: слияние — акт ветки, и номер у него её (#$bn)"
         fi
     fi
     len="$(git_rule_chars "$subj")"
@@ -278,17 +352,17 @@ git_rule_form() {
 # git_rule_howto <класс> <ветка> [<строка атрибуции>] — «как правильно» для
 # класса нарушения, строкой; отказ печатает строки только своих классов, чтобы
 # памятка не заслоняла причину. Классы: form (первая строка и тело), merge
-# (форма слияния; номер — <ветки>, когда она номер), attribution, ident
+# (форма слияния; номер — <ветки>, когда у неё есть номер), attribution, ident
 # (подпись), branch, editor, date (дата автора до T0).
 git_rule_howto() {
-    local class="$1" branch="$2" attr="${3:-}" b="<N>"
-    git_rule_is_number "$branch" && b="$(git_rule_task "$branch")"
+    local class="$1" branch="$2" attr="${3:-}" b="<N>" bn
+    bn="$(git_rule_branch_number "$branch")" && b="$bn"
     case "$class" in
         form) printf '%s\n' "сообщение: git commit -m \"#<N> <одно утверждение>\" -m \"<тело>\" — первая строка начинается с «#<N> » (<N> — номер задачи этого репозитория), не длиннее $GIT_RULE_SUBJECT_MAX символов, без «;» и без точки в конце; тело — после пустой строки, не длиннее $GIT_RULE_BODY_MAX строк" ;;
         merge) printf '%s\n' "слияние: git merge --no-ff <ветка> -m \"#$b merge #<M>: <что влито>\" либо -m \"#$b merge main: <что влито>\" — номер слияния — номер этой ветки; первая строка не длиннее $GIT_RULE_SUBJECT_MAX символов, тело — не длиннее $GIT_RULE_BODY_MAX строк" ;;
         attribution) printf '%s\n' "атрибуция: удалите строку «$attr» — трейлеры Co-Authored-By с любым значением, Claude-Session:, «Generated with Claude Code» и ссылки claude.ai/code в сообщение не пишутся" ;;
         ident) printf '%s\n' "подпись: коммит без --author, -c user.*/author.*/committer.*, GIT_COMMITTER_* и GIT_CONFIG_GLOBAL; настройку подписи уровня local/worktree снимите (git config --local --unset <ключ>); подпись задаётся один раз — git config --global user.name / user.email" ;;
-        branch) printf '%s\n' "ветка: git branch -m <N> — ветка называется номером задачи этого репозитория (^[0-9]+\$ либо ^[0-9]+-<суть>\$), исключение одно — main" ;;
+        branch) printf '%s\n' "ветка: git branch -m <N>-<суть> — номер задачи этого репозитория, дефис и суть латиницей в kebab-case (до $GIT_RULE_BRANCH_SUFFIX_MAX символов), например 79-branch-name-suffix; исключения — main и голый номер из переходного перечня scripts/hooks/git-rule-bare-branches.txt" ;;
         editor) printf '%s\n' "сообщение — через -m или -F, без редактора: git commit -m \"#<N> …\" — строку «#…» git вырезает как комментарий" ;;
         date) printf '%s\n' "дата автора — текущая: коммит без --date и GIT_AUTHOR_DATE в прошлом; у --amend и -C вершины с датой до T0 — с --reset-author" ;;
     esac
@@ -342,8 +416,9 @@ git_rule_ident_overrides() {
 }
 
 # git_rule_before_rule <ревизия> — ветка открыта до правила: среди её
-# СОБСТВЕННЫХ коммитов (не достижимых ни с `main`, ни с веток-номеров —
-# локальных и удалённых) есть коммит до правила (git_rule_pre_rule).
+# СОБСТВЕННЫХ коммитов (не достижимых ни с `main`, ни с веток с номером —
+# `<N>-<суть>` и голых, локальных и удалённых) есть коммит до правила
+# (git_rule_pre_rule).
 git_rule_before_rule() {
     local ref short excl=()
     while IFS= read -r ref; do
@@ -353,7 +428,7 @@ git_rule_before_rule() {
             refs/remotes/*) short="${ref#refs/remotes/}"; short="${short#*/}" ;;
             *) continue ;;
         esac
-        if [ "$short" = main ] || git_rule_is_number "$short"; then excl+=("^$ref"); fi
+        if [ "$short" = main ] || git_rule_branch_number "$short" >/dev/null; then excl+=("^$ref"); fi
     done < <(git for-each-ref --format='%(refname)' refs/heads refs/remotes)
     git_rule_range_pre_rule "$1" "${excl[@]}"
 }

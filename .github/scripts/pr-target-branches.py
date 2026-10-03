@@ -1,21 +1,26 @@
 #!/usr/bin/env python3
 # Copyright (c) PRO-Robotech
 # SPDX-License-Identifier: Apache-2.0
-"""pr-target-branches — процесс конвейера гонится на запрос в `main` И в ветку-номер.
+"""pr-target-branches — конвейер гонится на запрос в `main`, в ветку задачи И в ветку-номер.
 
-ПРЕДМЕТ. Правило ветвления (решение владельца 2026-09-22): задача вливается в
-ветку волны, волна — в ветку эпика, эпик — в `main`; ветки волны и эпика
-называются номером задачи. Процесс, чей `pull_request` сужен до `[main]`, на
-запросе в ветку-номер не начинается ВОВСЕ: у запроса ноль контекстов, и о
-волне нет вердикта до запроса эпика. Так и было (#31): запрос волны #46
-(`27` → `26`) влит с нулём проверок.
+ПРЕДМЕТ. Правило ветвления (решения владельца 2026-09-22 и 2026-09-26, каскад
+«таск → волна → эпик → main»): задача вливается в ветку волны, волна — в ветку
+эпика, эпик — в `main`. Процесс, чей `pull_request` сужен до `[main]`, на
+запросе в ветку волны или эпика не начинается ВОВСЕ: у запроса ноль
+контекстов, и о волне нет вердикта до запроса эпика. Так и было (#31): запрос
+волны #46 (`27` → `26`) влит с нулём проверок.
+
+ИМЯ ВЕТКИ — `<N>-<суть>` (решение владельца 2026-09-30, #79; предикат
+`git_rule_branch_why` в scripts/hooks/git-rule.sh); голый номер законен только
+из переходного перечня scripts/hooks/git-rule-bare-branches.txt. Фильтр
+`[main, '[0-9]+']` запрос в `<N>-<суть>` не пускает, а гейт до #79 этого не
+видел: образцов такой формы у него не было, и он зеленел.
 
 СВОЙСТВО — по каждому отслеживаемому процессу с событием запроса:
   1. запрос в `main` его запускает;
-  2. запрос в ветку-номер его запускает (образцы NUMBER_BRANCHES), и в ветку
-     второй формы `<N>-<суть>` — тоже (образцы SUFFIX_BRANCHES; решение Д59
-     эпика PRO-Robotech/kacho#2914: ветка эпика notify названа `77-notify`);
-  3. запрос в ветку НЕ-номер его НЕ запускает (образцы NON_NUMBER_BRANCHES):
+  2. запрос в ветку-номер и в ветку задачи `<N>-<суть>` его запускает
+     (образцы NUMBER_BRANCHES и TASK_BRANCHES);
+  3. запрос в прочую ветку его НЕ запускает (образцы NON_NUMBER_BRANCHES):
      сужение шапки ci.yml намеренное, и держится оно этим пунктом;
   4. событие не сужено по путям: защита ствола требует контексты поимённо, а
      не начавшийся контекст остаётся «ожидается» и блокирует слияние навсегда;
@@ -114,17 +119,16 @@ EVENTS = ("pull_request", "pull_request_target")
 TRUNK = "main"
 # Образцы — ФОРМЫ имени, а не живые ветки: одна, две и четыре цифры.
 NUMBER_BRANCHES = ("7", "26", "2564")
-# Вторая форма (Д36/Д59): номер, дефис, суть — ветка эпика и ветка полосы от
-# него. Фильтр `'[0-9]+-*'` берёт обе: запрос в ветку полосы правилом не
-# заводится, и захват её формы расхода не даёт.
-SUFFIX_BRANCHES = ("77-notify", "2914-ci-branch-name-suffix")
+# Ветка задачи `<N>-<суть>` (#79): суть в одну букву, в несколько слов через
+# дефис и с цифрами внутри — формы предиката git_rule_branch_why.
+TASK_BRANCHES = ("7-x", "79-branch-name", "2564-a1b2")
 # Близнецы: у каждого своя причина быть здесь. `26a` ловит `[0-9]*` (звезда —
 # любые символы, а не повтор цифры); `release/26` ловит `**`; `issue-31` —
-# снятая форма имени ветки задачи; `77_notify` — близнец второй формы с
-# подчёркиванием вместо дефиса; прочие — имена веток, живших в этом
-# репозитории до правила.
+# снятая форма имени ветки задачи; `26-` — дефис без сути, его ловит `[0-9]+-*`;
+# `26-x/y` — суть через `/`, её ловит `[0-9]+-**`; прочие — имена веток, живших
+# в этом репозитории до правила.
 NON_NUMBER_BRANCHES = ("lane/oauth2-engine-intake", "batch-quota-fate",
-                       "26a", "release/26", "issue-31", "77_notify")
+                       "26a", "release/26", "issue-31", "26-", "26-x/y")
 CLASS_BODY = re.compile(r"(?:[A-Za-z0-9](?:-[A-Za-z0-9])?)+")
 # Ключи события запроса — все, какие хостинг знает. Прочий ключ хостинг
 # отвергает вместе с процессом, а гейт, молча его пропустивший, зеленел бы.
@@ -673,7 +677,7 @@ def audit(files, out):
                     " (умолчание)" if defaulted else ""))
                 if kind == "refused":
                     continue
-                for base in (TRUNK,) + NUMBER_BRANCHES + SUFFIX_BRANCHES:
+                for base in (TRUNK,) + NUMBER_BRANCHES + TASK_BRANCHES:
                     if not fires(kind, compiled, base):
                         findings.append("%s: on.%s — запрос в «%s» процесс НЕ запускает"
                                         % (rel, event, base))
@@ -700,8 +704,8 @@ def audit(files, out):
              census["conditions_bad"], census["unjudged"]), file=out)
     print("цепочка needs       : заданий с needs %d, на зелёном пути гаснут вслед за "
           "вышестоящим %d" % (census["with_needs"], census["chain_skipped"]), file=out)
-    print("образцы             : %s · номер %s · номер с сутью %s · не-номер %s"
-          % (TRUNK, ", ".join(NUMBER_BRANCHES), ", ".join(SUFFIX_BRANCHES),
+    print("образцы             : %s · номер %s · задачи %s · не-номер %s"
+          % (TRUNK, ", ".join(NUMBER_BRANCHES), ", ".join(TASK_BRANCHES),
              ", ".join(NON_NUMBER_BRANCHES)), file=out)
     if findings:
         print("", file=out)
@@ -709,9 +713,9 @@ def audit(files, out):
             print("  НАРУШЕНИЕ %s" % f, file=out)
         print("КРАСНЫЙ: нарушений %d." % len(findings), file=out)
         return 1
-    print("ЗЕЛЁНЫЙ: запрос в main и в ветку-номер гонит конвейер на открытии, движении и "
-          "переоткрытии, и ни условия заданий, ни цепочка needs его не гасят; в ветку "
-          "не-номер — нет.", file=out)
+    print("ЗЕЛЁНЫЙ: запрос в main, в ветку задачи и в ветку-номер гонит конвейер на "
+          "открытии, движении и переоткрытии, и ни условия заданий, ни цепочка needs "
+          "его не гасят; в прочие ветки — нет.", file=out)
     return 0
 
 
@@ -752,12 +756,14 @@ def main(argv):
 # Живёт флагом этого же файла: отдельный файл в перечень шагов конвейера не
 # попал бы сам. Каждый мир меняет РОВНО ОДИН факт против положительного
 # близнеца — иначе неизвестно, что дало красное.
+# Фильтр положительного близнеца — тот же, что в ci.yml этого дерева.
+FILTER = "[main, '[0-9]+', '[0-9]+-[a-z0-9]*']"
 GOOD = """name: ci
 on:
   push:
     branches: [main]
   pull_request:
-    branches: [main, '[0-9]+', '[0-9]+-*']
+    branches: %s
   schedule:
     - cron: '23 4 * * *'
 jobs:
@@ -767,7 +773,7 @@ jobs:
       - run: go build ./...
       - if: always()
         run: echo done
-"""
+""" % FILTER
 F = ".github/workflows/ci.yml"
 
 
@@ -812,11 +818,11 @@ def self_test():
     check("[0-9]+ ↔ 7, 26, 2564; не 26a, не пусто",
           all(matches("[0-9]+", b) for b in NUMBER_BRANCHES)
           and not matches("[0-9]+", "26a") and not matches("[0-9]+", ""))
-    check("[0-9]+-* ↔ 77-notify, 2914-ci-branch-name-suffix; не 77_notify, не 26a, не issue-31",
-          all(matches("[0-9]+-*", b) for b in SUFFIX_BRANCHES)
-          and not any(matches("[0-9]+-*", b) for b in ("77_notify", "26a", "issue-31")))
     check("[0-9]* ↔ 26a: звезда — любые символы, а не повтор цифры",
           matches("[0-9]*", "26a"))
+    check("[0-9]+-[a-z0-9]* ↔ 7-x, 79-branch-name, 2564-a1b2; не 26-, не 26-x/y, не 26",
+          all(matches("[0-9]+-[a-z0-9]*", b) for b in TASK_BRANCHES)
+          and not any(matches("[0-9]+-[a-z0-9]*", b) for b in ("26-", "26-x/y", "26")))
     check("«!» решает последним совпавшим: [main, '[0-9]+', '!26'] не пускает 26",
           not fires("branches", [compile_pattern(p) for p in ("main", "[0-9]+", "!26")], "26"))
     for bad in ("+1", "[0-9", "[z-a]", "[.]", "**+", "\\"):
@@ -828,40 +834,56 @@ def self_test():
 
     # (−) положительный близнец. Без него всё ниже зеленело бы на гейте,
     # который краснеет всегда.
-    run(0, "(−) [main, '[0-9]+', '[0-9]+-*'] — зелёный", {F: GOOD}, must=("ЗЕЛЁНЫЙ", "процессов в индексе : 1"))
+    run(0, "(−) %s — зелёный" % FILTER, {F: GOOD}, must=("ЗЕЛЁНЫЙ", "процессов в индексе : 1"))
     # (+) НАСТОЯЩИЙ прежний дефект: фильтр `[main]` (ci.yml до #31).
-    run(1, "(+) [main] — номер не гонит", {F: GOOD.replace("[main, '[0-9]+', '[0-9]+-*']", "[main]")},
+    run(1, "(+) [main] — номер не гонит", {F: GOOD.replace(FILTER, "[main]")},
         must=(F, "«26» процесс НЕ запускает"))
-    # (+) Д59: фильтр без второй формы — запрос волны в ветку эпика `77-notify`
-    # приходит без контекстов (ровно дефект #31 для формы `<N>-<суть>`).
-    run(1, "(+) [main, '[0-9]+'] — вторая форма не гонит",
-        {F: GOOD.replace(", '[0-9]+-*'", "")}, must=(F, "«77-notify» процесс НЕ запускает"),
-        must_not=("«26» процесс НЕ запускает",))
+    # (+) НАСТОЯЩИЙ прежний дефект: фильтр `[main, '[0-9]+']` (ci.yml ветки 26
+    # до слияния #79) — ветку задачи `<N>-<суть>` не гонит, а прежний гейт на
+    # нём зеленел: образцов этой формы у него не было.
+    run(1, "(+) [main, '[0-9]+'] — ветку задачи не гонит",
+        {F: GOOD.replace(FILTER, "[main, '[0-9]+']")},
+        must=("«7-x» процесс НЕ запускает", "«79-branch-name» процесс НЕ запускает",
+              "«2564-a1b2» процесс НЕ запускает", "КРАСНЫЙ: нарушений 3."))
+    run(1, "(+) без голого номера — ветку переходного перечня не гонит",
+        {F: GOOD.replace(FILTER, "[main, '[0-9]+-[a-z0-9]*']")},
+        must=("«26» процесс НЕ запускает", "КРАСНЫЙ: нарушений 3."))
+    run(1, "(+) '[0-9]+-*' — гонит дефис без сути",
+        {F: GOOD.replace("'[0-9]+-[a-z0-9]*'", "'[0-9]+-*'")},
+        must=("не-номер «26-»", "КРАСНЫЙ: нарушений 1."))
+    run(1, "(+) '[0-9]+-**' — гонит суть через /",
+        {F: GOOD.replace("'[0-9]+-[a-z0-9]*'", "'[0-9]+-**'")},
+        must=("не-номер «26-x/y»",))
+    run(0, "(−) близнец: суть двумя шаблонами '[0-9]+-[a-z]*', '[0-9]+-[0-9]*'",
+        {F: GOOD.replace("'[0-9]+-[a-z0-9]*'", "'[0-9]+-[a-z]*', '[0-9]+-[0-9]*'")},
+        must=("ЗЕЛЁНЫЙ",))
     run(1, "(+) без main — ствол не гонит",
-        {F: GOOD.replace("[main, '[0-9]+', '[0-9]+-*']", "['[0-9]+', '[0-9]+-*']")}, must=("«main» процесс НЕ запускает",))
+        {F: GOOD.replace(FILTER, "['[0-9]+', '[0-9]+-[a-z0-9]*']")},
+        must=("«main» процесс НЕ запускает",))
     run(1, "(+) [main, '[0-9]*'] — гонит 26a",
         {F: GOOD.replace("'[0-9]+'", "'[0-9]*'")}, must=("не-номер «26a»",))
     run(1, "(+) фильтр снят — гонит любую ветку",
-        {F: GOOD.replace("  pull_request:\n    branches: [main, '[0-9]+', '[0-9]+-*']\n", "  pull_request:\n")},
+        {F: GOOD.replace("  pull_request:\n    branches: %s\n" % FILTER, "  pull_request:\n")},
         must=("не-номер «lane/oauth2-engine-intake»",))
     run(1, "(+) `on` списком — тот же несуженный запрос",
         {F: re.sub(r"(?s)^on:.*?(?=^jobs:)", "on: [push, pull_request]\n", GOOD, flags=re.M)},
         must=("сужение снято",))
     run(1, "(+) сужение по путям",
-        {F: GOOD.replace("[main, '[0-9]+', '[0-9]+-*']\n", "[main, '[0-9]+', '[0-9]+-*']\n    paths: ['**.go']\n")},
+        {F: GOOD.replace(FILTER + "\n", FILTER + "\n    paths: ['**.go']\n")},
         must=("on.pull_request.paths",))
     run(1, "(+) branches и branches-ignore вместе",
-        {F: GOOD.replace("[main, '[0-9]+', '[0-9]+-*']\n", "[main, '[0-9]+', '[0-9]+-*']\n    branches-ignore: [x]\n")},
+        {F: GOOD.replace(FILTER + "\n", FILTER + "\n    branches-ignore: [x]\n")},
         must=("и branches, и branches-ignore",))
     run(1, "(+) ни одного события запроса",
-        {F: GOOD.replace("  pull_request:\n    branches: [main, '[0-9]+', '[0-9]+-*']\n", "")},
+        {F: GOOD.replace("  pull_request:\n    branches: %s\n" % FILTER, "")},
         must=("ни один процесс не гонится на запрос",))
     # (−) законные близнецы другой формы записи того же свойства.
     run(0, "(−) `\"on\"` в кавычках — та же запись",
         {F: GOOD.replace("\non:\n", '\n"on":\n')})
-    run(0, "(−) branches-ignore, пускающий main и номер",
-        {F: GOOD.replace("branches: [main, '[0-9]+', '[0-9]+-*']",
-                         "branches-ignore: ['**/**', '[a-z]*-*', '[0-9]+[a-z]*', '*_*']")})
+    run(0, "(−) branches-ignore, пускающий main, номер и ветку задачи",
+        {F: GOOD.replace("branches: %s" % FILTER,
+                         "branches-ignore: ['**/**', '[a-z]*-*', '[0-9]+[a-z]*', '[0-9]+-']")},
+        must=("ЗЕЛЁНЫЙ",))
     run(0, "(−) процесс без события запроса рядом с гонимым — не нарушение",
         {F: GOOD, ".github/workflows/nightly.yml": "on:\n  schedule:\n    - cron: '1 1 * * *'\njobs: {}\n"},
         must=("без события запроса 1",))
@@ -870,8 +892,8 @@ def self_test():
     # Прежде ключ не судился вовсе: `types: [closed]` давал ЗЕЛЁНЫЙ, хотя запрос
     # на открытии и движении процесс уже не запускал (приёмка #31, B1).
     def pr_types(value, text=GOOD):
-        return text.replace("    branches: [main, '[0-9]+', '[0-9]+-*']\n",
-                            "    branches: [main, '[0-9]+', '[0-9]+-*']\n    types: %s\n" % value)
+        return text.replace("    branches: %s\n" % FILTER,
+                            "    branches: %s\n    types: %s\n" % (FILTER, value))
     run(1, "(+) types: [closed] — открытие, движение, переоткрытие не гонят",
         {F: pr_types("[closed]")},
         must=("on.pull_request.types [closed] — запрос на «opened» процесс НЕ запускает",
@@ -890,7 +912,7 @@ def self_test():
         must=("'synchronise' — типа действия запроса хостинг не знает",))
     run(2, "(+) types: [] — не состоялось", {F: pr_types("[]")}, must=("непустой список",))
     run(2, "(+) незнакомый ключ события — не состоялось",
-        {F: GOOD.replace("[main, '[0-9]+', '[0-9]+-*']\n", "[main, '[0-9]+', '[0-9]+-*']\n    branch: [x]\n")},
+        {F: GOOD.replace(FILTER + "\n", FILTER + "\n    branch: [x]\n")},
         must=("ключ 'branch' разбору не известен",))
     target = GOOD.replace("  pull_request:\n", "  pull_request_target:\n")
     run(0, "(−) pull_request_target той же записью", {F: target},
@@ -1069,8 +1091,8 @@ def self_test():
         {F: GOOD.replace("  schedule:\n", "  pull_request:\n    branches: [main]\n  schedule:\n")},
         must=("on: ключ «pull_request» повторён",))
     run(2, "(+) повтор в потоковом отображении: {branches: [main], branches: […]}",
-        {F: GOOD.replace("  pull_request:\n    branches: [main, '[0-9]+', '[0-9]+-*']\n",
-                         "  pull_request: {branches: [main], branches: [main, '[0-9]+', '[0-9]+-*']}\n")},
+        {F: GOOD.replace("  pull_request:\n    branches: %s\n" % FILTER,
+                         "  pull_request: {branches: [main], branches: %s}\n" % FILTER)},
         must=("on.pull_request: ключ «branches» повторён",))
     run(2, "(+) повтор ключа шага",
         {F: GOOD.replace("      - if: always()\n", "      - if: always()\n        if: false\n")},
@@ -1104,6 +1126,14 @@ def self_test():
             must=("ЗЕЛЁНЫЙ",))
         run(2, "(+) настоящий ci.yml: X9 — needs повторён у задания %s" % heads[1], {F: twice},
             must=("jobs.%s: ключ «needs» повторён" % heads[1],))
+    # Тот же настоящий вход: фильтр его pull_request возвращён к `[main, '[0-9]+']`
+    # (ci.yml ветки 26 до слияния #79). Строки фильтра нет — провал, а не пропуск.
+    pre79, swapped = re.subn(r"(?m)(^  pull_request:\n(?:    [^\n]*\n)*?    branches: )[^\n]*",
+                             lambda m: m.group(1) + "[main, '[0-9]+']", real, count=1)
+    check("инъекция фильтра до #79 в настоящий ci.yml состоялась", swapped == 1 and pre79 != real)
+    if swapped == 1 and pre79 != real:
+        run(1, "(+) настоящий ci.yml с фильтром до #79 — ветку задачи не гонит", {F: pre79},
+            must=("«79-branch-name» процесс НЕ запускает",))
 
     # (+) исход 2: проверка не состоялась, и это не зелёное.
     run(2, "(+) пустой обход — не состоялось", {}, must=("обход пуст",))

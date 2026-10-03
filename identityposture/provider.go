@@ -98,14 +98,14 @@ const (
 	// называют, проверка старта Validate её отвергает. Число прежнее — значение
 	// константы в v1 не меняется.
 	//
-	// Deprecated: the external identity posture is withdrawn. Parse refuses it
-	// and Values and Names do not list it, but the type is an integer, so a
-	// conversion or a decoder that writes a number into the field still yields
-	// it past Parse. Refuse it at the start check with Validate, which rejects it
-	// together with every other value outside the dictionary, and remove a
-	// branch that reads External only once Validate stands in front of it. The
-	// name is kept for consumers that raise their pin within v1 and is removed
-	// only with a major release of the module.
+	// Deprecated: посадка с внешним поставщиком удостоверений снята. Parse её
+	// отвергает, Values и Names её не перечисляют, но тип — целое, поэтому
+	// преобразование типа или декодер, пишущий число прямо в поле, по-прежнему
+	// производят её мимо Parse. Отвергайте её на проверке старта через Validate,
+	// который отказывает ей наравне с любым другим значением вне словаря, а
+	// ветку, читающую External, снимайте только после того, как перед ней встал
+	// Validate. Имя сохранено для потребителей, поднимающих пин в пределах v1, и
+	// снимается только мажорным выпуском модуля.
 	External
 	// Own — личность проверяем мы сами; адреса поставщика не
 	// требуются, вместо них обязательна своя чеканка и свой вход человека.
