@@ -535,12 +535,12 @@ h0="$(git -C "$B" rev-parse HEAD)"
 
 # Провязка клона — предпосылка вердикта о следующей отправке: клон без
 # переходника либо с переходником v1 выпустит дерево без хука молча.
-runin "$(line 21 "$h0")" hk
+runin "$(line 21-probe "$h0")" hk
 expect "клон не провязан — отказ до проверок" 1 "ОТКАЗ — провязка клона" "не провязаны: pre-push"
 (cd "$B" && bash scripts/hooks/install.sh install) >/dev/null 2>&1 || bad "install в фикстуре хука"
 
 : > "$PROBE_LINT_LOG"
-runin "$(line 21 "$h0")" hk
+runin "$(line 21-probe "$h0")" hk
 expect "близнец: провязанный клон, чистая копия на отправляемой ревизии — 0" 0 \
     "судится ревизия $h0" "исполнено 5 из 5, красных 0"
 # Охват близнеца — числами дерева фикстуры, а не «зелёным»: проверка, суженная
@@ -567,7 +567,7 @@ defect() {
     shift 3
     printf '%s' "$body" > "$B/$file"
     git -C "$B" add -- "$file" && git -C "$B" commit -qm "#21 дефект охвата" || { bad "фикстура дефекта «$name» не собрана"; return; }
-    runin "$(line 21 "$(git -C "$B" rev-parse HEAD)")" hk
+    runin "$(line 21-probe "$(git -C "$B" rev-parse HEAD)")" hk
     expect "$name" 1 "$@"
     git -C "$B" reset -q --hard "$h0"
 }
@@ -604,22 +604,22 @@ defect "go test: красная проба во вложенном пакете 
 defect "линтер: находка во вложенном пакете — отказ с именем проверки" inner/deep/deep.go \
     "$deep_go"$'\n// probe:lint-finding\n' \
     "КРАСНОЕ: golangci-lint" "inner/deep/deep.go"
-runin "$(line 21 "$h0")" with PROBE_LINT_RC=3 hk
+runin "$(line 21-probe "$h0")" with PROBE_LINT_RC=3 hk
 expect "код 3 линтера — красное, а не «без условия»" 1 "красные — golangci-lint"
-runin "$(line 21 "$h0")" with PROBE_LINT_VERSION=0.0.1 hk
+runin "$(line 21-probe "$h0")" with PROBE_LINT_VERSION=0.0.1 hk
 expect "версия линтера не равна пину — без условия, названо, в «исполнено» не входит" 0 \
     "без условия 1" "исполнено 4 из 5"
-runin "$(line 21 "$h0")" env PATH="$bare" "$bare/bash" -c "cd '$B' && bash scripts/hooks/pre-push"
+runin "$(line 21-probe "$h0")" env PATH="$bare" "$bare/bash" -c "cd '$B' && bash scripts/hooks/pre-push"
 expect "не исполнено ни одной проверки — отказ, а не зелёное" 2 "исполнено НОЛЬ проверок из 5"
 # Инструмент самого хука (не проверки) снят — отказ называет его, а не выводит
 # из пустого вывода ложную причину («правки в копии» при чистой копии).
-runin "$(line 21 "$h0")" env PATH="$nogrep" "$nogrep/bash" -c "cd '$B' && bash scripts/hooks/pre-push"
+runin "$(line 21-probe "$h0")" env PATH="$nogrep" "$nogrep/bash" -c "cd '$B' && bash scripts/hooks/pre-push"
 expect "нет grep — отказ до проверок, назван инструмент хука" 2 "нет grep в PATH" "исполнено проверок: 0"
 fact "нет grep — ложной причины «правки в копии» нет" not grep -qF "неотслеживаемых файлов" <<<"$out"
-runin "$(line 21 "$h0")" env PATH="$nopy" "$nopy/bash" -c "cd '$B' && bash scripts/hooks/pre-push"
+runin "$(line 21-probe "$h0")" env PATH="$nopy" "$nopy/bash" -c "cd '$B' && bash scripts/hooks/pre-push"
 expect "нет python3 — go test без условия, назван, в «исполнено» не входит" 0 \
     "без условия 1" "python3 не найден" "исполнено 4 из 5"
-runin "$(line 21 "$h0")" with CORELIB_SKIP_PREPUSH=1 hk
+runin "$(line 21-probe "$h0")" with CORELIB_SKIP_PREPUSH=1 hk
 expect "обход объявлен и печатает непроверенное" 0 "НЕ выполнялись" "здесь НЕ гонялось"
 runin "" hk
 expect "пустой вход: судится рабочая копия, и это сказано" 0 "входа отправки нет"
@@ -631,7 +631,7 @@ expect "одни снятия ссылок — проверять нечего, 
 # с `#` и не трогаются); не изменила ничего — сама инъекция не состоялась.
 sed -E '/^[[:space:]]*go test /s/ -short( |$)/ /' "$HOOK" > "$work/pre-push.noshort"
 fact "инъекция «без -short» изменила копию хука" not_same "$HOOK" "$work/pre-push.noshort"
-runin "$(line 21 "$h0")" hk_as "$work/pre-push.noshort"
+runin "$(line 21-probe "$h0")" hk_as "$work/pre-push.noshort"
 expect "дефект: хук гонит пробы без -short — длинная проба исполнилась, отказ с её именем" 1 \
     "красные — go test -short" "TestLongIsSkippedUnderShort"
 
@@ -645,8 +645,8 @@ expect "дефект: хук гонит пробы без -short — длинн�
 runs_twice() {
     : > "$work/runs.log"
     rcs=""
-    runin "$(line 21 "$h0")" with PROBE_RUN_LOG="$work/runs.log" "$@"; rcs="$rcs $rc"
-    runin "$(line 21 "$h0")" with PROBE_RUN_LOG="$work/runs.log" "$@"; rcs="$rcs $rc"
+    runin "$(line 21-probe "$h0")" with PROBE_RUN_LOG="$work/runs.log" "$@"; rcs="$rcs $rc"
+    runin "$(line 21-probe "$h0")" with PROBE_RUN_LOG="$work/runs.log" "$@"; rcs="$rcs $rc"
     nruns="$(grep -c . "$work/runs.log")"
 }
 runs_twice hk
@@ -660,7 +660,7 @@ if [ "$nruns" -lt 2 ]; then ok "контроль: хук без -count=1 — Tes
 else bad "контроль: хук без -count=1, а TestInner исполнена $nruns раз из 2 — журнал не отличает кешированный прогон от свежего"; fi
 
 git -C "$B" rm -q .github/scripts/go-test-verdict.py && git -C "$B" commit -qm "#21 без прогонщика вердикта"
-runin "$(line 21 "$(git -C "$B" rev-parse HEAD)")" hk
+runin "$(line 21-probe "$(git -C "$B" rev-parse HEAD)")" hk
 expect "прогонщика вердикта нет в дереве — красное, а не «без условия»" 1 \
     "красные — go test -short" "прогонщика вердикта нет"
 git -C "$B" reset -q --hard "$h0"
@@ -668,18 +668,18 @@ git -C "$B" reset -q --hard "$h0"
 printf 'package probe\n\nconst second = 1\n' > "$B/doc.go"
 git -C "$B" add doc.go && git -C "$B" commit -qm "#21 второй коммит"
 h2="$(git -C "$B" rev-parse HEAD)"
-runin "$(line 21 "$h0")" hk
+runin "$(line 21-probe "$h0")" hk
 expect "уезжает не HEAD — отказ: вердикт был бы о другом дереве" 1 "проверки судили бы другое дерево"
-runin "$(line 21 "$h2")"$'\n'"$(line 22 "$h0")" hk
+runin "$(line 21-probe "$h2")"$'\n'"$(line 22-probe "$h0")" hk
 expect "две разные вершины в одной отправке — отказ" 1 "2 разных вершин"
-runin "$(line 21 "$h2")"$'\n'"$(line 22 "$h2")" hk
+runin "$(line 21-probe "$h2")"$'\n'"$(line 22-probe "$h2")" hk
 expect "близнец: две ссылки на одну вершину — 0" 0 "исполнено 5 из 5"
 echo x > "$B/stray.txt"
-runin "$(line 21 "$h2")" hk
+runin "$(line 21-probe "$h2")" hk
 expect "неотслеживаемый файл в копии — отказ" 1 "неотслеживаемых файлов: 1"
 rm -f "$B/stray.txt"
 echo '// правка' >> "$B/doc.go"
-runin "$(line 21 "$h2")" hk
+runin "$(line 21-probe "$h2")" hk
 expect "неснятая правка отслеживаемого — отказ" 1 "неотслеживаемых файлов: 1"
 git -C "$B" checkout -q -- doc.go
 
@@ -695,40 +695,40 @@ git -C "$B" checkout -q main
 
 # Правило git — до проверок дерева и до обхода: коммит без «#<N> » в отправке.
 git -C "$B" commit -q --allow-empty -m "без номера задачи"
-runin "$(line 21 "$(git -C "$B" rev-parse HEAD)")" hk
+runin "$(line 21-probe "$(git -C "$B" rev-parse HEAD)")" hk
 expect "правило git: коммит без «#<N> » — отказ до проверок дерева" 1 \
     "не начинается с «#<N> »" "правило git нарушено" "исполнено проверок: 0"
-runin "$(line 21 "$(git -C "$B" rev-parse HEAD)")" with CORELIB_SKIP_PREPUSH=1 hk
+runin "$(line 21-probe "$(git -C "$B" rev-parse HEAD)")" with CORELIB_SKIP_PREPUSH=1 hk
 expect "правило git: обход CORELIB_SKIP_PREPUSH=1 правила не снимает" 1 "правило git нарушено"
 fact "правило git: под обходом строки «пропущен» нет — обход не состоялся" \
     not grep -qF "пропущен по CORELIB_SKIP_PREPUSH" <<<"$out"
 mv "$B/scripts/hooks/git-rule-push.sh" "$work/grp.aside"
-runin "$(line 21 "$(git -C "$B" rev-parse HEAD)")" hk
+runin "$(line 21-probe "$(git -C "$B" rev-parse HEAD)")" hk
 expect "стража правила git нет рядом с хуком — отказ, а не молчаливый пропуск" 1 "git-rule-push.sh: правило git судить нечем"
 mv "$work/grp.aside" "$B/scripts/hooks/git-rule-push.sh"
 git -C "$B" reset -q --hard "$h2"
 
 # Сквозь git push: переходник → хук → код отправки.
-runc env PATH="$shim:$PATH" git -C "$B" push -q origin HEAD:refs/heads/21
+runc env PATH="$shim:$PATH" git -C "$B" push -q origin HEAD:refs/heads/21-probe
 expect "сквозь git push: зелёное — отправка идёт" 0 "исполнено 5 из 5"
-fact "сквозь git push: зелёная ссылка доехала" has_ref "$B" 21
+fact "сквозь git push: зелёная ссылка доехала" has_ref "$B" 21-probe
 git -C "$B" checkout -q wip/probe
-runc env PATH="$shim:$PATH" git -C "$B" push -q origin HEAD:refs/heads/22
+runc env PATH="$shim:$PATH" git -C "$B" push -q origin HEAD:refs/heads/22-probe
 expect "сквозь git push: красное — отправка остановлена" nz "красные — сборка"
-fact "сквозь git push: красная ссылка НЕ доехала" no_ref "$B" 22
+fact "сквозь git push: красная ссылка НЕ доехала" no_ref "$B" 22-probe
 git -C "$B" checkout -q main
 
 # Переходник v1 в клоне зовёт хук, раз адресат есть, — и хук отказывает: иначе v1
 # пережил бы эту отправку и следующую, дерева без хука, выпустил бы молча.
 cp "$work/stub-v1" "$B/.git/hooks/pre-push"
-runc env PATH="$shim:$PATH" git -C "$B" push -q origin HEAD:refs/heads/23
+runc env PATH="$shim:$PATH" git -C "$B" push -q origin HEAD:refs/heads/23-probe
 expect "сквозь git push: клон с переходником v1 — отказ с причиной и командой" nz \
     "ОТКАЗ — провязка клона" "прежней редакции: pre-push(v1)" "make install-hooks"
-fact "сквозь git push: через переходник v1 ссылка НЕ доехала" no_ref "$B" 23
+fact "сквозь git push: через переходник v1 ссылка НЕ доехала" no_ref "$B" 23-probe
 (cd "$B" && bash scripts/hooks/install.sh install) >/dev/null 2>&1 || bad "повторный install в фикстуре хука"
-runc env PATH="$shim:$PATH" git -C "$B" push -q origin HEAD:refs/heads/24
+runc env PATH="$shim:$PATH" git -C "$B" push -q origin HEAD:refs/heads/24-probe
 expect "близнец: переходник перепровязан — отправка идёт" 0 "исполнено 5 из 5"
-fact "близнец: после перепровязки ссылка доехала" has_ref "$B" 24
+fact "близнец: после перепровязки ссылка доехала" has_ref "$B" 24-probe
 
 # Пустой обход проб — не зелёное: «отказов 0» при нуле исполненных проб значит
 # «спросить было не у кого». Два дефекта и близнец, каждый сквозь git push;
@@ -736,22 +736,22 @@ fact "близнец: после перепровязки ссылка доех�
 # push_tree <ссылка> — отправка текущей вершины сквозь переходник.
 push_tree() { runc env PATH="$shim:$PATH" git -C "$B" push -q origin "HEAD:refs/heads/$1"; }
 git -C "$B" rm -q probe_test.go inner/inner_test.go && git -C "$B" commit -qm "#31 проб в дереве нет"
-push_tree 31
+push_tree 31-probe
 expect "пустой обход: в дереве ни одной пробы — отказ, а не зелёное" nz \
     "проб исполнено    : 0" "КРАСНОЕ: go test -short"
-fact "пустой обход: ссылка НЕ доехала" no_ref "$B" 31
+fact "пустой обход: ссылка НЕ доехала" no_ref "$B" 31-probe
 printf 'package probe\n\nimport "testing"\n%s\n' "$probe_test_long" > "$B/probe_test.go"
 git -C "$B" add probe_test.go && git -C "$B" commit -qm "#32 все пробы пропущены"
-push_tree 32
+push_tree 32-probe
 expect "пустой обход: все пробы пропущены под -short — отказ, а не зелёное" nz \
     "проб исполнено    : 0" "ПРОПУЩЕНО         : 1" "КРАСНОЕ: go test -short"
-fact "пустой обход: при всех пропущенных ссылка НЕ доехала" no_ref "$B" 32
+fact "пустой обход: при всех пропущенных ссылка НЕ доехала" no_ref "$B" 32-probe
 printf 'package probe\n\nimport "testing"\n%s\n%s\n' "$probe_test_one" "$probe_test_long" > "$B/probe_test.go"
 git -C "$B" commit -qam "#33 одна исполненная проба"
-push_tree 33
+push_tree 33-probe
 expect "близнец пустого обхода: одна исполненная проба — отправка идёт" 0 \
     "проб исполнено    : 1" "исполнено 5 из 5, красных 0"
-fact "близнец пустого обхода: ссылка доехала" has_ref "$B" 33
+fact "близнец пустого обхода: ссылка доехала" has_ref "$B" 33-probe
 git -C "$B" reset -q --hard "$h0"
 
 echo ""
