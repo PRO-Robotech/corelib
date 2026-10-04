@@ -40,7 +40,7 @@ func TestFingerprintIgnoresEverythingOutsideTheSet(t *testing.T) {
 
 	permuted := a01(t)
 	permuted["invite/notification.yaml"] = &fstest.MapFile{Data: []byte(`# та же форма другими словами
-subject: {ru: 'Приглашение в облако'}
+subject: {en: 'Invitation to the cloud', ru: 'Приглашение в облако'}
 attributes:
   token:        {presence: "required", type: "token"}   # переставлено
   inviter_name:
@@ -72,14 +72,17 @@ func TestFingerprintChangesWithEachFieldOfTheSet(t *testing.T) {
 		"имя атрибута": func(f fstest.MapFS) {
 			edit(t, f, "invite/notification.yaml", "inviter_name: {", "inviter: {")
 			edit(t, f, "invite/body.ru.yaml", "{{ inviter_name }}", "{{ inviter }}")
+			edit(t, f, "invite/body.en.yaml", "{{ inviter_name }}", "{{ inviter }}")
 		},
 		"вид атрибута": func(f fstest.MapFS) {
 			edit(t, f, "invite/notification.yaml", "inviter_name: {type: text", "inviter_name: {type: secret")
 			edit(t, f, "invite/body.ru.yaml", `  - p: "{{ inviter_name }} приглашает вас в облако."`, `  - code: "{{ inviter_name }}"`)
+			edit(t, f, "invite/body.en.yaml", `  - p: "{{ inviter_name }} invites you to the cloud."`, `  - code: "{{ inviter_name }}"`)
 		},
 		"обязательность": func(f fstest.MapFS) {
 			edit(t, f, "invite/notification.yaml", "inviter_name: {type: text, presence: required}", "inviter_name: {type: text, presence: optional}")
 			edit(t, f, "invite/body.ru.yaml", `приглашает вас в облако."`, "приглашает вас в облако.\"\n    when: inviter_name")
+			edit(t, f, "invite/body.en.yaml", `invites you to the cloud."`, "invites you to the cloud.\"\n    when: inviter_name")
 		},
 		"вхождение в тему": func(f fstest.MapFS) {
 			edit(t, f, "invite/notification.yaml", `ru: "Приглашение в облако"`, `ru: "Приглашение от {{ inviter_name }}"`)

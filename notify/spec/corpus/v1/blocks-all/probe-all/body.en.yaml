@@ -1,0 +1,10 @@
+blocks:
+  - heading: "Probe {{ subject_name }}"
+  - p: "{{ note }} — {{ issued_at }}"
+  - code: "{{ code }}"
+  - button: {text: "Open", path: target}
+  - button: {text: "Accept", token: token, path: "/iam/invitations/accept"}
+  - list: ["first", "{{ note }}"]
+  - kv: [{key: "When", value: "{{ issued_at }}"}, {key: "What", value: "probe"}]
+  - warning: "If this was not you, {{ subject_name }}, ignore this message."
+  - divider: {}

@@ -53,17 +53,27 @@ attributes:
   opt_path: {type: path, presence: optional}
 subject:
   ru: "Проба"
+  en: "Probe"
 `)},
 		"probe-site/body.ru.yaml": {Data: []byte("blocks:\n  - " + block + whenLine + "\n")},
+		// Локаль en — нейтральный блок без мест ссылок: предмет пробы — блок
+		// тела ru, и его находки не удваиваются второй локалью набора.
+		"probe-site/body.en.yaml": {Data: []byte("blocks:\n  - p: \"Probe\"\n")},
 	}
 }
 
-// onlyBlock — единственный блок единственного тела каталога пробы.
+// onlyBlock — единственный блок тела ru каталога пробы (тело en несёт
+// нейтральный блок).
 func onlyBlock(cat spec.Catalog) (spec.Block, bool) {
-	if len(cat.Templates) != 1 || len(cat.Templates[0].Bodies) != 1 || len(cat.Templates[0].Bodies[0].Blocks) != 1 {
+	if len(cat.Templates) != 1 {
 		return spec.Block{}, false
 	}
-	return cat.Templates[0].Bodies[0].Blocks[0], true
+	for _, b := range cat.Templates[0].Bodies {
+		if b.Locale == "ru" && len(b.Blocks) == 1 {
+			return b.Blocks[0], true
+		}
+	}
+	return spec.Block{}, false
 }
 
 // siteFindings — находки пробы по одному набору видов: вид без строки

@@ -14,9 +14,10 @@ import (
 )
 
 const (
-	notifPath = "svc/notifications/invite/notification.yaml"
-	bodyPath  = "svc/notifications/invite/body.ru.yaml"
-	revPath   = "svc/notifications/invite/revision.yaml"
+	notifPath  = "svc/notifications/invite/notification.yaml"
+	bodyPath   = "svc/notifications/invite/body.ru.yaml"
+	bodyENPath = "svc/notifications/invite/body.en.yaml"
+	revPath    = "svc/notifications/invite/revision.yaml"
 )
 
 func addAttr(tr *tree, name string) {
@@ -178,6 +179,7 @@ func TestNTF1D07_BaseWithoutTemplates(t *testing.T) {
 	base := tr.commit("без шаблонов")
 	tr.write(notifPath, inviteNotification)
 	tr.write(bodyPath, inviteBody)
+	tr.write(bodyENPath, inviteBodyEN)
 	tr.generate()
 	r := tr.run("-check", "-base", base)
 	require.Equal(t, 0, r.code, r.stderr)
@@ -219,6 +221,7 @@ func TestNTF1D07_UnreadableBaseRevisionIsAFailureNotAbsence(t *testing.T) {
 	twin.write("svc/svc.go", "package svc\n")
 	twin.write(notifPath, inviteNotification)
 	twin.write(bodyPath, inviteBody)
+	twin.write(bodyENPath, inviteBodyEN)
 	noRev := twin.commit("шаблон до генератора")
 	twin.generate()
 	r = twin.run("-check", "-base", noRev)

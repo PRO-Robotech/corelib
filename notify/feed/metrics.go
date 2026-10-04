@@ -26,7 +26,16 @@ type metrics struct {
 	oldest    *prometheus.GaugeVec
 	deferred  *prometheus.GaugeVec
 	defects   *prometheus.CounterVec
+	// suppressed — notify_suppressed_total{ns,template,reason,scope} (NTF-3
+	// Р14): строки, не поставленные лимитом шаблона, после коммита
+	// транзакции вызывающего. Серия шаблона заводится первым подавлением:
+	// перечня шаблонов источник при сборке не знает.
+	suppressed *prometheus.CounterVec
 }
+
+// SuppressReasonLimit — единственная причина подавления постановки у
+// источника: окно лимита шаблона исчерпано.
+const SuppressReasonLimit = "limit"
 
 // newMetrics регистрирует метрики модуля в reg; повторная регистрация того же
 // семейства (сервер, уборщик и источник одного процесса) берёт существующее.
@@ -74,9 +83,17 @@ func newMetrics(reg prometheus.Registerer, module string) (*metrics, error) {
 		return nil, fmt.Errorf("feed: метрика дефектов модуля %s: %w", module, err)
 	}
 
+	suppressed, err := registerOrReuse(reg, prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "notify_suppressed_total",
+		Help: "Строки ленты, не поставленные лимитом шаблона, — после коммита транзакции вызывающего; scope — исчерпанное окно (оба — recipient).",
+	}, []string{"ns", "template", "reason", "scope"}))
+	if err != nil {
+		return nil, fmt.Errorf("feed: метрика подавлений модуля %s: %w", module, err)
+	}
+
 	m := &metrics{
 		module: module, outcomes: outcomes, delivered: delivered.WithLabelValues(module),
-		defers: defers, oldest: oldest, deferred: deferred, defects: defects,
+		defers: defers, oldest: oldest, deferred: deferred, defects: defects, suppressed: suppressed,
 	}
 	for _, c := range Classes() {
 		for _, o := range cells() {
@@ -141,6 +158,12 @@ func (m *metrics) observeOutcome(c Class, o Outcome) {
 // observePutDefect — дефект вызывающего, отвергнутый Put (CX1-67).
 func (m *metrics) observePutDefect(d PutDefect) {
 	m.defects.WithLabelValues(m.module, string(d)).Inc()
+}
+
+// observeSuppressed — одно подавление лимитом шаблона template в области
+// scope; зовёт только хук после коммита (suppressedAfterCommit).
+func (m *metrics) observeSuppressed(template string, scope Scope) {
+	m.suppressed.WithLabelValues(m.module, template, SuppressReasonLimit, string(scope)).Inc()
 }
 
 // observePending — возраст старейшей строки pending и число отсроченных по

@@ -215,6 +215,11 @@ var forbiddenObjectTypes = map[string]struct{}{
 	"service":                {},
 	"notification_feed":      {},
 	"notification_namespace": {},
+	// справочник адресатов уведомлений (NTF-3, X4D): объект права службы
+	// уведомлений читать адресатов (v_get). Заводит его тоже только манифест
+	// модели при посеве kaname; без записи здесь модуль выписал бы себе право
+	// читать справочник чужих адресатов тем же путём, что и три типа выше.
+	"notification_recipient_directory": {},
 }
 
 // IsPublicReadGrant reports whether the pair is «anybody reads this resource»

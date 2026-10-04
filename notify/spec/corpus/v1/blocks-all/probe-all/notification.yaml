@@ -11,3 +11,4 @@ attributes:
   issued_at: {type: timestamp, presence: required}
 subject:
   ru: "Проба {{ subject_name }}"
+  en: "Probe {{ subject_name }}"

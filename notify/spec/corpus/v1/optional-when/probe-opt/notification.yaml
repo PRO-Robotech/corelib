@@ -8,3 +8,4 @@ attributes:
   target: {type: path, presence: optional}
 subject:
   ru: "Проба {{ subject_name }}"
+  en: "Probe {{ subject_name }}"

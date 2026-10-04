@@ -29,12 +29,19 @@ attributes:
   token: {type: token, presence: required}
 subject:
   ru: "Приглашение в облако"
+  en: "Invitation to the cloud"
 `
 
 const inviteBody = `blocks:
   - heading: "Вас пригласили"
   - p: "{{ inviter_name }} приглашает вас в облако."
   - button: {text: "Принять приглашение", token: token, path: "/iam/invitations/accept"}
+`
+
+const inviteBodyEN = `blocks:
+  - heading: "You are invited"
+  - p: "{{ inviter_name }} invites you to the cloud."
+  - button: {text: "Accept the invitation", token: token, path: "/iam/invitations/accept"}
 `
 
 // tree — копия дерева источника в t.TempDir: пакет svc/ с каталогом
@@ -50,6 +57,7 @@ func newTree(t *testing.T) *tree {
 	tr.write("svc/svc.go", "package svc\n")
 	tr.write("svc/notifications/invite/notification.yaml", inviteNotification)
 	tr.write("svc/notifications/invite/body.ru.yaml", inviteBody)
+	tr.write("svc/notifications/invite/body.en.yaml", inviteBodyEN)
 	return tr
 }
 

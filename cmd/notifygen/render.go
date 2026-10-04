@@ -104,11 +104,30 @@ func classIdent(c spec.Class) (string, error) {
 	return "", fmt.Errorf("класс %q вне перечня", string(c))
 }
 
-func scopeIdent(s feed.Scope) string {
-	if s == feed.ScopeInitiator {
-		return "feed.ScopeInitiator"
+func scopeIdent(s feed.Scope) (string, error) {
+	switch s {
+	case feed.ScopeRecipient:
+		return "feed.ScopeRecipient", nil
+	case feed.ScopeInitiator:
+		return "feed.ScopeInitiator", nil
+	case feed.ScopeProject:
+		return "feed.ScopeProject", nil
 	}
-	return "feed.ScopeRecipient"
+	return "", fmt.Errorf("область лимита %q вне перечня", string(s))
+}
+
+func recipientIdent(r spec.Recipient) (string, error) {
+	switch r {
+	case spec.RecipientAddress:
+		return "feed.RecipientAddress", nil
+	case spec.RecipientSubject:
+		return "feed.RecipientSubject", nil
+	case spec.RecipientFanout:
+		return "feed.RecipientFanout", nil
+	case spec.RecipientAccountOwner:
+		return "feed.RecipientAccountOwner", nil
+	}
+	return "", fmt.Errorf("форма адресата %q вне перечня", string(r))
 }
 
 // render порождает notifications_<name>.gen.go шаблона t с ревизией rev в
@@ -122,11 +141,19 @@ func render(pkg string, t spec.Template, rev int) ([]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("%s: %w", t.Name, err)
 	}
+	recipient, err := recipientIdent(t.Recipient)
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", t.Name, err)
+	}
+	// У формы fanout адресата нет (NTF-3 Р3, Р27): поля To у XAttrs нет, Put
+	// получает пустой адресат.
+	hasTo := t.Recipient != spec.RecipientFanout
 	name := goName(t.Name)
 	desc := strings.ToLower(name[:1]) + name[1:] + "Desc"
-	initiator := false
+	initiator, project := false, false
 	for _, l := range limits {
 		initiator = initiator || l.Scope == feed.ScopeInitiator
+		project = project || l.Scope == feed.ScopeProject
 	}
 
 	var b bytes.Buffer
@@ -148,9 +175,17 @@ func render(pkg string, t spec.Template, rev int) ([]byte, error) {
 	}
 
 	p("// %sAttrs — атрибуты шаблона %s. Нулевое поле optional — «не задан».\n", name, t.Name)
-	p("type %sAttrs struct {\n\tTo string\n", name)
+	p("type %sAttrs struct {\n", name)
+	if hasTo {
+		p("\tTo string\n")
+	}
 	if initiator {
 		p("\tInitiator string\n")
+	}
+	if project {
+		// Ключ окна «проект» (NTF-3 Р14) заполняет код источника из своей
+		// записи; атрибутом шаблона он не бывает.
+		p("\tProject string\n")
 	}
 	for _, a := range t.Attrs {
 		typ := "string"
@@ -162,10 +197,14 @@ func render(pkg string, t spec.Template, rev int) ([]byte, error) {
 	p("}\n\n")
 
 	p("var %s = feed.TemplateDesc{\n\tName: %q,\n\tClass: %s,\n\tSchemaRev: %d,\n", desc, t.Name, class, rev)
-	p("\tTTL: %d * time.Second,\n", int64(t.TTL/time.Second))
+	p("\tTTL: %d * time.Second,\n\tRecipient: %s,\n", int64(t.TTL/time.Second), recipient)
 	p("\tLimits: []feed.Limit{\n")
 	for _, l := range limits {
-		p("\t\t{Scope: %s, WindowSeconds: %d, Max: %d},\n", scopeIdent(l.Scope), l.WindowSeconds, l.Max)
+		scope, err := scopeIdent(l.Scope)
+		if err != nil {
+			return nil, fmt.Errorf("%s: %w", t.Name, err)
+		}
+		p("\t\t{Scope: %s, WindowSeconds: %d, Max: %d},\n", scope, l.WindowSeconds, l.Max)
 	}
 	p("\t},\n\tAttrs: []feed.AttrDesc{\n")
 	for _, a := range t.Attrs {
@@ -184,11 +223,14 @@ func render(pkg string, t spec.Template, rev int) ([]byte, error) {
 	p("// Send%s ставит письмо шаблона %s в транзакции tx (feed.PutID) и отвечает\n", name, t.Name)
 	p("// id записанной строки ленты; флаг выключен у notice — строки и id нет.\n")
 	p("func Send%s(ctx context.Context, tx pgx.Tx, a %sAttrs) (feed.Queued, error) {\n", name, name)
+	keys := ""
 	if initiator {
-		p("\tvalues := feed.Values{Initiator: a.Initiator, Attrs: make(map[string]any, %d)}\n", len(t.Attrs))
-	} else {
-		p("\tvalues := feed.Values{Attrs: make(map[string]any, %d)}\n", len(t.Attrs))
+		keys += "Initiator: a.Initiator, "
 	}
+	if project {
+		keys += "Project: a.Project, "
+	}
+	p("\tvalues := feed.Values{%sAttrs: make(map[string]any, %d)}\n", keys, len(t.Attrs))
 	for _, a := range t.Attrs {
 		kind, _ := kindIdent(a.Kind)
 		field := goName(a.Name)
@@ -201,7 +243,11 @@ func render(pkg string, t spec.Template, rev int) ([]byte, error) {
 		}
 		p("\tvalues.Attrs[%q] = a.%s\n", a.Name, field)
 	}
-	p("\treturn feed.PutID(ctx, tx, %s, a.To, values)\n}\n", desc)
+	to := `""`
+	if hasTo {
+		to = "a.To"
+	}
+	p("\treturn feed.PutID(ctx, tx, %s, %s, values)\n}\n", desc, to)
 
 	out, err := format.Source(b.Bytes())
 	if err != nil {
