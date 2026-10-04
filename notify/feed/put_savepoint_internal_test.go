@@ -79,7 +79,7 @@ func (noSignal) SignalFeed(context.Context, pgx.Tx) error { return nil }
 
 // Шаблон без лимитов: первый оператор под точкой сохранения — вставка строки.
 var sealedDesc = TemplateDesc{
-	Name: "probe", Class: ClassSecurity, SchemaRev: 1, TTL: time.Hour,
+	Name: "probe", Class: ClassSecurity, SchemaRev: 1, TTL: time.Hour, Recipient: RecipientAddress,
 	Attrs: []AttrDesc{{Name: "code", Kind: form.KindSecret, Presence: PresenceRequired}},
 }
 

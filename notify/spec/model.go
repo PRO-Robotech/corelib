@@ -28,14 +28,37 @@ const (
 	PresenceOptional Presence = "optional"
 )
 
-// Scope — область лимита постановки: адресат либо инициатор.
+// Scope — область лимита постановки: адресат, инициатор либо проект (NTF-3
+// Р14).
 type Scope string
 
 // Области лимита.
 const (
 	ScopeRecipient Scope = "recipient"
 	ScopeInitiator Scope = "initiator"
+	ScopeProject   Scope = "project"
 )
+
+// Scopes — закрытый набор областей лимита.
+func Scopes() []Scope { return []Scope{ScopeRecipient, ScopeInitiator, ScopeProject} }
+
+// Recipient — форма адресата шаблона (NTF-1 Р6, NTF-3 Р27): поле recipient
+// notification.yaml. Поле необязательно; отсутствие — address, форма
+// выпущенной версии формата (NTF1-A08: формат только расширяется).
+type Recipient string
+
+// Формы адресата.
+const (
+	RecipientAddress      Recipient = "address"
+	RecipientSubject      Recipient = "subject"
+	RecipientFanout       Recipient = "fanout"
+	RecipientAccountOwner Recipient = "account_owner"
+)
+
+// Recipients — закрытый набор форм адресата.
+func Recipients() []Recipient {
+	return []Recipient{RecipientAddress, RecipientSubject, RecipientFanout, RecipientAccountOwner}
+}
 
 // BlockKind — вид блока тела. Набор закрыт (Р7).
 type BlockKind string
@@ -58,8 +81,9 @@ func BlockKinds() []BlockKind {
 	return []BlockKind{BlockHeading, BlockP, BlockButton, BlockCode, BlockList, BlockKV, BlockWarning, BlockDivider}
 }
 
-// Locales — закрытый набор локалей тела и темы.
-func Locales() []string { return []string{"ru"} }
+// Locales — закрытый набор локалей тела и темы (NTF-3 Р21): тело и тема
+// обязательны на каждой локали набора.
+func Locales() []string { return []string{"ru", "en"} }
 
 // Границы ttl (Р7).
 const (
@@ -127,10 +151,12 @@ type Revision struct {
 
 // Template — проверенный шаблон. Attrs упорядочены по имени, Bodies — по
 // локали, Limits — в порядке файла.
+// Recipient — форма адресата (без поля recipient — RecipientAddress).
 type Template struct {
 	Dir         string
 	Name        string
 	Class       Class
+	Recipient   Recipient
 	TTL         time.Duration
 	Limits      []Limit
 	Attrs       []Attr

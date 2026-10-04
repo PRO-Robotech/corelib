@@ -1,0 +1,7 @@
+blocks:
+  - heading: "Probe"
+  - p: "You were invited by {{ inviter }}."
+    when: inviter
+  - p: "Text without an inviter."
+  - button: {text: "Open", path: target}
+    when: target

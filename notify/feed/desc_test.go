@@ -33,7 +33,7 @@ func TestUK86_LimitLessOrdersByScopeThenSecondsAsNumbers(t *testing.T) {
 
 func validDesc() feed.TemplateDesc {
 	return feed.TemplateDesc{
-		Name: "probe-hello", Class: feed.ClassNotice, SchemaRev: 1, TTL: 72 * time.Hour,
+		Name: "probe-hello", Class: feed.ClassNotice, SchemaRev: 1, TTL: 72 * time.Hour, Recipient: feed.RecipientAddress,
 		Limits: []feed.Limit{
 			{Scope: feed.ScopeRecipient, WindowSeconds: 1800, Max: 1},
 			{Scope: feed.ScopeRecipient, WindowSeconds: 86400, Max: 3},
@@ -62,6 +62,9 @@ func TestUK86_DescValidationNamesTheTemplate(t *testing.T) {
 		"обязательность вне перечня":   func(d *feed.TemplateDesc) { d.Attrs[0].Presence = "maybe" },
 		"тема на optional":             func(d *feed.TemplateDesc) { d.Attrs[0].Presence = feed.PresenceOptional },
 		"имя шаблона пусто":            func(d *feed.TemplateDesc) { d.Name = "" },
+		"форма адресата не объявлена":  func(d *feed.TemplateDesc) { d.Recipient = "" },
+		"форма адресата вне перечня":   func(d *feed.TemplateDesc) { d.Recipient = "courier" },
+		"лимит адресата у fanout":      func(d *feed.TemplateDesc) { d.Recipient = feed.RecipientFanout },
 	}
 	for name, mutate := range cases {
 		d := validDesc()
@@ -79,4 +82,24 @@ func TestUK86_DescValidationNamesTheTemplate(t *testing.T) {
 		d.SchemaRev = 0
 		return d.Validate().Error()
 	}(), "schema_rev")
+}
+
+// NTF-3 Р14, Р27: близнецы отказов описания — лимит на проект у любой формы и
+// форма fanout без лимита на адресата (с лимитом на проект) принимаются.
+func TestDescAcceptsProjectScopeAndFanoutWithoutRecipientLimit(t *testing.T) {
+	d := validDesc()
+	// project < recipient побайтно (LimitLess): лимит проекта — первым.
+	d.Limits = append([]feed.Limit{{Scope: feed.ScopeProject, WindowSeconds: 3600, Max: 200}}, d.Limits...)
+	require.NoError(t, d.Validate(), "лимит на проект")
+
+	f := validDesc()
+	f.Recipient = feed.RecipientFanout
+	f.Limits = []feed.Limit{{Scope: feed.ScopeProject, WindowSeconds: 3600, Max: 200}}
+	require.NoError(t, f.Validate(), "fanout без лимита на адресата")
+	for _, form := range feed.RecipientForms() {
+		g := validDesc()
+		g.Recipient = form
+		g.Limits = nil
+		require.NoError(t, g.Validate(), "форма %s", form)
+	}
 }

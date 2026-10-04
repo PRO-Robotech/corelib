@@ -21,8 +21,11 @@ var (
 	// атрибут вне описания, нуль объявленного атрибута, значение вне формы,
 	// лимиты описания не возрастают строго.
 	ErrAttrsInvalid = errors.New("feed: notification attributes are invalid")
-	// ErrRecipientInvalid — адрес не разбирается address.Normalize либо ключ
-	// окна построен из нулевого address.Normalized.
+	// ErrRecipientInvalid — адресат не той формы, что объявил шаблон
+	// (TemplateDesc.Recipient): у address — адрес не разбирается
+	// address.Normalize либо ключ окна построен из нулевого
+	// address.Normalized; у subject — не user:<id пользователя>; у
+	// account_owner — не account:<id аккаунта>; у fanout — непустой адресат.
 	ErrRecipientInvalid = errors.New("feed: recipient address is invalid")
 	// ErrLimitExhausted — окно лимита исчерпано: ноль строк условного
 	// оператора окна, а не ошибка SQL. Вклад постановки откачен к точке

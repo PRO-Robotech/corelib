@@ -19,14 +19,43 @@ const (
 	ClassNotice   Class = "notice"
 )
 
-// Scope — область лимита: адресат либо инициатор.
+// Scope — область лимита: адресат, инициатор либо проект.
 type Scope string
 
-// Области лимита.
+// Области лимита. Ключ окна области: ScopeRecipient — адресат строки,
+// ScopeInitiator — Values.Initiator, ScopeProject — Values.Project (NTF-3 Р14).
 const (
 	ScopeRecipient Scope = "recipient"
 	ScopeInitiator Scope = "initiator"
+	ScopeProject   Scope = "project"
 )
+
+// RecipientForm — форма адресата строки ленты (NTF-1 Р6, NTF-3 Р27). Форму
+// объявляет шаблон (поле recipient в notification.yaml), генератор переносит
+// её в описание; Put судит адресата по форме описания, а не угадывает её по
+// значению.
+type RecipientForm string
+
+// Формы адресата.
+const (
+	// RecipientAddress — адрес почты (NTF-1 Р6): значение проходит
+	// address.Normalize.
+	RecipientAddress RecipientForm = "address"
+	// RecipientSubject — пользователь службы доступа: значение user:<id>, id
+	// семейства пользователя (форму субъекта судит auth.InitiatorOf).
+	RecipientSubject RecipientForm = "subject"
+	// RecipientFanout — адресата нет (шаблон resource-event, NTF-3 Р3):
+	// значение пустое, лимита на адресата у шаблона нет.
+	RecipientFanout RecipientForm = "fanout"
+	// RecipientAccountOwner — владелец аккаунта: значение account:<id>, id
+	// семейства аккаунта.
+	RecipientAccountOwner RecipientForm = "account_owner"
+)
+
+// RecipientForms — закрытый перечень форм адресата.
+func RecipientForms() []RecipientForm {
+	return []RecipientForm{RecipientAddress, RecipientSubject, RecipientFanout, RecipientAccountOwner}
+}
 
 // Presence — обязательность атрибута (Д21).
 type Presence string
@@ -74,11 +103,15 @@ type AttrDesc struct {
 // xDesc рядом с SendX). Рукописного описания в рабочем коде нет — это держит
 // гейт ссылки на feed.Put (З16); Put судит описание сам и на упорядоченность
 // генератора не полагается.
+//
+// Recipient — форма адресата шаблона; нулевое значение не принимается
+// (Validate): форму не выводит ни Put, ни значение адресата.
 type TemplateDesc struct {
 	Name      string
 	Class     Class
 	SchemaRev int32
 	TTL       time.Duration
+	Recipient RecipientForm
 	Limits    []Limit
 	Attrs     []AttrDesc
 }
@@ -88,10 +121,11 @@ func (d TemplateDesc) invalid(rule string, a ...any) error {
 }
 
 // Validate судит описание (З7, шаг 2): имя, класс, ревизия ≥ 1, ttl в
-// [TTLMin..TTLMax], лимиты строго возрастают по LimitLess (повтор пары
-// (scope, window_seconds) — тоже нарушение), атрибуты с именем, видом и
-// обязательностью, тема — только на required. Нарушение — ErrAttrsInvalid с
-// именем шаблона.
+// [TTLMin..TTLMax], форма адресата из перечня RecipientForms, лимиты строго
+// возрастают по LimitLess (повтор пары (scope, window_seconds) — тоже
+// нарушение), у формы fanout нет лимита на адресата (адресата нет, NTF-3 Р3),
+// атрибуты с именем, видом и обязательностью, тема — только на required.
+// Нарушение — ErrAttrsInvalid с именем шаблона.
 func (d TemplateDesc) Validate() error {
 	if d.Name == "" {
 		return fmt.Errorf("%w: шаблон без имени", ErrAttrsInvalid)
@@ -107,9 +141,18 @@ func (d TemplateDesc) Validate() error {
 	if d.TTL < TTLMin || d.TTL > TTLMax {
 		return d.invalid("ttl вне [%s..%s]", TTLMin, TTLMax)
 	}
+	switch d.Recipient {
+	case RecipientAddress, RecipientSubject, RecipientFanout, RecipientAccountOwner:
+	default:
+		return d.invalid("форма адресата вне перечня")
+	}
 	for i, l := range d.Limits {
 		switch l.Scope {
-		case ScopeRecipient, ScopeInitiator:
+		case ScopeRecipient:
+			if d.Recipient == RecipientFanout {
+				return d.invalid("limits[%d]: лимит на адресата у формы fanout — адресата нет", i)
+			}
+		case ScopeInitiator, ScopeProject:
 		default:
 			return d.invalid("limits[%d]: область вне перечня", i)
 		}
