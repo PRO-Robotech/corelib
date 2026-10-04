@@ -49,79 +49,104 @@ const limitedPutSetting = "kacho_feed.limited_put"
 // позже этого срока. ROLLBACK TO SAVEPOINT — оператор без чтения данных.
 const savepointRollbackTimeout = 5 * time.Second
 
-// Put ставит письмо шаблона desc адресату to в транзакции вызывающего tx
-// (З7). Источник берётся из контекста (Source.Bind); без него —
-// ErrSourceUnbound.
+// Queued — исход постановки PutID: id записанной строки ленты либо его
+// отсутствие. Отсутствие выражено типом, а не пустой строкой на месте id:
+// флаг выключен и класс notice — строки нет, ID() → "", false; сторож и
+// ошибка хранилища — нулевое значение рядом с ошибкой.
+type Queued struct {
+	id     string
+	queued bool
+}
+
+// ID — id строки ленты, записанной в транзакции вызывающего, и признак, что
+// строка записана. Строка видна другим после коммита этой транзакции; откат
+// снимает её вместе с id.
+func (q Queued) ID() (string, bool) { return q.id, q.queued }
+
+// PutID ставит письмо шаблона desc адресату to в транзакции вызывающего tx
+// (З7) и отвечает id записанной строки — тем, что вставил оператор
+// постановки, а не прочитанным из ленты. Источник берётся из контекста
+// (Source.Bind); без него — ErrSourceUnbound.
 //
-// Исходы: nil — строка, вклад в окна и строка журнала подписки записаны (либо
-// флаг выключен и класс notice — тогда ничего); иначе один из пяти сторожей
-// PutGuards с именем шаблона или атрибута; иначе ошибка хранилища. После
-// сторожа транзакция пригодна к коммиту; ErrSecondLimitedPut — дефект
-// вызывающего, его мутация не коммитится.
-func Put(ctx context.Context, tx pgx.Tx, desc TemplateDesc, to string, values Values) error {
+// Исходы: (id, nil) — строка, вклад в окна и строка журнала подписки записаны;
+// (без id, nil) — флаг выключен и класс notice, не записано ничего; иначе
+// без id и один из пяти сторожей PutGuards с именем шаблона или атрибута,
+// либо ошибка хранилища. После сторожа транзакция пригодна к коммиту;
+// ErrSecondLimitedPut — дефект вызывающего, его мутация не коммитится.
+func PutID(ctx context.Context, tx pgx.Tx, desc TemplateDesc, to string, values Values) (Queued, error) {
 	s, ok := sourceFrom(ctx)
 	if !ok {
-		return ErrSourceUnbound
+		return Queued{}, ErrSourceUnbound
 	}
 	return s.put(ctx, tx, desc, to, values)
 }
 
-func (s *Source) put(ctx context.Context, tx pgx.Tx, desc TemplateDesc, to string, values Values) error {
+// Put — PutID без id: исходы те же, id записанной строки отбрасывается.
+// Его зовут файлы, порождённые notifygen до появления PutID; порождённое
+// теперь зовёт PutID. Put снимается, когда ни в одном потребителе corelib
+// (kacho, kaname) не остаётся ссылки на feed.Put — проверка: `git grep -n
+// 'feed\.Put\b' -- '*.go'` в обоих деревьях пуст.
+func Put(ctx context.Context, tx pgx.Tx, desc TemplateDesc, to string, values Values) error {
+	_, err := PutID(ctx, tx, desc, to, values)
+	return err
+}
+
+func (s *Source) put(ctx context.Context, tx pgx.Tx, desc TemplateDesc, to string, values Values) (Queued, error) {
 	// 1. Флаг.
 	if !s.enabled {
 		switch desc.Class {
 		case ClassNotice:
-			return nil
+			return Queued{}, nil
 		case ClassSecurity:
-			return ErrDeliveryNotConfigured
+			return Queued{}, ErrDeliveryNotConfigured
 		}
-		return desc.invalid("класс вне перечня")
+		return Queued{}, desc.invalid("класс вне перечня")
 	}
 	// 2. Описание и состав набора.
 	if err := desc.Validate(); err != nil {
-		return err
+		return Queued{}, err
 	}
 	if err := checkComposition(desc, values); err != nil {
-		return err
+		return Queued{}, err
 	}
 	// 3. Адресат.
 	n, err := address.Normalize(to)
 	if err != nil {
-		return fmt.Errorf("%w: шаблон %s: %w", ErrRecipientInvalid, desc.Name, err)
+		return Queued{}, fmt.Errorf("%w: шаблон %s: %w", ErrRecipientInvalid, desc.Name, err)
 	}
 	recipient, err := recipientKey(n)
 	if err != nil {
-		return err
+		return Queued{}, err
 	}
 	if desc.hasScope(ScopeInitiator) && values.Initiator == "" {
-		return desc.invalid("атрибут initiator: лимит на инициатора без инициатора")
+		return Queued{}, desc.invalid("атрибут initiator: лимит на инициатора без инициатора")
 	}
 	// 4. Атрибуты.
 	plain, secret, err := checkAttrs(desc, values)
 	if err != nil {
-		return err
+		return Queued{}, err
 	}
 
 	id := ids.NewHyphenID(ids.PrefixNotificationHyphen)
 	attrsJSON, err := json.Marshal(plain)
 	if err != nil {
-		return fmt.Errorf("feed: шаблон %s: атрибуты не сериализуются: %w", desc.Name, err)
+		return Queued{}, fmt.Errorf("feed: шаблон %s: атрибуты не сериализуются: %w", desc.Name, err)
 	}
 	var sealed []byte
 	if len(secret) > 0 {
 		plaintext, err := json.Marshal(secret)
 		if err != nil {
-			return fmt.Errorf("feed: шаблон %s: секретные атрибуты не сериализуются: %w", desc.Name, err)
+			return Queued{}, fmt.Errorf("feed: шаблон %s: секретные атрибуты не сериализуются: %w", desc.Name, err)
 		}
 		if sealed, err = s.sealer.Seal(s.service, id, desc.Name, plaintext); err != nil {
-			return fmt.Errorf("feed: шаблон %s: секрет не запечатан: %w", desc.Name, err)
+			return Queued{}, fmt.Errorf("feed: шаблон %s: секрет не запечатан: %w", desc.Name, err)
 		}
 	}
 
 	// 5–6. Окно, строка, вклад, сигнал — под точкой сохранения.
 	sp, err := tx.Begin(ctx)
 	if err != nil {
-		return fmt.Errorf("feed: точка сохранения: %w", err)
+		return Queued{}, fmt.Errorf("feed: точка сохранения: %w", err)
 	}
 	if err := s.write(ctx, tx, sp, desc, row{
 		id: id, recipient: recipient, initiator: values.Initiator, attrs: attrsJSON, sealed: sealed,
@@ -129,14 +154,14 @@ func (s *Source) put(ctx context.Context, tx pgx.Tx, desc TemplateDesc, to strin
 		// Откат к точке сохранения снимает вклад, отметку и замки строк окна
 		// этой постановки; транзакция вызывающего остаётся пригодной.
 		if rbErr := rollbackSavepoint(ctx, sp); rbErr != nil {
-			return errors.Join(err, fmt.Errorf("feed: откат к точке сохранения: %w", rbErr))
+			return Queued{}, errors.Join(err, fmt.Errorf("feed: откат к точке сохранения: %w", rbErr))
 		}
-		return err
+		return Queued{}, err
 	}
 	if err := sp.Commit(ctx); err != nil {
-		return fmt.Errorf("feed: освобождение точки сохранения: %w", err)
+		return Queued{}, fmt.Errorf("feed: освобождение точки сохранения: %w", err)
 	}
-	return nil
+	return Queued{id: id, queued: true}, nil
 }
 
 // rollbackSavepoint откатывает точку сохранения под своим сроком
