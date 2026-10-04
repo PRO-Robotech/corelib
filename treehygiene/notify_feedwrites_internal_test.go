@@ -357,17 +357,43 @@ func TestFeedWriteExceptionsRegistry(t *testing.T) {
 	}
 }
 
-// Реестр несёт ровно одну запись — функцию resource-event формы fanout с
-// областью kacho (Д33, NTF-3 З10, X2-F): с доводом, предикатом снятия и
-// признанием файлов. Вторая запись появляется только правкой этой пробы.
-func TestFeedWriteExceptionsCarryOnlyTheResourceEventEntry(t *testing.T) {
-	es := feedWriteExceptions()
-	if len(es) != 1 {
-		t.Fatalf("записей реестра %d, ожидалась 1 (resource-event)", len(es))
+// УК48, CX1-43: запись реестра, признающая файл SQL, гасит находки SQL
+// ровно этого файла; близнец — тот же оператор записи ленты в файле, который
+// запись не признаёт: находка с координатой. Отличие — признание файла.
+// Синтетика, а не живая запись: реестр пуст (Д120).
+func TestFeedWriteExceptionRecognizesOnlyItsFile(t *testing.T) {
+	const mark = "-- признано синтетической записью\n"
+	const write = "DELETE FROM vpc_notification_contrib;\n"
+	g, err := loadGoTree(writesTree(t, map[string]string{
+		"feed/feed.go":          synthFeed,
+		"gen/gen.go":            synthGen,
+		"migrations/0001_a.sql": mark + write,
+		"migrations/0002_b.sql": write,
+	}), "api")
+	if err != nil {
+		t.Fatalf("дерево не загружено: %v", err)
 	}
-	e := es[0]
-	if !strings.Contains(e.Name, "resource-event") || e.Scope != kachoModulePath || e.Reason == "" ||
-		e.Removal == nil || e.Recognizes == nil {
-		t.Fatalf("запись реестра не по форме: имя %q, область %q", e.Name, e.Scope)
+	r, err := auditFeedTableWrites(g, synthLedger(), []feedWriteException{{
+		Name: "синтетическая", Scope: synthModule, Reason: "довод",
+		Removal:    func(*goTree) (int, error) { return 1, nil },
+		Recognizes: func(b []byte) bool { return strings.HasPrefix(string(b), mark) },
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Logf("%s\n%s", r, findingsText(r.Findings))
+	requireOne(t, r, "migrations/0002_b.sql", writeSQL)
+	if len(r.Findings) != 1 || r.SQLFiles != 2 || r.Exceptions != 1 {
+		t.Fatalf("признание файла: %s\n%s", r, findingsText(r.Findings))
+	}
+}
+
+// Д120: реестр пуст (записей 0). Запись функции resource-event формы fanout
+// с областью kacho возвращает полоса kacho, которая заводит функции
+// resource-event, тем же изменением, с повышением пина; запись без предмета
+// в реестре не стоит. Запись появляется только правкой этой пробы.
+func TestFeedWriteExceptionsAreEmptyUntilKachoCarriesTheFunction(t *testing.T) {
+	if n := len(feedWriteExceptions()); n != 0 {
+		t.Fatalf("записей реестра %d, ожидалось 0 (Д120: запись идёт вместе со своим предметом)", n)
 	}
 }
