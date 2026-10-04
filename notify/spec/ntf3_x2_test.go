@@ -24,12 +24,19 @@ import (
 	"github.com/PRO-Robotech/corelib/notify/spec"
 )
 
-// withEN — a01 с телом и темой на локали en.
+// withEN — a01: тело и тема на обеих локалях набора (testdata несёт en).
 func withEN(t *testing.T) fstest.MapFS {
 	t.Helper()
+	return a01(t)
+}
+
+// withoutEN — a01 без тела и темы на локали en: от близнеца withEN отличается
+// одной локалью.
+func withoutEN(t *testing.T) fstest.MapFS {
+	t.Helper()
 	fsys := a01(t)
-	fsys["invite/body.en.yaml"] = &fstest.MapFile{Data: fsys["invite/body.ru.yaml"].Data}
-	edit(t, fsys, "invite/notification.yaml", `  ru: "Приглашение в облако"`, "  ru: \"Приглашение в облако\"\n  en: \"Invitation to the cloud\"")
+	delete(fsys, "invite/body.en.yaml")
+	edit(t, fsys, "invite/notification.yaml", "\n  en: \"Invitation to the cloud\"", "")
 	return fsys
 }
 
@@ -53,7 +60,7 @@ func TestNTF3_R21_EveryTemplateHasEveryLocale(t *testing.T) {
 	require.Empty(t, fs, "шаблон на {ru, en} обязан приниматься")
 	require.Equal(t, 4, census.Files)
 
-	_, _, fs = load(t, a01(t))
+	_, _, fs = load(t, withoutEN(t))
 	require.NotEmpty(t, fs, "шаблон без локали en обязан отвергаться")
 	require.True(t, slices.ContainsFunc(fs, namesLocaleEN), "находка не называет локаль en: %v", fs)
 }
@@ -66,10 +73,21 @@ func TestNTF3_150_RecipientFieldIsAClosedSet(t *testing.T) {
 		t.Run(form, func(t *testing.T) {
 			fsys := withEN(t)
 			edit(t, fsys, "invite/notification.yaml", "ttl: 168h", "ttl: 168h\nrecipient: "+form)
+			if form == "fanout" {
+				// У fanout адресата нет — и лимита на адресата (Р3, Р14).
+				edit(t, fsys, "invite/notification.yaml", "  - {scope: recipient, window: 24h, max: 3}\n", "")
+			}
 			_, _, fs := load(t, fsys)
 			require.Empty(t, fs, "recipient: %s", form)
 		})
 	}
+	// Р3, Р14: fanout с лимитом на адресата — находка на области лимита;
+	// близнец — fanout без него (выше).
+	fan := withEN(t)
+	edit(t, fan, "invite/notification.yaml", "ttl: 168h", "ttl: 168h\nrecipient: fanout")
+	_, _, ffs := load(t, fan)
+	requireOne(t, ffs, spec.RuleFanoutRecipientLimit, "invite/notification.yaml")
+
 	fsys := withEN(t)
 	edit(t, fsys, "invite/notification.yaml", "ttl: 168h", "ttl: 168h\nrecipient: courier")
 	_, _, fs := load(t, fsys)

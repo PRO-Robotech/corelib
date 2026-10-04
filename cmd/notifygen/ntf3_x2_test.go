@@ -22,20 +22,10 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-const inviteBodyEN = `blocks:
-  - heading: "You are invited"
-  - p: "{{ inviter_name }} invites you to the cloud."
-  - button: {text: "Accept the invitation", token: token, path: "/iam/invitations/accept"}
-`
-
-// x2Tree — дерево A01 на обеих локалях набора {ru, en} (Р21).
+// x2Tree — дерево A01 на обеих локалях набора {ru, en} (Р21; newTree несёт en).
 func x2Tree(t *testing.T) *tree {
 	t.Helper()
-	tr := newTree(t)
-	tr.write("svc/notifications/invite/body.en.yaml", inviteBodyEN)
-	tr.edit("svc/notifications/invite/notification.yaml", `  ru: "Приглашение в облако"`,
-		"  ru: \"Приглашение в облако\"\n  en: \"Invitation to the cloud\"")
-	return tr
+	return newTree(t)
 }
 
 // buildAgainstFeed собирает порождённое дерево против corelib этого дерева.

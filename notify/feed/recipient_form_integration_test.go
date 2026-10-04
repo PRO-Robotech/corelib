@@ -202,6 +202,9 @@ func TestUK3_04_SuppressedGrowsOnlyAfterCommit(t *testing.T) {
 	require.Equal(t, 1, f.rows(t), "строка сверх лимита не поставлена")
 }
 
+// perHourProject — лимит на проект; в описании стоит раньше лимита на адресата:
+// порядок описания — feed.LimitLess (project < recipient побайтно), так его
+// печатает генератор, и Put судит его до SQL.
 func perHourProject(max int32) feed.Limit {
 	return feed.Limit{Scope: feed.ScopeProject, WindowSeconds: 3600, Max: max}
 }
@@ -218,7 +221,7 @@ func inProject(project string) feed.Values {
 // проекте → строка поставлена.
 func TestNTF3_14_ProjectWindowKeysByProject(t *testing.T) {
 	f := newFixture(t, true)
-	d := formDesc(feed.RecipientAddress, perHour(20), perHourProject(1))
+	d := formDesc(feed.RecipientAddress, perHourProject(1), perHour(20))
 	prj := ids.NewID("prj")
 	require.NoError(t, f.put(t, d, "a@example.test", inProject(prj)))
 
@@ -236,7 +239,7 @@ func TestNTF3_14_ProjectWindowKeysByProject(t *testing.T) {
 // Р14: исчерпаны оба окна — метка scope=recipient (одно подавление, не два).
 func TestNTF3_14_BothWindowsExhaustedCountsRecipient(t *testing.T) {
 	f := newFixture(t, true)
-	d := formDesc(feed.RecipientAddress, perHour(1), perHourProject(1))
+	d := formDesc(feed.RecipientAddress, perHourProject(1), perHour(1))
 	to, prj := "a@example.test", ids.NewID("prj")
 	require.NoError(t, f.put(t, d, to, inProject(prj)))
 

@@ -1,0 +1,4 @@
+blocks:
+  - heading: "You are invited"
+  - p: "{{ inviter_name }} invites you to the cloud."
+  - button: {text: "Accept the invitation", token: token, path: "/iam/invitations/accept"}

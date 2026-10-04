@@ -16,12 +16,13 @@ import (
 	"github.com/PRO-Robotech/corelib/notify/spec"
 )
 
-// a01 читает каталог A01 из testdata в память: варианты строятся правкой
+// a01 читает каталог A01 (тема и тело на обеих локалях набора {ru, en}) из
+// testdata в память: варианты строятся правкой
 // копии по одному отличию на каталог.
 func a01(t *testing.T) fstest.MapFS {
 	t.Helper()
 	fsys := fstest.MapFS{}
-	for _, name := range []string{"notification.yaml", "body.ru.yaml", "revision.yaml"} {
+	for _, name := range []string{"notification.yaml", "body.ru.yaml", "body.en.yaml", "revision.yaml"} {
 		b, err := os.ReadFile(path.Join("testdata", "a01", "invite", name))
 		require.NoError(t, err)
 		fsys["invite/"+name] = &fstest.MapFile{Data: b}
@@ -78,8 +79,8 @@ func TestA01ValidTemplateIsAccepted(t *testing.T) {
 	require.Empty(t, fs)
 	t.Logf("шаблонов %d, файлов %d, блоков %d", census.Templates, census.Files, census.Blocks)
 	require.Equal(t, 1, census.Templates)
-	require.Equal(t, 3, census.Files)
-	require.Equal(t, 3, census.Blocks)
+	require.Equal(t, 4, census.Files)
+	require.Equal(t, 6, census.Blocks)
 
 	require.Len(t, cat.Templates, 1)
 	tpl := cat.Templates[0]
@@ -90,9 +91,11 @@ func TestA01ValidTemplateIsAccepted(t *testing.T) {
 	require.Equal(t, spec.PresenceRequired, tpl.Attrs[0].Presence)
 	require.True(t, tpl.HasRevision)
 	require.Equal(t, 1, tpl.Revision.Number)
-	require.Len(t, tpl.Bodies, 1)
-	require.Equal(t, spec.BlockButton, tpl.Bodies[0].Blocks[2].Kind)
-	require.Equal(t, "token", tpl.Bodies[0].Blocks[2].Button.Token)
+	require.Len(t, tpl.Bodies, 2)
+	for _, body := range tpl.Bodies {
+		require.Equal(t, spec.BlockButton, body.Blocks[2].Kind, body.Locale)
+		require.Equal(t, "token", body.Blocks[2].Button.Token, body.Locale)
+	}
 	require.Len(t, tpl.Limits, 2)
 }
 
@@ -256,6 +259,13 @@ func a11(t *testing.T) fstest.MapFS {
     when: inviter_name
   - p: "Приглашение действует неделю."
   - button: {text: "Принять приглашение", token: token, path: "/iam/invitations/accept"}
+`)}
+	fsys["invite/body.en.yaml"] = &fstest.MapFile{Data: []byte(`blocks:
+  - heading: "You are invited"
+  - p: "{{ inviter_name }} invites you to the cloud."
+    when: inviter_name
+  - p: "The invitation is valid for a week."
+  - button: {text: "Accept the invitation", token: token, path: "/iam/invitations/accept"}
 `)}
 	return fsys
 }

@@ -19,22 +19,30 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
 
+	"github.com/PRO-Robotech/corelib/auth"
 	"github.com/PRO-Robotech/corelib/ids"
+	"github.com/PRO-Robotech/corelib/journaltx"
 	"github.com/PRO-Robotech/corelib/notify/address"
 	"github.com/PRO-Robotech/corelib/notify/feed/internal/tablename"
 	"github.com/PRO-Robotech/corelib/notify/form"
+	"github.com/PRO-Robotech/corelib/operations"
 )
 
 // Values — набор значений постановки. Attrs — значения атрибутов в Go-форме
 // form.Presence (string; у timestamp — time.Time или написание ленты); ключ
 // незаданного optional в набор не попадает (З5). Initiator — ключ окна
 // области initiator; нужен, когда у шаблона есть лимит на инициатора.
+// Project — ключ окна области project (NTF-3 Р14): id проекта, который
+// заполняет код источника из своей записи; нужен, когда у шаблона есть лимит
+// на проект. Атрибут набора ключом окна не служит.
 type Values struct {
 	Initiator string
+	Project   string
 	Attrs     map[string]any
 }
 
@@ -109,17 +117,16 @@ func (s *Source) put(ctx context.Context, tx pgx.Tx, desc TemplateDesc, to strin
 	if err := checkComposition(desc, values); err != nil {
 		return Queued{}, err
 	}
-	// 3. Адресат.
-	n, err := address.Normalize(to)
-	if err != nil {
-		return Queued{}, fmt.Errorf("%w: шаблон %s: %w", ErrRecipientInvalid, desc.Name, err)
-	}
-	recipient, err := recipientKey(n)
+	// 3. Адресат — по форме описания — и ключи окон.
+	recipient, err := recipientOf(desc, to)
 	if err != nil {
 		return Queued{}, err
 	}
 	if desc.hasScope(ScopeInitiator) && values.Initiator == "" {
 		return Queued{}, desc.invalid("атрибут initiator: лимит на инициатора без инициатора")
+	}
+	if desc.hasScope(ScopeProject) && !ofFamily(values.Project, familyProject) {
+		return Queued{}, desc.invalid("ключ окна project: лимит на проект без id проекта")
 	}
 	// 4. Атрибуты.
 	plain, secret, err := checkAttrs(desc, values)
@@ -149,12 +156,18 @@ func (s *Source) put(ctx context.Context, tx pgx.Tx, desc TemplateDesc, to strin
 		return Queued{}, fmt.Errorf("feed: точка сохранения: %w", err)
 	}
 	if err := s.write(ctx, tx, sp, desc, row{
-		id: id, recipient: recipient, initiator: values.Initiator, attrs: attrsJSON, sealed: sealed,
+		id: id, recipient: recipient, initiator: values.Initiator, project: values.Project, attrs: attrsJSON, sealed: sealed,
 	}); err != nil {
 		// Откат к точке сохранения снимает вклад, отметку и замки строк окна
 		// этой постановки; транзакция вызывающего остаётся пригодной.
 		if rbErr := rollbackSavepoint(ctx, sp); rbErr != nil {
 			return Queued{}, errors.Join(err, fmt.Errorf("feed: откат к точке сохранения: %w", rbErr))
+		}
+		var ex *exhaustedError
+		if errors.As(err, &ex) {
+			if hookErr := s.suppressedAfterCommit(tx, desc, ex.scope); hookErr != nil {
+				return Queued{}, errors.Join(err, hookErr)
+			}
 		}
 		return Queued{}, err
 	}
@@ -173,8 +186,8 @@ func rollbackSavepoint(ctx context.Context, sp pgx.Tx) error {
 }
 
 type row struct {
-	id, recipient, initiator string
-	attrs, sealed            []byte
+	id, recipient, initiator, project string
+	attrs, sealed                     []byte
 }
 
 // write — шаги 5 и 6 в точке сохранения sp. Сигнал пишется через tx
@@ -187,7 +200,7 @@ func (s *Source) write(ctx context.Context, tx, sp pgx.Tx, desc TemplateDesc, r 
 			return err
 		}
 		var err error
-		if windows, err = takeWindows(ctx, sp, s.service, desc, r.recipient, r.initiator); err != nil {
+		if windows, err = takeWindows(ctx, sp, s.service, desc, windowKeys{recipient: r.recipient, initiator: r.initiator, project: r.project}); err != nil {
 			return err
 		}
 	}
@@ -231,9 +244,88 @@ func (s *Source) markLimitedPut(ctx context.Context, sp pgx.Tx, desc TemplateDes
 	return nil
 }
 
-// recipientKey — ключ окна по адресату: только address.Normalized. Нулевое
-// значение — ErrRecipientInvalid с причиной address.ErrUnset; ключа «пустого
-// адреса» нет (NTF1-B27 (нуль)).
+// suppressedAfterCommit — подавление строки лимитом (NTF-3 Р14, З4, З18):
+// notify_suppressed_total растёт хуком после УСПЕШНОГО коммита транзакции
+// вызывающего, а не в момент отказа: откат после ErrLimitExhausted подавления
+// не утверждает (CX3-07). Хук держит только транзакция помощника journaltx —
+// та же, без которой сигнал строки ленты не пишется (ErrNotHelperTx); на иной
+// транзакции подавление не считается.
+func (s *Source) suppressedAfterCommit(tx pgx.Tx, desc TemplateDesc, scope Scope) error {
+	jt, ok := tx.(*journaltx.Tx)
+	if !ok {
+		return nil
+	}
+	name := desc.Name
+	if err := jt.AfterCommit(func() { s.metrics.observeSuppressed(name, scope) }); err != nil {
+		return fmt.Errorf("feed: шаблон %s: счёт подавления: %w", desc.Name, err)
+	}
+	return nil
+}
+
+// Приставки и семейства значений форм адресата и ключа окна project.
+// Семейства аккаунта и проекта выпускает служба доступа (её константы
+// домена PrefixAccount, PrefixProject); фундамент её не импортирует, поэтому
+// написание повторено здесь — как приставки пользователя в каталоге ids.
+const (
+	subjectUserPrefix  = "user:"
+	accountOwnerPrefix = "account:"
+	principalTypeUser  = "user"
+	familyAccount      = "acc"
+	familyProject      = "prj"
+)
+
+// ofFamily — id семейства prefix в одной из двух форм записи каталога ids
+// (слитной либо дефисной). Пустая строка ни одному семейству не принадлежит.
+func ofFamily(id, prefix string) bool {
+	return ids.IsValid(id, prefix) || ids.IsValidHyphen(id, prefix)
+}
+
+// recipientOf — шаг 3 Put: адресат судится формой ОПИСАНИЯ (NTF-3 Р27), и
+// значение не той формы — ErrRecipientInvalid до первого оператора SQL.
+// Ответ — значение колонки адресата и ключ окна адресата:
+//   - address — address.Normalize, ключ — нормализованный адрес;
+//   - subject — user:<id>, id семейства пользователя; форму субъекта судит
+//     auth.InitiatorOf, единственное место о ней (З3): иной тип субъекта,
+//     иное семейство, пустой id и форма компонента отвергаются. Значение
+//     через address.Normalize не идёт и в адресную форму не приводится;
+//   - account_owner — account:<id>, id семейства аккаунта;
+//   - fanout — адресата нет: только пустое значение.
+//
+// Текст отказа значения адресата не несёт.
+func recipientOf(desc TemplateDesc, to string) (string, error) {
+	switch desc.Recipient {
+	case RecipientAddress:
+		n, err := address.Normalize(to)
+		if err != nil {
+			return "", fmt.Errorf("%w: шаблон %s: %w", ErrRecipientInvalid, desc.Name, err)
+		}
+		return recipientKey(n)
+	case RecipientSubject:
+		if id, ok := strings.CutPrefix(to, subjectUserPrefix); ok {
+			in, err := auth.InitiatorOf(operations.Principal{Type: principalTypeUser, ID: id})
+			if err == nil && in.String() == to {
+				return to, nil
+			}
+		}
+		return "", fmt.Errorf("%w: шаблон %s: форма subject — user:<id пользователя>", ErrRecipientInvalid, desc.Name)
+	case RecipientAccountOwner:
+		if id, ok := strings.CutPrefix(to, accountOwnerPrefix); ok && ofFamily(id, familyAccount) {
+			return to, nil
+		}
+		return "", fmt.Errorf("%w: шаблон %s: форма account_owner — account:<id аккаунта>", ErrRecipientInvalid, desc.Name)
+	case RecipientFanout:
+		if to == "" {
+			return "", nil
+		}
+		return "", fmt.Errorf("%w: шаблон %s: у формы fanout адресата нет", ErrRecipientInvalid, desc.Name)
+	}
+	// Validate (шаг 2) отверг форму вне перечня раньше; ветка — страховка.
+	return "", desc.invalid("форма адресата вне перечня")
+}
+
+// recipientKey — ключ окна по адресату формы address: только
+// address.Normalized. Нулевое значение — ErrRecipientInvalid с причиной
+// address.ErrUnset; ключа «пустого адреса» нет (NTF1-B27 (нуль)).
 func recipientKey(n address.Normalized) (string, error) {
 	v, err := n.Value()
 	if err != nil {

@@ -202,7 +202,7 @@ func attrs(kv ...any) feed.Values {
 
 func helloDesc(limits ...feed.Limit) feed.TemplateDesc {
 	return feed.TemplateDesc{
-		Name: "probe-hello", Class: feed.ClassNotice, SchemaRev: 1, TTL: 72 * time.Hour,
+		Name: "probe-hello", Class: feed.ClassNotice, SchemaRev: 1, TTL: 72 * time.Hour, Recipient: feed.RecipientAddress,
 		Limits: limits,
 		Attrs:  []feed.AttrDesc{{Name: "name", Kind: form.KindText, Presence: feed.PresenceRequired, Subject: true}},
 	}
@@ -216,7 +216,7 @@ func perHour(max int32) feed.Limit {
 
 func linkDesc() feed.TemplateDesc {
 	return feed.TemplateDesc{
-		Name: "probe-link", Class: feed.ClassNotice, SchemaRev: 1, TTL: time.Hour,
+		Name: "probe-link", Class: feed.ClassNotice, SchemaRev: 1, TTL: time.Hour, Recipient: feed.RecipientAddress,
 		Attrs: []feed.AttrDesc{
 			{Name: "subject_name", Kind: form.KindText, Presence: feed.PresenceRequired, Subject: true},
 			{Name: "target", Kind: form.KindPath, Presence: feed.PresenceRequired},
@@ -231,7 +231,7 @@ func linkTwin() map[string]any {
 
 func allDesc() feed.TemplateDesc {
 	return feed.TemplateDesc{
-		Name: "probe-all", Class: feed.ClassNotice, SchemaRev: 1, TTL: time.Hour,
+		Name: "probe-all", Class: feed.ClassNotice, SchemaRev: 1, TTL: time.Hour, Recipient: feed.RecipientAddress,
 		Attrs: []feed.AttrDesc{
 			{Name: "code", Kind: form.KindSecret, Presence: feed.PresenceRequired},
 			{Name: "issued_at", Kind: form.KindTimestamp, Presence: feed.PresenceRequired},
@@ -252,7 +252,7 @@ func allTwin() map[string]any {
 
 func optDesc() feed.TemplateDesc {
 	return feed.TemplateDesc{
-		Name: "probe-opt", Class: feed.ClassNotice, SchemaRev: 1, TTL: time.Hour,
+		Name: "probe-opt", Class: feed.ClassNotice, SchemaRev: 1, TTL: time.Hour, Recipient: feed.RecipientAddress,
 		Attrs: []feed.AttrDesc{
 			{Name: "inviter", Kind: form.KindText, Presence: feed.PresenceOptional},
 			{Name: "subject_name", Kind: form.KindText, Presence: feed.PresenceRequired, Subject: true},

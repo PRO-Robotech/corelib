@@ -6,3 +6,4 @@ limits:
   - {scope: recipient, window: 30m, max: 1}
 subject:
   ru: "Проба связи"
+  en: "Connectivity probe"

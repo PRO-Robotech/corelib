@@ -10,3 +10,4 @@ attributes:
   token: {type: token, presence: required}
 subject:
   ru: "Приглашение в облако"
+  en: "Invitation to the cloud"

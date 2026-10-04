@@ -17,14 +17,17 @@
 //
 //	name: invite                      # имя каталога
 //	class: security                   # security | notice
+//	recipient: address                # address | subject | fanout | account_owner;
+//	                                  # нет поля — address
 //	ttl: 168h                         # [1s..720h], целые секунды
 //	limits:                           # обязательны для security
-//	  - {scope: recipient, window: 24h, max: 3}
+//	  - {scope: recipient, window: 24h, max: 3}   # recipient | initiator | project
 //	attributes:
 //	  inviter_name: {type: text, presence: required}   # optional — под when
 //	  token: {type: token, presence: required}
 //	subject:
 //	  ru: "Приглашение в облако"      # подстановки — только атрибуты required
+//	  en: "Invitation to the cloud"   # тема и тело — на каждой локали Locales
 //
 // body.ru.yaml — только блоки закрытого набора (BlockKinds), у блока ровно
 // один вид и необязательный when:
@@ -253,7 +256,7 @@ func (st *tmplState) parseNotification(c *collector, root *yaml.Node) {
 	if m == nil {
 		return
 	}
-	f := c.fields(m, "", 0, "name", "class", "ttl", "limits", "attributes", "subject")
+	f := c.fields(m, "", 0, "name", "class", "recipient", "ttl", "limits", "attributes", "subject")
 
 	if n, ok := f["name"]; !ok {
 		c.add(m, 0, "name", RuleMissingField, "")
@@ -270,6 +273,15 @@ func (st *tmplState) parseNotification(c *collector, root *yaml.Node) {
 		c.add(n, 0, "class", RuleClass, "")
 	} else {
 		st.t.Class, st.classOK = Class(n.Value), true
+	}
+
+	st.t.Recipient = RecipientAddress
+	if n, ok := f["recipient"]; ok {
+		if n.Kind != yaml.ScalarNode || !slices.Contains(Recipients(), Recipient(n.Value)) {
+			c.add(n, 0, "recipient", RuleRecipient, "")
+		} else {
+			st.t.Recipient = Recipient(n.Value)
+		}
 	}
 
 	st.parseTTL(c, m, f)
@@ -350,10 +362,14 @@ func (st *tmplState) parseLimits(c *collector, f map[string]*yaml.Node) {
 		lf := c.fields(lm, field, 0, "scope", "window", "max")
 		lim := Limit{}
 		good := true
-		if s, ok := lf["scope"]; !ok || s.Kind != yaml.ScalarNode || (Scope(s.Value) != ScopeRecipient && Scope(s.Value) != ScopeInitiator) {
+		switch s, ok := lf["scope"]; {
+		case !ok || s.Kind != yaml.ScalarNode || !slices.Contains(Scopes(), Scope(s.Value)):
 			c.add(orNode(s, lm), 0, field+".scope", RuleLimitScope, "")
 			good = false
-		} else {
+		case Scope(s.Value) == ScopeRecipient && st.t.Recipient == RecipientFanout:
+			c.add(s, 0, field+".scope", RuleFanoutRecipientLimit, "")
+			good = false
+		default:
 			lim.Scope = Scope(s.Value)
 		}
 		if w, ok := lf["window"]; !ok {
@@ -702,6 +718,9 @@ func (st *tmplState) checkSubjectAndLocales() Findings {
 				c.add(sn, 0, "subject."+loc, RuleLocalesAgree, "тела "+loc+" нет")
 			case !inSubject && st.bodyLocs[loc]:
 				c.out = append(c.out, Finding{File: st.dir + "/body." + loc + ".yaml", Rule: RuleLocalesAgree, Detail: "темы " + loc + " нет"})
+			case !inSubject && !st.bodyLocs[loc]:
+				// Ни темы, ни тела на локали набора (NTF-3 Р21).
+				c.out = append(c.out, Finding{File: st.dir + "/body." + loc + ".yaml", Rule: RuleLocaleMissing, Detail: loc})
 			}
 		}
 	}
