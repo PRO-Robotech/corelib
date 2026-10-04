@@ -62,6 +62,14 @@ func TestNTF1D01_GeneratesTypedSendFunction(t *testing.T) {
 	require.Equal(t, "context.Context", types(send.Type.Params.List[0].Type))
 	require.Equal(t, "pgx.Tx", types(send.Type.Params.List[1].Type))
 	require.Equal(t, "InviteAttrs", types(send.Type.Params.List[2].Type))
+	// SendX отвечает исходом постановки с id записанной строки (feed.PutID):
+	// вызывающему, которому id нужен, не приходится читать ленту.
+	require.NotNil(t, send.Type.Results)
+	require.Len(t, send.Type.Results.List, 2)
+	require.Equal(t, "feed.Queued", types(send.Type.Results.List[0].Type))
+	require.Equal(t, "error", types(send.Type.Results.List[1].Type))
+	require.Contains(t, src, "return feed.PutID(ctx, tx, ")
+	require.NotContains(t, src, "feed.Put(")
 
 	require.Contains(t, tr.read("svc/notifications/invite/revision.yaml"), "revision: 1\n")
 }
@@ -77,7 +85,8 @@ func types(e ast.Expr) string {
 }
 
 // NTF1-D01: порождённый файл собирается против corelib этого дерева —
-// SendX действительно зовёт feed.Put с описанием feed.TemplateDesc.
+// SendX действительно зовёт feed.PutID с описанием feed.TemplateDesc и
+// отвечает (feed.Queued, error).
 func TestNTF1D01_GeneratedFileCompilesAgainstFeed(t *testing.T) {
 	corelib, err := filepath.Abs("../..")
 	require.NoError(t, err)
@@ -87,6 +96,12 @@ func TestNTF1D01_GeneratedFileCompilesAgainstFeed(t *testing.T) {
 	tr.generate()
 	tr.write("go.mod", "module example.invalid/src\n\ngo 1.26.0\n\nrequire github.com/PRO-Robotech/corelib v0.0.0\n\n"+
 		"replace github.com/PRO-Robotech/corelib => "+corelib+"\n")
+	// Вызывающий берёт id своей строки из ответа SendX — тем же типом, что
+	// отдаёт feed.PutID.
+	tr.write("use/use.go", "package use\n\nimport (\n\t\"context\"\n\n\t\"github.com/jackc/pgx/v5\"\n\n\t\"example.invalid/src/svc\"\n)\n\n"+
+		"// ID — id строки, поставленной SendAll.\nfunc ID(ctx context.Context, tx pgx.Tx) (string, bool, error) {\n"+
+		"\tq, err := svc.SendAll(ctx, tx, svc.AllAttrs{})\n\tif err != nil {\n\t\treturn \"\", false, err\n\t}\n"+
+		"\tid, ok := q.ID()\n\treturn id, ok, nil\n}\n")
 	sum, err := os.ReadFile(filepath.Join(corelib, "go.sum"))
 	require.NoError(t, err)
 	tr.write("go.sum", string(sum))

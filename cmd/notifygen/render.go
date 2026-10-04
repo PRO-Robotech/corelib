@@ -181,8 +181,9 @@ func render(pkg string, t spec.Template, rev int) ([]byte, error) {
 	}
 	p("\t},\n}\n\n")
 
-	p("// Send%s ставит письмо шаблона %s в транзакции tx (feed.Put).\n", name, t.Name)
-	p("func Send%s(ctx context.Context, tx pgx.Tx, a %sAttrs) error {\n", name, name)
+	p("// Send%s ставит письмо шаблона %s в транзакции tx (feed.PutID) и отвечает\n", name, t.Name)
+	p("// id записанной строки ленты; флаг выключен у notice — строки и id нет.\n")
+	p("func Send%s(ctx context.Context, tx pgx.Tx, a %sAttrs) (feed.Queued, error) {\n", name, name)
 	if initiator {
 		p("\tvalues := feed.Values{Initiator: a.Initiator, Attrs: make(map[string]any, %d)}\n", len(t.Attrs))
 	} else {
@@ -200,7 +201,7 @@ func render(pkg string, t spec.Template, rev int) ([]byte, error) {
 		}
 		p("\tvalues.Attrs[%q] = a.%s\n", a.Name, field)
 	}
-	p("\treturn feed.Put(ctx, tx, %s, a.To, values)\n}\n", desc)
+	p("\treturn feed.PutID(ctx, tx, %s, a.To, values)\n}\n", desc)
 
 	out, err := format.Source(b.Bytes())
 	if err != nil {

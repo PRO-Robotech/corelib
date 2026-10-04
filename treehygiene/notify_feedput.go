@@ -3,13 +3,14 @@
 
 // notify_feedput.go — NTF1-B28 (гейт Put) и УК63.
 //
-// Описание атрибутов в feed.Put в рабочем коде — только описание генератора.
-// Узел — ссылка на объект feed.Put (вызов или значение-функция, по
-// идентичности из проверки типов) в не-тестовом файле вне пакета
-// corelib/notify/feed и вне множества файлов, которое печатает
+// Описание атрибутов в постановке ленты в рабочем коде — только описание
+// генератора. Глаголов постановки два — feed.Put и feed.PutID (тот же Put,
+// отвечающий id строки); узел — ссылка на объект любого из них (вызов или
+// значение-функция, по идентичности из проверки типов) в не-тестовом файле
+// вне пакета corelib/notify/feed и вне множества файлов, которое печатает
 // `notifygen -check -list` по дереву (NTF1-D01). Множество берётся из этого
 // вывода, а не из заголовка файла; вывод, который не разбирается, — отказ
-// гейта, а не пустое множество. Вызов feed.Put мимо ссылки на объект
+// гейта, а не пустое множество. Вызов глагола мимо ссылки на объект
 // (go:linkname, ассемблер, объектный файл, cgo) этот узел не видит — его судит
 // обход типобезопасности (notify_typesafety.go).
 //
@@ -44,7 +45,7 @@ type FeedPutReport struct {
 	Census TreeCensus
 	// GeneratorFiles — файлов Go из множества -list.
 	GeneratorFiles int
-	// RefsInGenerated, RefsOutside — ссылок на feed.Put в файлах генератора и
+	// RefsInGenerated, RefsOutside — ссылок на feed.Put и feed.PutID в файлах генератора и
 	// вне их (вне пакета feed).
 	RefsInGenerated, RefsOutside int
 	// SweeperStarts — вызовов feed.StartSweeper.
@@ -53,7 +54,7 @@ type FeedPutReport struct {
 }
 
 func (r FeedPutReport) String() string {
-	return fmt.Sprintf("ссылки на feed.Put: %s · файлов генератора %d · ссылок в них %d · вне их %d · StartSweeper %d",
+	return fmt.Sprintf("ссылки на feed.Put/PutID: %s · файлов генератора %d · ссылок в них %d · вне их %d · StartSweeper %d",
 		r.Census, r.GeneratorFiles, r.RefsInGenerated, r.RefsOutside, r.SweeperStarts)
 }
 
@@ -124,14 +125,14 @@ func AuditFeedPutReferences(root, stubDir string, generatedList []byte) (FeedPut
 				return true
 			}
 			switch fn.Name() {
-			case "Put":
+			case "Put", "PutID":
 				if gen {
 					r.RefsInGenerated++
 					return true
 				}
 				r.RefsOutside++
 				r.Findings = append(r.Findings, Finding{Position: g.pos(id.Pos()), Kind: string(FeedPutOutsideGenerator),
-					Why: "ссылка на feed.Put вне файлов, которые порождает notifygen — описание атрибутов не генератора"})
+					Why: "ссылка на feed." + fn.Name() + " вне файлов, которые порождает notifygen — описание атрибутов не генератора"})
 			case "StartSweeper":
 				r.SweeperStarts++
 				if cond := flagCondition(info, stack); cond != nil {
