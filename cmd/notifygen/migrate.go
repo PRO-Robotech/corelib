@@ -15,6 +15,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/PRO-Robotech/corelib/notify/feed/resourceevent"
 	"github.com/PRO-Robotech/corelib/notify/feed/schema"
 )
 
@@ -145,20 +146,44 @@ func (g *generator) checkMigrations() (int, error) {
 }
 
 // runInit — notifygen init: новая миграция ленты только при смене версии
-// схемы (NTF1-D03, D04). Применённые файлы не трогаются; метка нового файла
+// схемы (NTF1-D03, D04); с -journal — затем миграция функции resource-event
+// формы fanout (NTF-3 З10). Применённые файлы не трогаются; метка нового файла
 // старше каждой миграции каталога.
 func runInit(root string, args []string, stdout, stderr *sink, o options) error {
 	fs := flag.NewFlagSet("notifygen init", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	svc := fs.String("service", "", "префикс таблиц ленты службы")
 	dir := fs.String("migrations", "", "каталог миграций службы от корня")
+	journal := fs.String("journal", "", "объявление журнала модуля (journal.yaml владельца) — миграция функции resource-event формы fanout")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
 	if *svc == "" || *dir == "" {
 		return fmt.Errorf("notifygen init: нужны -service и -migrations")
 	}
-	full := filepath.Join(root, filepath.FromSlash(*dir))
+	// Объявление журнала судится до первой записи: отказ не оставляет
+	// миграции ленты без функции, которую просили.
+	var fanout *resourceevent.Inputs
+	if *journal != "" {
+		in, err := fanoutInputs(root, *svc, *journal)
+		if err != nil {
+			return err
+		}
+		fanout = &in
+	}
+	if err := initFeed(root, *svc, *dir, stdout, o); err != nil {
+		return err
+	}
+	if fanout == nil {
+		return nil
+	}
+	// Функция пишет в ленту: её миграция старше миграции ленты (метка).
+	return runInitFanout(root, *dir, *fanout, stdout, o)
+}
+
+// initFeed — миграция ленты при смене версии схемы (NTF1-D03, D04).
+func initFeed(root, svc, dir string, stdout *sink, o options) error {
+	full := filepath.Join(root, filepath.FromSlash(dir))
 	if err := os.MkdirAll(full, 0o750); err != nil {
 		return fmt.Errorf("notifygen init: %w", err)
 	}
@@ -186,7 +211,7 @@ func runInit(root string, args []string, stdout, stderr *sink, o options) error 
 		return nil
 	}
 	if applied > cur {
-		return fmt.Errorf("notifygen init: в %s схема ленты v%d новее пина corelib (v%d)", *dir, applied, cur)
+		return fmt.Errorf("notifygen init: в %s схема ленты v%d новее пина corelib (v%d)", dir, applied, cur)
 	}
 	label, err := strconv.ParseUint(o.now().UTC().Format("20060102150405"), 10, 64)
 	if err != nil {
@@ -198,10 +223,10 @@ func runInit(root string, args []string, stdout, stderr *sink, o options) error 
 	)
 	if applied == 0 {
 		name = fmt.Sprintf("%d_notification_feed_v%d.sql", label, cur)
-		content, err = o.schemas.Migration(*svc, schema.Version(cur))
+		content, err = o.schemas.Migration(svc, schema.Version(cur))
 	} else {
 		name = fmt.Sprintf("%d_notification_feed_v%d_from_v%d.sql", label, cur, applied)
-		content, err = o.schemas.Upgrade(*svc, schema.Version(applied), schema.Version(cur))
+		content, err = o.schemas.Upgrade(svc, schema.Version(applied), schema.Version(cur))
 	}
 	if err != nil {
 		return fmt.Errorf("notifygen init: %w", err)
@@ -214,6 +239,6 @@ func runInit(root string, args []string, stdout, stderr *sink, o options) error 
 	if err := dirRoot.WriteFile(name, []byte(content), 0o600); err != nil {
 		return fmt.Errorf("notifygen init: %w", err)
 	}
-	stdout.printf("записана %s/%s, изменений 1\n", *dir, name)
+	stdout.printf("записана %s/%s, изменений 1\n", dir, name)
 	return nil
 }

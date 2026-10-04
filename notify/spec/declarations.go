@@ -24,6 +24,11 @@ func DirectoryRelations() []string { return []string{"v_get"} }
 const (
 	FeedSignalKey        = "notification"
 	FeedSignalObjectType = "notification_feed"
+	// FeedSignalChange — род изменения строки сигнала словом платформы.
+	// SQL-половина (функция resource-event) пишет строку сигнала тем словом
+	// журнала модуля, которое его словарь переводит в этот род; слово
+	// единственное, иначе notifygen отказывает.
+	FeedSignalChange = "UPDATED"
 )
 
 // SignalRow — строка сигнала ленты модуля: ключ журнала Key, тип модели

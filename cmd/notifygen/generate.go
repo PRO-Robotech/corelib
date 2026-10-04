@@ -198,10 +198,14 @@ func (g *generator) check() error {
 	if err != nil {
 		return err
 	}
+	functions, err := g.checkFanout(owners)
+	if err != nil {
+		return err
+	}
 	if g.base != nil {
 		g.checkBase(owners)
 	}
-	g.stdout.printf("шаблонов %d, файлов %d, блоков %d, миграций ленты %d\n",
-		census.Templates, census.Files, census.Blocks, migrations)
+	g.stdout.printf("шаблонов %d, файлов %d, блоков %d, миграций ленты %d, функций resource-event %d\n",
+		census.Templates, census.Files, census.Blocks, migrations, functions)
 	return g.flush()
 }
