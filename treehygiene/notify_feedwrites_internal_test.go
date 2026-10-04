@@ -357,10 +357,17 @@ func TestFeedWriteExceptionsRegistry(t *testing.T) {
 	}
 }
 
-// Реестр на пинах NTF-1 пуст (записей 0): запись функции resource-event формы
-// fanout вносит полоса NTF-3 вместе с формой генератора (Д33, X2-F).
-func TestFeedWriteExceptionsAreEmptyOnNTF1(t *testing.T) {
-	if n := len(feedWriteExceptions()); n != 0 {
-		t.Fatalf("записей реестра %d на пинах NTF-1", n)
+// Реестр несёт ровно одну запись — функцию resource-event формы fanout с
+// областью kacho (Д33, NTF-3 З10, X2-F): с доводом, предикатом снятия и
+// признанием файлов. Вторая запись появляется только правкой этой пробы.
+func TestFeedWriteExceptionsCarryOnlyTheResourceEventEntry(t *testing.T) {
+	es := feedWriteExceptions()
+	if len(es) != 1 {
+		t.Fatalf("записей реестра %d, ожидалась 1 (resource-event)", len(es))
+	}
+	e := es[0]
+	if !strings.Contains(e.Name, "resource-event") || e.Scope != kachoModulePath || e.Reason == "" ||
+		e.Removal == nil || e.Recognizes == nil {
+		t.Fatalf("запись реестра не по форме: имя %q, область %q", e.Name, e.Scope)
 	}
 }

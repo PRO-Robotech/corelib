@@ -27,7 +27,8 @@
 //   - SQL, во ВСЕХ отслеживаемых *.sql: функция, процедура, триггер, блок
 //     DO и одиночный оператор записи, называющие таблицу ленты, — находка;
 //     DDL ленты (таблицы, индексы, удаление) — не находка. Исключения —
-//     реестр notify_exceptions.go.
+//     реестр notify_exceptions.go: файл, признанный записью реестра,
+//     находок SQL не даёт.
 package treehygiene
 
 import (
@@ -94,19 +95,20 @@ func corelibFeedLedger() feedLedger {
 		module:          corelibModule,
 		migrationCaller: notifygenPkg,
 		owners: map[string]feedOwner{
-			"(*" + feedPkg + ".Source).write": {sites: []string{"Contrib", "Outbox"}},
-			f("takeWindows"):                  {sites: []string{"Window"}},
-			f("claimSQL"):                     {sites: []string{"Outbox"}},
-			f("sealedCloseSQL"):               {sites: []string{"Outbox"}},
-			f("ackTerminalSQL"):               {sites: []string{"Outbox"}},
-			f("ackDeferSQL"):                  {sites: []string{"Outbox"}},
-			f("ackRecordedSQL"):               {sites: []string{"Outbox"}},
-			f("expireSQL"):                    {sites: []string{"Contrib,Outbox,Window"}},
-			f("pendingSQL"):                   {sites: []string{"Outbox"}},
-			f("closedSweepSQL"):               {sites: []string{"Outbox"}},
-			f("RetentionSubjects"):            {sites: []string{"Window"}, names: []string{"Outbox", "Window"}},
-			s("v1Up"):                         {sites: []string{"Contrib,Outbox,Window"}, ddl: true},
-			s("v1Down"):                       {sites: []string{"Contrib,Outbox,Window"}, ddl: true},
+			"(*" + feedPkg + ".Source).write":  {sites: []string{"Contrib", "Outbox"}},
+			f("takeWindows"):                   {sites: []string{"Window"}},
+			f("claimSQL"):                      {sites: []string{"Outbox"}},
+			f("sealedCloseSQL"):                {sites: []string{"Outbox"}},
+			f("ackTerminalSQL"):                {sites: []string{"Outbox"}},
+			f("ackDeferSQL"):                   {sites: []string{"Outbox"}},
+			f("ackRecordedSQL"):                {sites: []string{"Outbox"}},
+			f("expireSQL"):                     {sites: []string{"Contrib,Outbox,Window"}},
+			f("pendingSQL"):                    {sites: []string{"Outbox"}},
+			f("closedSweepSQL"):                {sites: []string{"Outbox"}},
+			f("RetentionSubjects"):             {sites: []string{"Window"}, names: []string{"Outbox", "Window"}},
+			resourceEventPkg + ".outboxInsert": {sites: []string{"Outbox"}},
+			s("v1Up"):                          {sites: []string{"Contrib,Outbox,Window"}, ddl: true},
+			s("v1Down"):                        {sites: []string{"Contrib,Outbox,Window"}, ddl: true},
 		},
 	}
 }
@@ -271,7 +273,7 @@ func auditFeedTableWrites(g *goTree, ledger feedLedger, exceptions []feedWriteEx
 		}
 	}
 
-	if err := r.scanSQL(g, add); err != nil {
+	if err := r.scanSQL(g, recognizers(g.module, exceptions), add); err != nil {
 		return r, err
 	}
 	if err := r.applyExceptions(g, exceptions, add); err != nil {
@@ -463,8 +465,9 @@ func sortedKeys[V any](m map[string]V) []string {
 // писатель либо несут тело, исполняемое базой.
 var sqlWriteHeads = regexp.MustCompile(`(?is)^(CREATE\s+(OR\s+REPLACE\s+)?(CONSTRAINT\s+)?(FUNCTION|PROCEDURE|TRIGGER)\b|DO\b|INSERT\b|UPDATE\b|DELETE\b|MERGE\b|TRUNCATE\b|WITH\b|CALL\b)`)
 
-// scanSQL — все отслеживаемые *.sql дерева.
-func (r *FeedWritesReport) scanSQL(g *goTree, add func(pos, kind, why string)) error {
+// scanSQL — все отслеживаемые *.sql дерева. Файл, который признала запись
+// реестра (recognized), находок SQL не даёт: его предмет — запись.
+func (r *FeedWritesReport) scanSQL(g *goTree, recognized []func([]byte) bool, add func(pos, kind, why string)) error {
 	for _, rel := range g.tree.SortedFiles() {
 		if !strings.HasSuffix(rel, ".sql") {
 			continue
@@ -474,6 +477,9 @@ func (r *FeedWritesReport) scanSQL(g *goTree, add func(pos, kind, why string)) e
 			return fmt.Errorf("treehygiene: %s не читается — его операторы не осмотрены: %w", rel, err)
 		}
 		r.SQLFiles++
+		if slices.ContainsFunc(recognized, func(rec func([]byte) bool) bool { return rec(data) }) {
+			continue
+		}
 		for _, st := range splitSQL(string(data)) {
 			if !feedSuffix.MatchString(st.text) {
 				continue

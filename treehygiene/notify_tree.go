@@ -39,19 +39,22 @@ import (
 
 // Пути пакетов, о которых говорят гейты NTF-1. Объявлены однажды.
 const (
-	corelibModule   = "github.com/PRO-Robotech/corelib"
-	feedPkg         = corelibModule + "/notify/feed"
-	feedSchemaPkg   = feedPkg + "/schema"
-	tablenamePkg    = feedPkg + "/internal/tablename"
-	addressPkg      = corelibModule + "/notify/address"
-	formPkg         = corelibModule + "/notify/form"
-	retentionPkg    = corelibModule + "/retention"
-	notifygenPkg    = corelibModule + "/cmd/notifygen"
-	idnaPkg         = "golang.org/x/net/idna"
-	unsafeImport    = "unsafe"
-	cgoImport       = "C"
-	reflectPkg      = "reflect"
-	generatedMarker = "сгенерированный файл каталога стабов"
+	corelibModule = "github.com/PRO-Robotech/corelib"
+	feedPkg       = corelibModule + "/notify/feed"
+	feedSchemaPkg = feedPkg + "/schema"
+	// resourceEventPkg — тело функции resource-event формы fanout (NTF-3
+	// З10): вставка строки ленты в SQL-половине.
+	resourceEventPkg = feedPkg + "/resourceevent"
+	tablenamePkg     = feedPkg + "/internal/tablename"
+	addressPkg       = corelibModule + "/notify/address"
+	formPkg          = corelibModule + "/notify/form"
+	retentionPkg     = corelibModule + "/retention"
+	notifygenPkg     = corelibModule + "/cmd/notifygen"
+	idnaPkg          = "golang.org/x/net/idna"
+	unsafeImport     = "unsafe"
+	cgoImport        = "C"
+	reflectPkg       = "reflect"
+	generatedMarker  = "сгенерированный файл каталога стабов"
 )
 
 // goFile — не-тестовый отслеживаемый файл пакета, проверенного типами.
