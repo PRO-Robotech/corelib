@@ -76,8 +76,8 @@ func readJournal(root, rel string) (journalDecl, error) {
 	return d, nil
 }
 
-// fanoutTemplate — шаблон resource-event владельца dir: форма fanout,
-// ревизия порождена.
+// fanoutTemplate — шаблон resource-event владельца dir: форма fanout, limits
+// нет, ревизия порождена.
 func fanoutTemplate(cat spec.Catalog, dir string) (spec.Template, error) {
 	for _, t := range cat.Templates {
 		if t.Name != resourceevent.TemplateName {
@@ -86,6 +86,13 @@ func fanoutTemplate(cat spec.Catalog, dir string) (spec.Template, error) {
 		if t.Recipient != spec.RecipientFanout {
 			return spec.Template{}, fmt.Errorf("%s: шаблон %s формы %s, функция базы — только у формы fanout",
 				path.Join(dir, catalogDir), t.Name, t.Recipient)
+		}
+		if len(t.Limits) > 0 {
+			// Строку ленты пишет функция базы на журнале модуля, мимо сторожа
+			// лимита постановки (Go-половина): объявленный limits не исполнялся
+			// бы ничем — отказ на любой области.
+			return spec.Template{}, fmt.Errorf("%s: у шаблона %s формы fanout limits не исполняется — строку ленты пишет функция базы мимо сторожа лимита; снимите limits",
+				path.Join(dir, catalogDir, t.Dir), t.Name)
 		}
 		if !t.HasRevision || t.Revision.Fingerprint != spec.SetFingerprint(spec.SetOf(t)) {
 			return spec.Template{}, fmt.Errorf("%s: ревизия шаблона %s не порождена — выполните make notifications",
