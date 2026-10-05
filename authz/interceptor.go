@@ -115,6 +115,10 @@ type InterceptorOptions struct {
 type Interceptor struct {
 	opts        InterceptorOptions
 	rateLimiter *rateLimiter
+	// unmappedLog ограничивает частоту строки «неразмеченный RPC»
+	// (log_window.go); now — его часы, подменяемые пробой.
+	unmappedLog *logWindow
+	now         func() time.Time
 
 	// counters (lock-free atomic для observability).
 	//
@@ -173,6 +177,8 @@ func NewInterceptor(opts InterceptorOptions) *Interceptor {
 	return &Interceptor{
 		opts:        opts,
 		rateLimiter: newRateLimiter(opts.DenyRateLimitPerSec),
+		unmappedLog: newLogWindow(unmappedLogWindow, unmappedLogMaxKeys),
+		now:         time.Now,
 	}
 }
 
@@ -320,7 +326,17 @@ func (i *Interceptor) authorize(ctx context.Context, fullMethod string, req any)
 	entry, ok := i.lookup(fullMethod)
 	if !ok {
 		atomic.AddUint64(&i.unmappedTotal, 1)
-		logger.Warn("authz_unmapped_rpc")
+		// Строка ограничена по частоте на (метод, причина): первая в окне и
+		// затем счётчик подавленных (log_window.go). Решение и учёт — нет.
+		if emit, suppressed := i.unmappedLog.admit(fullMethod+"\x00"+unmappedReason, i.now()); emit {
+			attrs := []any{slog.String("reason", unmappedReason)}
+			if suppressed > 0 {
+				attrs = append(attrs,
+					slog.Uint64("suppressed", suppressed),
+					slog.Duration("window", unmappedLogWindow))
+			}
+			logger.Warn("authz_unmapped_rpc", attrs...)
+		}
 		return verdict{decision: DecisionUnmapped, err: ErrUnmapped}
 	}
 	if entry.Public {
