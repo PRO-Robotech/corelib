@@ -275,6 +275,15 @@ type BootPosture struct {
 	// импортов; своего словаря написаний у самоотчёта нет. Гейт посадки
 	// оценивает перечень и таблицу по этой строке (NTF1-M09).
 	ServiceIdentity string
+	// Notifications — флаг ленты извещений, который процесс РЕАЛЬНО принял
+	// (kacho#2918): значение, разобранное корнем источника, а не сырое
+	// окружение. Печатается ключом `notifications_enabled`.
+	//
+	// Нулевое значение — [NotificationsNotApplicable]: у служб без ленты
+	// источника (geo, notify) это их настоящая посадка, а не «не объявлено».
+	// Включённость и выключенность выражаются только [NotificationsFlagOf] —
+	// тип закрыт, третьего способа сказать «выключено» нет.
+	Notifications NotificationsFlag
 }
 
 // LogBootPosture пишет BootPosture единственной структурированной строкой.
@@ -294,6 +303,7 @@ func LogBootPosture(logger *slog.Logger, p BootPosture) {
 		"own_rest_internal_tls", p.OwnRESTInternalTLS,
 		"listener_form", p.listenerFormWire(),
 		"service_identity", p.ServiceIdentity,
+		"notifications_enabled", p.Notifications.String(),
 	)
 }
 
@@ -364,4 +374,58 @@ func NewBootPosture(p BootPosture) (BootPosture, error) {
 			"берите обе величины из servicehost.PostureOf")
 	}
 	return p, nil
+}
+
+// Написания ключа `notifications_enabled`. Закрытый набор, строкой, а не bool:
+// состояний три — «ленты нет» отличимо от «лента есть и выключена». Литералы
+// читает гейт посадки разбором строки самоотчёта → ХАРД-КОНТРАКТ. Форма
+// зеркальна InternalMTLS*: третьего идиома «измерение неприменимо» в одной
+// строке не заводится.
+const (
+	// NotificationsOn — лента источника есть, флаг включён.
+	NotificationsOn = "true"
+	// NotificationsOff — лента источника есть, флаг выключен.
+	NotificationsOff = "false"
+	// NotificationsNotApplicable — ленты источника у процесса нет (geo,
+	// notify). Не путать с NotificationsOff.
+	NotificationsNotApplicable = "n/a"
+)
+
+// NotificationsFlag — флаг ленты извещений в самоотчёте посадки. Закрытый
+// тип: включённость строит только [NotificationsFlagOf], нулевое значение —
+// [NotificationsNotApplicable]. Тип свой, а не feed.Enabled, чтобы пакет
+// самоотчёта остался листом графа импортов.
+type NotificationsFlag struct {
+	state notificationsState
+}
+
+type notificationsState uint8
+
+const (
+	notificationsNotApplicable notificationsState = iota
+	notificationsOn
+	notificationsOff
+)
+
+// NotificationsFlagOf — величина для процесса, у которого лента источника
+// ЕСТЬ: остаётся сказать, включён ли флаг. Аргумент — значение, принятое
+// разбором флага (feed.Enabled.On), а не сырое окружение.
+func NotificationsFlagOf(on bool) NotificationsFlag {
+	if on {
+		return NotificationsFlag{state: notificationsOn}
+	}
+	return NotificationsFlag{state: notificationsOff}
+}
+
+// String — написание ключа `notifications_enabled`. Значений вне трёх тип не
+// представляет: поле закрыто, строит его только [NotificationsFlagOf].
+func (f NotificationsFlag) String() string {
+	switch f.state {
+	case notificationsOn:
+		return NotificationsOn
+	case notificationsOff:
+		return NotificationsOff
+	case notificationsNotApplicable:
+	}
+	return NotificationsNotApplicable
 }

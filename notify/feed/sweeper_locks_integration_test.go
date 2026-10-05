@@ -59,17 +59,30 @@ UPDATE probe_notification_window w SET count = w.count - d.n
      = (d.template, d.scope, d.window_seconds, d.key, d.window_start)`
 
 type lockCase struct {
-	limits    []feed.Limit
-	initiator string
-	pause     string // окно, после которого Put спит
+	limits []feed.Limit
+	pause  string    // окно, после которого Put спит: '<scope>/<window_seconds>'
+	clock  time.Time // часы базы пробы; нулевое — настоящие
 }
 
-// lockRace — истёкшая строка с вкладом в окна лимитов; Put той же пары ключей
-// держит первое окно и спит; в паузе стартует возврат вклада при
-// enable_sort = off. Возвращает ошибки Put и возврата и итоговые счётчики окон.
-func lockRace(t *testing.T, c lockCase, refund func(ctx context.Context, db *pgxpool.Pool) error) (putErr, refundErr error, before, after map[string]int) {
+// lockEnv — база одного ключа: истёкшая строка с вкладом в окна лимитов,
+// счётчики окон подняты до 3.
+type lockEnv struct {
+	pool, noSort *pgxpool.Pool
+	f            *fixture
+	d            feed.TemplateDesc
+	v            feed.Values
+	recipient    string
+	before       map[string]int
+}
+
+// lockSetup — истёкшая строка с вкладом в окна лимитов на ключах initiator и
+// recipient; второй пул ходит при enable_sort = off.
+func lockSetup(t *testing.T, c lockCase, initiator, recipient string) *lockEnv {
 	t.Helper()
 	dsn := pgtest.NewDB(t)
+	if !c.clock.IsZero() {
+		pinClock(t, dsn, c.clock)
+	}
 	pool, err := pgxpool.New(context.Background(), dsn)
 	require.NoError(t, err)
 	pgtest.ClosePoolAtEnd(t, pool)
@@ -83,22 +96,53 @@ func lockRace(t *testing.T, c lockCase, refund func(ctx context.Context, db *pgx
 	require.NoError(t, err)
 	pgtest.ClosePoolAtEnd(t, noSort)
 
-	f := fixtureOn(t, pool, true)
-	d := helloDesc(c.limits...)
-	v := hello()
-	v.Initiator = c.initiator
-	require.NoError(t, f.put(t, d, rcpt, v))
+	e := &lockEnv{pool: pool, noSort: noSort, f: fixtureOn(t, pool, true), d: helloDesc(c.limits...), v: hello(), recipient: recipient}
+	e.v.Initiator = initiator
+	require.NoError(t, e.f.put(t, e.d, recipient, e.v))
 	_, err = pool.Exec(context.Background(), `UPDATE probe_notification_outbox SET expires_at = now() - interval '1 second'`)
 	require.NoError(t, err)
 	_, err = pool.Exec(context.Background(), `UPDATE probe_notification_window SET count = 3`)
 	require.NoError(t, err)
-	before = windowCounts(t, pool)
+	e.before = windowCounts(t, pool)
+	return e
+}
 
+// unlockedOrder — порядок, в котором возврат без шага l взял бы строки окон в
+// этой базе сейчас: тот же оператор тем же пулом (enable_sort = off) с
+// RETURNING, транзакция откатывается. Порядок — хеш-порядок группировки d, и
+// он зависит от значений ключа окна, в том числе от window_start, то есть от
+// часа базы: при фиксированных ключах проба то строит условие гонки, то нет.
+func (e *lockEnv) unlockedOrder(t *testing.T) []string {
+	t.Helper()
+	ctx := context.Background()
+	tx, err := e.noSort.Begin(ctx)
+	require.NoError(t, err)
+	defer func() { _ = tx.Rollback(ctx) }()
+	rows, err := tx.Query(ctx, noLockStepRefund+` RETURNING w.scope || '/' || w.window_seconds`, feed.SweepBatch, refundWords())
+	require.NoError(t, err)
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var w string
+		require.NoError(t, rows.Scan(&w))
+		out = append(out, w)
+	}
+	require.NoError(t, rows.Err())
+	require.Len(t, out, len(e.before), "возврат без шага l обязан взять каждое окно истёкшей строки")
+	return out
+}
+
+// race — Put той же пары ключей держит окно c.pause и спит; в паузе стартует
+// возврат вклада пулом enable_sort = off. Возвращает итоговые счётчики окон и
+// ошибки Put и возврата.
+func (e *lockEnv) race(t *testing.T, c lockCase, refund func(ctx context.Context, db *pgxpool.Pool) error) (after map[string]int, putErr, refundErr error) {
+	t.Helper()
+	f := e.f
 	var wg sync.WaitGroup
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		jtx, err := journaltx.Begin(f.ctx, pool, journaltx.NewOptions(true))
+		jtx, err := journaltx.Begin(f.ctx, e.pool, journaltx.NewOptions(true))
 		if err != nil {
 			putErr = err
 			return
@@ -108,23 +152,91 @@ func lockRace(t *testing.T, c lockCase, refund func(ctx context.Context, db *pgx
 			putErr = err
 			return
 		}
-		if putErr = feed.Put(f.ctx, jtx, d, rcpt, v); putErr != nil {
+		if putErr = feed.Put(f.ctx, jtx, e.d, e.recipient, e.v); putErr != nil {
 			return
 		}
 		putErr = jtx.Commit(f.ctx)
 	}()
 	require.Eventually(t, func() bool {
 		var n int
-		_ = pool.QueryRow(context.Background(),
+		_ = e.pool.QueryRow(context.Background(),
 			`SELECT count(*) FROM pg_stat_activity WHERE wait_event = 'PgSleep'`).Scan(&n)
 		return n == 1
 	}, 10*time.Second, 20*time.Millisecond, "Put не дошёл до паузы")
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	refundErr = refund(ctx, noSort)
+	refundErr = refund(ctx, e.noSort)
 	wg.Wait()
-	return putErr, refundErr, before, windowCounts(t, pool)
+	return windowCounts(t, e.pool), putErr, refundErr
+}
+
+// raceOutcome — исход гонки на ключе, где возврат без шага l взял бы окна
+// против порядка Put.
+type raceOutcome struct {
+	initiator         string
+	putErr, refundErr error
+	before, after     map[string]int
+}
+
+// candidateKeys — сколько пар ключей перебирает проба, ища пары, на которых
+// возврат без шага l берёт окна против порядка Put. Доля таких пар в окне
+// часа замерена от 45% до 76% (группировка тех же пяти колонок при
+// enable_sort = off, 200 ключей, окна 11, 12 и 21 часа UTC 2026-10-05,
+// postgres:16.15), так что 32 кандидата без единой нужной пары — ~4e-9.
+const candidateKeys = 32
+
+// adversarialRaces перебирает пары ключей (инициатор, адресат) и проводит
+// гонку только на тех, где возврат без шага l взял бы первым окно, отличное от
+// c.pause, — там, где Put держит одно окно и ждёт второе, а возврат держит
+// второе и ждёт первое. На прочих ключах условие гонки не строится: и
+// инъекция, и настоящий уборщик там зелены при любом порядке, и такой зелёный
+// ничего не судит. Набирает want исходов; ни одного — отказ пробы.
+func adversarialRaces(t *testing.T, c lockCase, refund func(ctx context.Context, db *pgxpool.Pool) error, want int) []raceOutcome {
+	t.Helper()
+	var out []raceOutcome
+	inOrder, shifted := 0, 0
+	seen := 0
+	for i := 0; i < candidateKeys && len(out) < want; i++ {
+		seen++
+		ini := fmt.Sprintf("usr-%02d", i)
+		e := lockSetup(t, c, ini, fmt.Sprintf("u%02d@example.invalid", i))
+		if order := e.unlockedOrder(t); order[0] == c.pause {
+			inOrder++
+			continue
+		}
+		after, putErr, refundErr := e.race(t, c, refund)
+		if len(after) != len(e.before) {
+			// Put гонки попал в следующее окно часов: строк, за которые
+			// спорят, больше нет — прогон ключа не судит ничего.
+			shifted++
+			continue
+		}
+		out = append(out, raceOutcome{initiator: ini, putErr: putErr, refundErr: refundErr, before: e.before, after: after})
+	}
+	t.Logf("ключей осмотрено %d из %d: против порядка Put %d, по порядку Put %d, окно сменилось %d",
+		seen, candidateKeys, len(out)+shifted, inOrder, shifted)
+	require.NotEmpty(t, out, "ни на одном из %d ключей возврат без шага l не берёт окна против порядка Put — условие гонки не построено", seen)
+	return out
+}
+
+// pinClock ставит базе пробы часы, идущие от at: now() без схемы разрешается в
+// probe_clock.now() — at плюс время, прошедшее с постановки. Окно лимита
+// (date_bin от now()) и с ним хеш группы возврата берутся от этих часов, а не
+// от часа прогона. Соединения, открытые после, получают путь поиска базы.
+func pinClock(t *testing.T, dsn string, at time.Time) {
+	t.Helper()
+	conn, err := pgxpool.New(context.Background(), dsn)
+	require.NoError(t, err)
+	defer conn.Close()
+	_, err = conn.Exec(context.Background(), fmt.Sprintf(`
+CREATE SCHEMA probe_clock;
+DO $do$ BEGIN
+  EXECUTE format('CREATE FUNCTION probe_clock.now() RETURNS timestamptz LANGUAGE sql STABLE AS %%L',
+    format('SELECT %%L::timestamptz + (pg_catalog.transaction_timestamp() - %%L::timestamptz)', %s, pg_catalog.now()));
+  EXECUTE format('ALTER DATABASE %%I SET search_path = probe_clock, pg_catalog, public', current_database());
+END $do$;`, "'"+at.UTC().Format(time.RFC3339Nano)+"'"))
+	require.NoError(t, err)
 }
 
 func windowCounts(t *testing.T, pool *pgxpool.Pool) map[string]int {
@@ -169,9 +281,13 @@ func refundWords() []string {
 	return out
 }
 
-// initiators — ключи инициатора; среди них есть дающие хеш-порядок «адресат
-// первым» (М26).
-var initiators = []string{"usr-a", "usr-k", "usr-q", "usr-z", "aaaa", "zzzz"}
+// racesPerProbe — сколько ключей против порядка Put судит каждая проба.
+const racesPerProbe = 3
+
+// pinnedHour — часы базы прогона 37305233709 (окно 11:00 UTC 2026-10-05): при
+// прежних шести фиксированных ключах возврат без шага l брал на всех шести
+// окно инициатора первым, и инъекция не дала 40P01 ни на одном.
+var pinnedHour = time.Date(2026, 10, 5, 11, 30, 0, 0, time.UTC)
 
 func initiatorAndRecipient() []feed.Limit {
 	return []feed.Limit{
@@ -191,54 +307,76 @@ func consistent(t *testing.T, before, after map[string]int) {
 }
 
 // УК83, М26: Put держит окно инициатора и после паузы берёт окно адресата;
-// уборщик стартует в паузе при enable_sort = off. 40P01 нет ни на одном ключе,
-// окна согласованы.
+// уборщик стартует в паузе при enable_sort = off. Ключи — те, где возврат без
+// шага l взял бы окно адресата первым. 40P01 нет ни на одном ключе, окна
+// согласованы.
 func TestUK83_PutAndSweeperTakeWindowsInOneOrder(t *testing.T) {
-	for _, ini := range initiators {
-		t.Run(ini, func(t *testing.T) {
-			putErr, refundErr, before, after := lockRace(t,
-				lockCase{limits: initiatorAndRecipient(), initiator: ini, pause: "initiator/3600"}, feedRefund)
-			require.NoError(t, putErr)
-			require.NoError(t, refundErr)
-			consistent(t, before, after)
-		})
+	putAndSweeperInOneOrder(t, time.Time{})
+}
+
+// УК83 при часах прогона 37305233709.
+func TestUK83_PutAndSweeperTakeWindowsInOneOrderInTheWindowOfRun37305233709(t *testing.T) {
+	putAndSweeperInOneOrder(t, pinnedHour)
+}
+
+func putAndSweeperInOneOrder(t *testing.T, clock time.Time) {
+	t.Helper()
+	c := lockCase{limits: initiatorAndRecipient(), pause: "initiator/3600", clock: clock}
+	for _, r := range adversarialRaces(t, c, feedRefund, racesPerProbe) {
+		require.NoError(t, r.putErr, "ключ %s", r.initiator)
+		require.NoError(t, r.refundErr, "ключ %s", r.initiator)
+		consistent(t, r.before, r.after)
 	}
 }
 
-// УК83 (инъекция): возврат без шага l — 40P01 хотя бы на одном ключе;
-// близнец — строка с вкладом в одно окно: та же инъекция без 40P01.
+// УК83 (инъекция): возврат без шага l — 40P01 на КАЖДОМ ключе, где он берёт
+// окна против порядка Put; близнец — строка с вкладом в одно окно: та же
+// инъекция без 40P01.
 func TestUK83_InjectionRefundWithoutTheLockStepDeadlocks(t *testing.T) {
+	injectionWithoutTheLockStep(t, time.Time{})
+}
+
+// УК83 (инъекция) при часах прогона 37305233709: окно, в котором прежние
+// фиксированные ключи не строили условие гонки.
+func TestUK83_InjectionDeadlocksInTheWindowOfRun37305233709(t *testing.T) {
+	injectionWithoutTheLockStep(t, pinnedHour)
+}
+
+func injectionWithoutTheLockStep(t *testing.T, clock time.Time) {
+	t.Helper()
+	c := lockCase{limits: initiatorAndRecipient(), pause: "initiator/3600", clock: clock}
+	races := adversarialRaces(t, c, injectedRefund, racesPerProbe)
 	deadlocks := 0
-	for _, ini := range initiators {
-		putErr, refundErr, _, _ := lockRace(t,
-			lockCase{limits: initiatorAndRecipient(), initiator: ini, pause: "initiator/3600"}, injectedRefund)
-		if isDeadlock(putErr) || isDeadlock(refundErr) {
+	for _, r := range races {
+		t.Logf("ключ %s: Put %v, возврат %v", r.initiator, r.putErr, r.refundErr)
+		if isDeadlock(r.putErr) || isDeadlock(r.refundErr) {
 			deadlocks++
 		}
-		t.Logf("ключ %s: Put %v, возврат %v", ini, putErr, refundErr)
 	}
-	require.Positive(t, deadlocks, "инъекция без шага l не дала 40P01 ни на одном ключе — проба слепа")
-	t.Logf("40P01 на %d ключах из %d", deadlocks, len(initiators))
+	require.Equal(t, len(races), deadlocks, "инъекция без шага l дала 40P01 на %d ключах из %d, где возврат берёт окна против порядка Put — проба слепа", deadlocks, len(races))
+	t.Logf("40P01 на %d ключах из %d", deadlocks, len(races))
 
-	putErr, refundErr, _, _ := lockRace(t, lockCase{
-		limits: []feed.Limit{{Scope: feed.ScopeRecipient, WindowSeconds: 3600, Max: 100}},
-		pause:  "recipient/3600",
-	}, injectedRefund)
+	one := lockCase{limits: []feed.Limit{{Scope: feed.ScopeRecipient, WindowSeconds: 3600, Max: 100}}, pause: "recipient/3600", clock: clock}
+	e := lockSetup(t, one, "", rcpt)
+	_, putErr, refundErr := e.race(t, one, injectedRefund)
 	require.False(t, isDeadlock(putErr) || isDeadlock(refundErr), "одно окно: %v / %v", putErr, refundErr)
 }
 
 // УК86 (близнец УК83): одна область, две длины окна — 1800 и 86400. Put идёт по
-// возрастанию window_seconds, уборщик — тем же порядком: 40P01 нет.
+// возрастанию window_seconds, уборщик — тем же порядком: 40P01 нет. Ключи
+// адресата — те, где возврат без шага l взял бы окно 86400 первым.
 func TestUK86_OneScopeTwoWindowLengthsDoNotDeadlock(t *testing.T) {
-	putErr, refundErr, before, after := lockRace(t, lockCase{
+	c := lockCase{
 		limits: []feed.Limit{
 			{Scope: feed.ScopeRecipient, WindowSeconds: 1800, Max: 100},
 			{Scope: feed.ScopeRecipient, WindowSeconds: 86400, Max: 100},
 		},
 		pause: "recipient/1800",
-	}, feedRefund)
-	require.NoError(t, putErr)
-	require.NoError(t, refundErr)
-	consistent(t, before, after)
-	require.True(t, strings.Contains(fmt.Sprint(after), "recipient/86400"))
+	}
+	for _, r := range adversarialRaces(t, c, feedRefund, racesPerProbe) {
+		require.NoError(t, r.putErr)
+		require.NoError(t, r.refundErr)
+		consistent(t, r.before, r.after)
+		require.True(t, strings.Contains(fmt.Sprint(r.after), "recipient/86400"))
+	}
 }

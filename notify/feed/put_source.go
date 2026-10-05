@@ -134,27 +134,54 @@ func NewSource(cfg Config) (*Source, error) {
 	if cfg.Metrics == nil {
 		return nil, fmt.Errorf("feed: Config.Metrics модуля %s не задан", cfg.Module)
 	}
-	gaugeVec, err := registerOrReuse(cfg.Metrics, prometheus.NewGaugeVec(prometheus.GaugeOpts{
-		Name: "kacho_notifications_enabled",
-		Help: "Флаг доставки извещений источника: 1 — включён, 0 — выключен.",
-	}, []string{"module"}))
+	g, err := RegisterEnabledGauge(cfg.Metrics, cfg.Module, cfg.Enabled)
 	if err != nil {
-		return nil, fmt.Errorf("feed: метрика флага модуля %s: %w", cfg.Module, err)
+		return nil, err
 	}
 	m, err := newMetrics(cfg.Metrics, cfg.Module)
 	if err != nil {
 		return nil, err
 	}
-	g := gaugeVec.WithLabelValues(cfg.Module)
-	if cfg.Enabled.On() {
-		g.Set(1)
-	} else {
-		g.Set(0)
-	}
 	return &Source{
 		module: cfg.Module, service: cfg.Service, enabled: cfg.Enabled.On(),
 		signal: cfg.Signal, sealer: cfg.Sealer, gauge: g, metrics: m,
 	}, nil
+}
+
+// RegisterEnabledGauge регистрирует в reg серию kacho_notifications_enabled
+// {module} (NTF1-N09) и ставит её по разобранному флагу en: 1 — включён, 0 —
+// выключен. Серия заводится и при флаге 0: «выключено» отличимо от «серии
+// нет». Повторная регистрация семейства в том же реестре (второй модуль,
+// второй вызов) берёт уже зарегистрированное.
+//
+// Отдельная функция, а не только часть NewSource: корень службы ставит серию
+// тем же путём, что источник, и написание метрики живёт в одном месте.
+// Неразобранный флаг (нулевой Enabled), имя модуля не DNS-метка и отсутствующий
+// реестр — отказ; серия при отказе не заводится.
+func RegisterEnabledGauge(reg prometheus.Registerer, module string, en Enabled) (prometheus.Gauge, error) {
+	if !moduleForm.MatchString(module) {
+		return nil, fmt.Errorf("feed: метрика флага: имя модуля %q не DNS-метка", module)
+	}
+	if !en.Set() {
+		return nil, fmt.Errorf("feed: метрика флага модуля %s: флаг не разобран ParseEnabled", module)
+	}
+	if reg == nil {
+		return nil, fmt.Errorf("feed: метрика флага модуля %s: реестр не задан", module)
+	}
+	gaugeVec, err := registerOrReuse(reg, prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Name: "kacho_notifications_enabled",
+		Help: "Флаг доставки извещений источника: 1 — включён, 0 — выключен.",
+	}, []string{"module"}))
+	if err != nil {
+		return nil, fmt.Errorf("feed: метрика флага модуля %s: %w", module, err)
+	}
+	g := gaugeVec.WithLabelValues(module)
+	if en.On() {
+		g.Set(1)
+	} else {
+		g.Set(0)
+	}
+	return g, nil
 }
 
 func registerOrReuse[C prometheus.Collector](reg prometheus.Registerer, c C) (C, error) {
