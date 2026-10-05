@@ -72,8 +72,16 @@ func buildAdmission(spec servicecontract.Spec) (admission, error) {
 		out admission
 		err error
 	)
-	if out.public, err = grpcsrv.NewAdmission("public", limits.Public, grpcsrv.PrincipalSubject); err != nil {
-		return admission{}, fmt.Errorf("servicehost: ограничитель допуска публичного слушателя: %w", err)
+	// Публичная половина собирается только у формы, у которой публичный
+	// слушатель есть. У формы «только внутренний слушатель» её объявление
+	// отвергает конструктор дескриптора (О16), и ограничитель слушателя, которого
+	// нет, был бы строкой «взведён» в журнале о том, чего не существует.
+	switch spec.HostForm {
+	case servicecontract.HostInternalOnly:
+	case servicecontract.HostPair, servicecontract.HostNoGRPC:
+		if out.public, err = grpcsrv.NewAdmission("public", limits.Public, grpcsrv.PrincipalSubject); err != nil {
+			return admission{}, fmt.Errorf("servicehost: ограничитель допуска публичного слушателя: %w", err)
+		}
 	}
 	if out.internal, err = grpcsrv.NewAdmission("internal", limits.Internal, grpcsrv.CertIdentitySubject); err != nil {
 		return admission{}, fmt.Errorf("servicehost: ограничитель допуска внутреннего слушателя: %w", err)
@@ -101,6 +109,13 @@ func guardedBy(a *grpcsrv.Admission, reg grpc.ServiceRegistrar) grpc.ServiceRegi
 // обёртку, поднимается и отчитывается ровно так же.
 func (a admission) handOut(publicSrv, internalSrv grpc.ServiceRegistrar, public, internal Registrar) {
 	public(guardedBy(a.public, publicSrv))
+	internal(guardedBy(a.internal, internalSrv))
+}
+
+// handOutInternal отдаёт регистратору ЕДИНСТВЕННЫЙ (внутренний) слушатель формы
+// «только внутренний слушатель» — под тем же ограничителем, что внутренняя
+// половина пары.
+func (a admission) handOutInternal(internalSrv grpc.ServiceRegistrar, internal Registrar) {
 	internal(guardedBy(a.internal, internalSrv))
 }
 

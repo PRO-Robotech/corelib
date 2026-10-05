@@ -2,7 +2,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Package servicehost — НОСИТЕЛЬ входящего пути: одна точка входа, поднимающая
-// оба слушателя сервиса с одним и тем же контуром работы с владельцем прав.
+// слушатели сервиса (пару либо один внутренний — по форме хоста дескриптора) с
+// одним и тем же контуром работы с владельцем прав.
 //
 // # Что здесь механизм, а что правило
 //
@@ -57,11 +58,14 @@ import (
 // побочный эффект во втором вызове проявился бы как удвоение фоновой работы.
 type Registrar func(grpc.ServiceRegistrar)
 
-// Serve поднимает ОБА слушателя и обслуживает их до отмены ctx.
+// Serve поднимает слушатели формы хоста дескриптора и обслуживает их до отмены
+// ctx.
 //
-// Носитель поднимает только форму хоста «пара слушателей»
-// ([servicecontract.HostPair]); дескриптору формы
-// [servicecontract.HostNoGRPC] он отказывает — gRPC-слушателей у такого
+// Носитель поднимает две формы: пару слушателей ([servicecontract.HostPair]) и
+// один внутренний слушатель ([servicecontract.HostInternalOnly]). У второй
+// публичного слушателя нет по построению, и публичный регистратор обязан быть
+// nil — иначе отказ старта, регистратор не зовётся. Дескриптору формы
+// [servicecontract.HostNoGRPC] носитель отказывает — gRPC-слушателей у такого
 // процесса нет, и поднимать нечего.
 //
 // Порядок, и он несущий: собрать серверы → зарегистрировать → снять СЛУЖИМЫЙ
@@ -82,6 +86,8 @@ func Serve(ctx context.Context, d servicecontract.Descriptor, public, internal R
 	switch form := d.HostForm(); form {
 	case servicecontract.HostPair:
 		return servePair(ctx, d, public, internal)
+	case servicecontract.HostInternalOnly:
+		return serveInternalOnly(ctx, d, public, internal)
 	case servicecontract.HostNoGRPC:
 		return fmt.Errorf("servicehost: %s — форма хоста %s: gRPC-слушателей у процесса нет, "+
 			"поднимать носителю нечего. Процесс без gRPC-слушателей поднимает только диагностическую "+
@@ -105,7 +111,6 @@ func servePair(ctx context.Context, d servicecontract.Descriptor, public, intern
 			"либо не зовите носителя", because)
 	}
 	spec := d.Spec()
-	log := spec.Logger
 
 	// ── звено решения о доступе: слот, заполняемый ПОСЛЕ отказов старта ──────
 	var slot decisionSlot
@@ -125,10 +130,76 @@ func servePair(ctx context.Context, d servicecontract.Descriptor, public, intern
 		return admErr
 	}
 	because, _ := spec.Admission.NotApplicableBecause()
-	adm.arm(log, spec.Service, because)
+	adm.arm(spec.Logger, spec.Service, because)
 	adm.handOut(publicSrv, internalSrv, public, internal)
 
-	served := mergeServed(servedOf(publicSrv), servedOf(internalSrv))
+	return judgeAndServe(ctx, d, &slot, adm, []*grpc.Server{publicSrv, internalSrv},
+		func(ctx context.Context) error { return listenAndServe(ctx, spec, publicSrv, internalSrv) })
+}
+
+// serveInternalOnly поднимает ОДИН внутренний слушатель принятого дескриптора
+// формы [servicecontract.HostInternalOnly].
+//
+// Публичный `*grpc.Server` в этой ветке не создаётся вовсе: сервер собирается
+// той же функцией [serverBuilder.buildServer], что внутренняя половина пары, с
+// той же цепочкой, — и только он. Поэтому у этой ветки нет ни одной проверки
+// «публичного сервера нет»: функций, которые бы его ждали, она не зовёт.
+//
+// Отказы старта О2–О11 судят служимый набор этого сервера так же, как в паре:
+// путь после регистрации у обеих форм один ([judgeAndServe]).
+func serveInternalOnly(ctx context.Context, d servicecontract.Descriptor, public, internal Registrar) error {
+	spec := d.Spec()
+	// Публичный регистратор у формы без публичного слушателя — второе
+	// утверждение о форме: процесс принёс службы, которые выставил бы наружу,
+	// а слушателя для них нет. Отказ стоит ДО сборки сервера, и регистратор не
+	// зовётся: его побочный эффект не должен случиться в процессе, который не
+	// поднимется.
+	if public != nil {
+		return fmt.Errorf("servicehost: %s — форма хоста %s: публичного слушателя у процесса нет, а "+
+			"публичный регистратор принесён. Службы, которые он регистрирует, выставлялись бы наружу; "+
+			"либо передайте nil, либо объявите форму пары слушателей", spec.Service, d.HostForm())
+	}
+	if internal == nil {
+		return fmt.Errorf("servicehost: %s — форма хоста %s: регистратор единственного (внутреннего) "+
+			"слушателя не принесён — поднимать слушатель без служимого незачем", spec.Service, d.HostForm())
+	}
+
+	var slot decisionSlot
+	b, err := newServerBuilder(spec, &slot)
+	if err != nil {
+		return err
+	}
+	internalSrv := b.buildServer(spec.InternalCreds, grpcsrv.ListenerInternal)
+
+	adm, admErr := buildAdmission(spec)
+	if admErr != nil {
+		return admErr
+	}
+	because, _ := spec.Admission.NotApplicableBecause()
+	adm.arm(spec.Logger, spec.Service, because)
+	adm.handOutInternal(internalSrv, internal)
+
+	return judgeAndServe(ctx, d, &slot, adm, []*grpc.Server{internalSrv},
+		func(ctx context.Context) error { return listenAndServeInternal(ctx, spec, internalSrv) })
+}
+
+// judgeAndServe — путь носителя ПОСЛЕ регистрации, один на обе формы: снять
+// служимый набор у самих серверов → вывести каталог и карту прав → прогнать
+// отказы старта → поставить звено решения → и только потом слушать.
+//
+// Функция одна затем, чтобы «форма судится как пара» держалось построением:
+// второй копии этой последовательности, которая могла бы однажды пропустить
+// отказ у одной из форм, нет.
+func judgeAndServe(ctx context.Context, d servicecontract.Descriptor, slot *decisionSlot, adm admission,
+	servers []*grpc.Server, listen func(context.Context) error) error {
+	spec := d.Spec()
+	log := spec.Logger
+
+	sets := make([]servedSet, 0, len(servers))
+	for _, srv := range servers {
+		sets = append(sets, servedOf(srv))
+	}
+	served := mergeServed(sets...)
 	domains, err := domainsOf(served)
 	if err != nil {
 		return err
@@ -149,6 +220,7 @@ func servePair(ctx context.Context, d servicecontract.Descriptor, public, intern
 	log.Info("servicehost: start refusals passed",
 		"service", string(spec.Service),
 		"mode", spec.Mode.String(),
+		"host_form", d.HostForm().String(),
 		"census", c.String(),
 		"domains", domains)
 
@@ -173,7 +245,7 @@ func servePair(ctx context.Context, d servicecontract.Descriptor, public, intern
 		adm.report(reportCtx, log)
 	}()
 
-	serveErr := listenAndServe(ctx, spec, publicSrv, internalSrv)
+	serveErr := listen(ctx)
 	stopReport()
 	<-reportDone
 	return serveErr
@@ -214,7 +286,30 @@ func rightsMap(d servicecontract.Descriptor, domains []string) (authz.RPCMap, er
 // Наблюдаемая половина того же свойства держится пробой
 // `TestBothListenersRefuseIdenticallyOnTheWire`: она поднимает ОБА сервера,
 // собранных этой функцией, и сверяет, что вызывающий видит от них одно и то же.
+// Для формы «только внутренний слушатель» — пробой
+// `TestBothListenersRefuseIdenticallyOnTheWire_HostInternalOnly`: её сервер
+// собирает та же [serverBuilder.buildServer].
 func serverPair(spec servicecontract.Spec, slot *decisionSlot) (public, internal *grpc.Server, err error) {
+	b, err := newServerBuilder(spec, slot)
+	if err != nil {
+		return nil, nil, err
+	}
+	return b.buildServer(spec.PublicCreds, grpcsrv.ListenerPublic),
+		b.buildServer(spec.InternalCreds, grpcsrv.ListenerInternal), nil
+}
+
+// serverBuilder — сборщик сервера ОДНОГО слушателя: всё, что цепочке нужно
+// одним экземпляром на процесс (дескриптор, слот звена решения, измеритель
+// задержки, счётчик исходов личности).
+type serverBuilder struct {
+	spec    servicecontract.Spec
+	slot    *decisionSlot
+	lat     *grpcsrv.ServerLatency
+	arrival *grpcsrv.IdentityArrival
+}
+
+// newServerBuilder заводит измерители процесса в реестре дескриптора.
+func newServerBuilder(spec servicecontract.Spec, slot *decisionSlot) (serverBuilder, error) {
 	// Измеритель задержки — ОДИН на процесс, полос у него две.
 	//
 	// Один: серии заводятся в реестре, и второй измеритель над тем же реестром
@@ -222,14 +317,14 @@ func serverPair(spec servicecontract.Spec, slot *decisionSlot) (public, internal
 	// метод служится обоими слушателями, и слитый ряд — среднее двух разных
 	// величин (см. [grpcsrv.Listener]).
 	if spec.Metrics == nil {
-		return nil, nil, fmt.Errorf("servicehost: %s не поднимается — реестра метрик нет, "+
+		return serverBuilder{}, fmt.Errorf("servicehost: %s не поднимается — реестра метрик нет, "+
 			"а слушатель без измерителя задержки служил бы молча. Дескриптор с таким полем не "+
 			"проходит конструктор (servicecontract.New, О13); сюда он попал в обход него",
 			spec.Service)
 	}
 	lat, lerr := grpcsrv.NewServerLatency(spec.Metrics)
 	if lerr != nil {
-		return nil, nil, fmt.Errorf("servicehost: %s не поднимается — измеритель задержки не "+
+		return serverBuilder{}, fmt.Errorf("servicehost: %s не поднимается — измеритель задержки не "+
 			"заводится в переданном реестре: %w. Так выглядит несогласованное объявление серии "+
 			"(то же имя с другой размерностью); поднять процесс значило бы отдать ему "+
 			"диагностическую поверхность без семейства, которого на ней не будет никогда",
@@ -241,21 +336,25 @@ func serverPair(spec servicecontract.Spec, slot *decisionSlot) (public, internal
 	// «личность объявлена и не приехала» неотличимо от роста безымянных вызовов.
 	arrival, aerr := grpcsrv.NewIdentityArrival(spec.Metrics)
 	if aerr != nil {
-		return nil, nil, fmt.Errorf("servicehost: %s не поднимается — счётчик исходов личности "+
+		return serverBuilder{}, fmt.Errorf("servicehost: %s не поднимается — счётчик исходов личности "+
 			"не заводится в переданном реестре: %w. Так выглядит несогласованное объявление серии "+
 			"(то же имя с другой размерностью); поднять процесс значило бы отдать ему полосу, "+
 			"на которой рассинхрон написания ключей неотличим от законной безымянности",
 			spec.Service, aerr)
 	}
-	build := func(creds credentials.TransportCredentials, on grpcsrv.Listener) *grpc.Server {
-		return grpcsrv.NewServer(
-			grpc.Creds(creds),
-			grpc.ChainUnaryInterceptor(unaryChain(spec, slot, lat, arrival, on)...),
-			grpc.ChainStreamInterceptor(streamChain(spec, slot, lat, arrival, on)...),
-		)
-	}
-	return build(spec.PublicCreds, grpcsrv.ListenerPublic),
-		build(spec.InternalCreds, grpcsrv.ListenerInternal), nil
+	return serverBuilder{spec: spec, slot: slot, lat: lat, arrival: arrival}, nil
+}
+
+// buildServer собирает сервер одного слушателя — ЕДИНСТВЕННОЕ место сборки
+// сервера носителя. Пара зовёт её дважды, форма «только внутренний слушатель» —
+// один раз с [grpcsrv.ListenerInternal]; цепочки [unaryChain] и [streamChain] у
+// всех вызовов одни, и отличается только полоса измерителя задержки.
+func (b serverBuilder) buildServer(creds credentials.TransportCredentials, on grpcsrv.Listener) *grpc.Server {
+	return grpcsrv.NewServer(
+		grpc.Creds(creds),
+		grpc.ChainUnaryInterceptor(unaryChain(b.spec, b.slot, b.lat, b.arrival, on)...),
+		grpc.ChainStreamInterceptor(streamChain(b.spec, b.slot, b.lat, b.arrival, on)...),
+	)
 }
 
 // decisionLink строит звено решения о доступе — ОДНО на семь сервисов.
@@ -393,6 +492,41 @@ func listenAndServe(ctx context.Context, spec servicecontract.Spec, publicSrv, i
 	cancel()
 	<-stopped
 	return serveResult(publicErr, <-internalErr)
+}
+
+// listenAndServeInternal поднимает ЕДИНСТВЕННЫЙ (внутренний) слушатель формы
+// «только внутренний слушатель» и гасит его по отмене ctx.
+//
+// Падение слушателя — исход [Serve] с адресом слушателя, а не ноль: процесс,
+// чей единственный вход перестал служить, обязан завершиться ненулевым кодом,
+// иначе оркестратор его не перезапустит. Остановка по нашей же просьбе
+// (ctx отменён → GracefulStop) ошибкой не является ([gracefulNil]).
+func listenAndServeInternal(ctx context.Context, spec servicecontract.Spec, internalSrv *grpc.Server) error {
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	internalLis, err := net.Listen("tcp", spec.InternalAddr)
+	if err != nil {
+		return fmt.Errorf("servicehost: внутренний слушатель %s: %w", spec.InternalAddr, err)
+	}
+	spec.Logger.Info("servicehost: listening",
+		"service", string(spec.Service),
+		"internal", spec.InternalAddr)
+
+	stopped := make(chan struct{})
+	go func() {
+		defer close(stopped)
+		<-ctx.Done()
+		internalSrv.GracefulStop()
+	}()
+
+	serr := internalSrv.Serve(internalLis)
+	cancel()
+	<-stopped
+	if serr = gracefulNil(serr); serr != nil {
+		return fmt.Errorf("servicehost: внутренний слушатель %s: %w", spec.InternalAddr, serr)
+	}
+	return nil
 }
 
 // serveResult сводит исход процесса из ошибок ДВУХ слушателей.
