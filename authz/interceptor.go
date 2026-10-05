@@ -15,6 +15,7 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
+	"github.com/PRO-Robotech/corelib/grpcsrv"
 	"github.com/PRO-Robotech/corelib/operations"
 )
 
@@ -114,6 +115,10 @@ type InterceptorOptions struct {
 type Interceptor struct {
 	opts        InterceptorOptions
 	rateLimiter *rateLimiter
+	// unmappedLog ограничивает частоту строки «неразмеченный RPC»
+	// (log_window.go); now — его часы, подменяемые пробой.
+	unmappedLog *logWindow
+	now         func() time.Time
 
 	// counters (lock-free atomic для observability).
 	//
@@ -172,6 +177,8 @@ func NewInterceptor(opts InterceptorOptions) *Interceptor {
 	return &Interceptor{
 		opts:        opts,
 		rateLimiter: newRateLimiter(opts.DenyRateLimitPerSec),
+		unmappedLog: newLogWindow(unmappedLogWindow, unmappedLogMaxKeys),
+		now:         time.Now,
 	}
 }
 
@@ -316,10 +323,20 @@ func (i *Interceptor) authorize(ctx context.Context, fullMethod string, req any)
 	// RPCMap (Relation для Check либо Public=true): per-RPC authz-Check
 	// обязателен на ОБОИХ listener'ах (public и :9091), а молчаливое исключение
 	// по имени "Internal*" было fail-open вектором на internal-периметре.
-	entry, ok := i.opts.Map.Lookup(fullMethod)
+	entry, ok := i.lookup(fullMethod)
 	if !ok {
 		atomic.AddUint64(&i.unmappedTotal, 1)
-		logger.Warn("authz_unmapped_rpc")
+		// Строка ограничена по частоте на (метод, причина): первая в окне и
+		// затем счётчик подавленных (log_window.go). Решение и учёт — нет.
+		if emit, suppressed := i.unmappedLog.admit(fullMethod+"\x00"+unmappedReason, i.now()); emit {
+			attrs := []any{slog.String("reason", unmappedReason)}
+			if suppressed > 0 {
+				attrs = append(attrs,
+					slog.Uint64("suppressed", suppressed),
+					slog.Duration("window", unmappedLogWindow))
+			}
+			logger.Warn("authz_unmapped_rpc", attrs...)
+		}
 		return verdict{decision: DecisionUnmapped, err: ErrUnmapped}
 	}
 	if entry.Public {
@@ -502,6 +519,24 @@ func (i *Interceptor) authorize(ctx context.Context, fullMethod string, req any)
 	i.opts.Cache.SetAllowed(subjectFGA, entry.Relation, objectType, objectID)
 	atomic.AddUint64(&i.allowedTotal, 1)
 	return verdict{decision: DecisionAllowed, err: nil}
+}
+
+// lookup находит запись метода: сначала в карте сервиса, затем среди методов,
+// которые фундамент регистрирует серверу сам и сам объявляет публичными
+// (`grpcsrv.PublicPlatformMethods`).
+//
+// Карта побеждает: если контракт однажды объявит метод с тем же именем,
+// действует его запись, а не освобождение фундамента, — иначе аннотация молча
+// перестала бы действовать. Освобождение именное, по полному имени метода;
+// «всё, чего нет в карте» по-прежнему отвергается.
+func (i *Interceptor) lookup(fullMethod string) (RPCEntry, bool) {
+	if entry, ok := i.opts.Map.Lookup(fullMethod); ok {
+		return entry, true
+	}
+	if grpcsrv.IsPublicPlatformMethod(fullMethod) {
+		return RPCEntry{Public: true}, true
+	}
+	return RPCEntry{}, false
 }
 
 // Metrics — снимок величин звена решения о доступе.
