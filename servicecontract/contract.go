@@ -472,13 +472,23 @@ type Spec struct {
 	OwnContour string
 
 	// HostForm — форма хоста: какие gRPC-слушатели процесс поднимает. Нулевое
-	// значение — пара ([HostPair]); [HostNoGRPC] — gRPC-слушателей нет. Разбор
+	// значение — пара ([HostPair]); [HostNoGRPC] — gRPC-слушателей нет;
+	// [HostInternalOnly] — носитель поднимает один внутренний слушатель. Разбор
 	// решения — у самого типа ([HostForm]).
 	//
 	// С [Spec.OwnContour] ось не пересекается: собственный контур — это контур
 	// ПАРЫ слушателей, собранный самим процессом, поэтому при [HostNoGRPC] он
-	// отвергается (О15), как и адреса, транспорты слушателей и проводка носителя.
+	// отвергается (О15), как и адреса, транспорты слушателей и проводка носителя,
+	// а при [HostInternalOnly] — потому что контур этой формы поднимает носитель.
 	HostForm HostForm
+	// HostFormReason — ПРИЧИНА формы [HostInternalOnly]: почему у процесса нет
+	// публичного входа. Обязательна при этой форме и запрещена при прочих.
+	//
+	// Обязательна по той же причине, по какой её требует [NotApplicable]: снятие
+	// публичного слушателя без причины неотличимо от забывчивости. Запрещена при
+	// прочих формах, потому что причина, которую ничто не читает, — второе
+	// утверждение о форме рядом с осью, и верно из них одно.
+	HostFormReason string
 
 	// ── L1: кто вправе говорить за пользователя ──────────────────────────────
 
@@ -927,8 +937,9 @@ func (d Descriptor) OwnContour() string {
 // О1 (круг), О6 (ребро), О7 (окно и бюджет), О8 (боевая посадка),
 // О10 (незаявленная ось), О12 (кеш вердиктов), О13 (задержка вызова),
 // О14 (проводка носителя у процесса с собственным контуром), О15 (слушатель,
-// контур или проводка у процесса без gRPC-слушателей) и отказ значения формы
-// хоста вне перечня оси. Отказы, которым
+// контур или проводка у процесса без gRPC-слушателей), О16 (поле публичного
+// слушателя или собственный контур у формы «только внутренний слушатель»),
+// причина формы и отказ значения формы хоста вне перечня оси. Отказы, которым
 // нужен служимый набор RPC и выведенный из него каталог, живут в
 // `pkg/servicehost`: О2, О3, О4, О5, О9.
 func New(s Spec) (Descriptor, error) {
@@ -959,7 +970,10 @@ func New(s Spec) (Descriptor, error) {
 		checkPairWiring(&f, s)
 	case HostNoGRPC:
 		checkNoGRPCCarriesNoListener(&f, s) // О15
+	case HostInternalOnly:
+		checkInternalOnlyWiring(&f, s) // О16
 	}
+	checkHostFormReason(&f, s)
 	if !s.HostForm.known() {
 		f.add("HostForm", fmt.Sprintf("значение %d вне перечня оси формы хоста: такую форму не разбирает "+
 			"ни конструктор, ни носитель, ни самоотчёт. Объявите одно из значений servicecontract.Host*", uint8(s.HostForm)))
@@ -981,29 +995,89 @@ func New(s Spec) (Descriptor, error) {
 // поднимает носитель, и НЕ приносит процесс с собственным контуром (О14).
 func checkPairWiring(f *findings, s Spec) {
 	if s.OwnContour == "" {
-		if s.Authz == authzUnset {
-			f.add("Authz", "источник решения о доступе не назван (servicecontract.AuthzViaIAM либо AuthzSelf)")
-		}
 		if s.PublicAddr == "" {
 			f.add("PublicAddr", "адрес публичного слушателя не задан")
-		}
-		if s.InternalAddr == "" {
-			f.add("InternalAddr", "адрес внутреннего слушателя не задан")
 		}
 		if s.PublicCreds == nil {
 			f.add("PublicCreds", "транспорт публичного слушателя не задан")
 		}
-		if s.InternalCreds == nil {
-			f.add("InternalCreds", "транспорт внутреннего слушателя не задан")
-		}
-		checkPeerEdge(f, s)             // О6
-		checkWindows(f, s)              // О7
-		checkVerdictCacheObserved(f, s) // О12
-		checkLatencyObserved(f, s)      // О13
-		checkAxes(f, s)                 // О10 + оси, судимые соседками
+		checkCarriedContour(f, s)
 		return
 	}
 	checkOwnContourCarriesNoCarriage(f, s) // О14
+}
+
+// checkInternalOnlyWiring — О16: проводка формы «только внутренний слушатель».
+//
+// Контур этой формы поднимает носитель, поэтому вся его проводка судится ТЕМ ЖЕ
+// перечнем, что у пары ([checkCarriedContour]): у единственного слушателя те же
+// звенья, что у внутренней половины пары, и освобождать его от судейства было
+// бы допущением «internal = доверенный». Сверх пары отвергается всё, что
+// описывает публичный слушатель: процесс, объявивший «публичного входа нет» и
+// принёсший его адрес, транспорт или величины потолка, говорит о себе две вещи,
+// и верна из них одна. Собственный контур отвергается потому, что контур этой
+// формы поднимает носитель, — иначе форма стала бы обходом О14.
+func checkInternalOnlyWiring(f *findings, s Spec) {
+	why := "форма хоста " + HostInternalOnly.String() + " (публичного слушателя нет), а поле описывает " +
+		"публичный слушатель: объявлять его не о чем, и рядом с формой оно было бы вторым утверждением " +
+		"о том же предмете, из которых верно одно. Либо снимите поле, либо объявите форму пары слушателей"
+	if s.PublicAddr != "" {
+		f.add("PublicAddr", why)
+	}
+	if s.PublicCreds != nil {
+		f.add("PublicCreds", why)
+	}
+	if adm, ok := s.Admission.Get(); ok && !adm.Public.IsBlank() {
+		f.add("Admission", "публичная половина потолка на вызывающего объявлена — "+why)
+	}
+	if s.OwnContour != "" {
+		f.add("OwnContour", "форма хоста "+HostInternalOnly.String()+" — это контур, который поднимает "+
+			"НОСИТЕЛЬ, а собственный контур ("+quote(s.OwnContour)+") объявляет обратное. Либо снимите "+
+			"OwnContour, либо объявите форму пары слушателей")
+	}
+	checkCarriedContour(f, s)
+}
+
+// checkCarriedContour — проводка контура, который поднимает носитель, без полей
+// публичного слушателя: их требует только форма пары ([checkPairWiring]).
+// Перечень один на обе формы носителя, поэтому «форма судится как пара»
+// держится построением, а не согласием двух списков.
+func checkCarriedContour(f *findings, s Spec) {
+	if s.Authz == authzUnset {
+		f.add("Authz", "источник решения о доступе не назван (servicecontract.AuthzViaIAM либо AuthzSelf)")
+	}
+	if s.InternalAddr == "" {
+		f.add("InternalAddr", "адрес внутреннего слушателя не задан")
+	}
+	if s.InternalCreds == nil {
+		f.add("InternalCreds", "транспорт внутреннего слушателя не задан")
+	}
+	checkPeerEdge(f, s)             // О6
+	checkWindows(f, s)              // О7
+	checkVerdictCacheObserved(f, s) // О12
+	checkLatencyObserved(f, s)      // О13
+	checkAxes(f, s)                 // О10 + оси, судимые соседками
+}
+
+// checkHostFormReason — причина формы: обязательна у [HostInternalOnly] и
+// запрещена у прочих (см. [Spec.HostFormReason]). Разбор — исчерпывающий switch
+// без default: значение вне перечня отвергает [New] отдельно.
+func checkHostFormReason(f *findings, s Spec) {
+	given := strings.TrimSpace(s.HostFormReason) != ""
+	switch s.HostForm {
+	case HostInternalOnly:
+		if !given {
+			f.add("HostFormReason", "форма хоста "+HostInternalOnly.String()+" объявлена без причины: "+
+				"снятие публичного слушателя без причины неотличимо от забывчивости. Назовите, почему у "+
+				"процесса нет публичного входа")
+		}
+	case HostPair, HostNoGRPC:
+		if given {
+			f.add("HostFormReason", "причина формы ("+quote(s.HostFormReason)+") принесена формой "+
+				s.HostForm.String()+", которой она не нужна: причину читает только форма "+
+				HostInternalOnly.String()+", и здесь она была бы вторым утверждением о форме рядом с осью")
+		}
+	}
 }
 
 // carrierRaisesContour — поднимает ли контур входящего пути этого процесса
@@ -1018,6 +1092,10 @@ func (s Spec) carrierRaisesContour() bool {
 		return s.OwnContour == ""
 	case HostNoGRPC:
 		return false
+	case HostInternalOnly:
+		// Собственный контур при этой форме отвергает О16, а единственный
+		// слушатель несёт те же звенья извлечения личности, что пара.
+		return true
 	}
 	return true
 }
@@ -1488,13 +1566,7 @@ func checkAxes(f *findings, s Spec) {
 	// для второго, — это половина процесса без потолка при записи «ограничитель
 	// взведён» в журнале.
 	if adm, ok := s.Admission.Get(); ok {
-		for _, l := range []struct {
-			name  string
-			value grpcsrv.AdmissionLimits
-		}{
-			{"public", adm.Public},
-			{"internal", adm.Internal},
-		} {
+		for _, l := range admissionHalves(s.HostForm, adm) {
 			switch {
 			case l.value.IsBlank():
 				f.add("Admission", fmt.Sprintf("величины слушателя %s не объявлены: ось несёт значение, "+
@@ -1565,6 +1637,27 @@ func checkAxes(f *findings, s Spec) {
 // axisHint — единый текст для незаявленной оси. Отказ обязан сказать не только
 // ЧТО не заполнено, но и ЧЕМ его закрыть: иначе автор закроет ось первым
 // значением, которое соберётся.
+// admissionHalf — половина потолка одного слушателя.
+type admissionHalf struct {
+	name  string
+	value grpcsrv.AdmissionLimits
+}
+
+// admissionHalves — половины потолка, которые судятся у формы хоста: у пары —
+// обе, у формы «только внутренний слушатель» — внутренняя. Публичную половину
+// этой формы судит О16 в обратную сторону: объявленная — отказ. Прочие формы
+// оси потолка не несут (О14, О15), и сюда их значение не доезжает судимым.
+func admissionHalves(form HostForm, adm Admission) []admissionHalf {
+	switch form {
+	case HostInternalOnly:
+		return []admissionHalf{{"internal", adm.Internal}}
+	case HostPair, HostNoGRPC:
+		return []admissionHalf{{"public", adm.Public}, {"internal", adm.Internal}}
+	}
+	// Значение вне перечня [New] отвергает отдельно; здесь — строгая сторона.
+	return []admissionHalf{{"public", adm.Public}, {"internal", adm.Internal}}
+}
+
 func axisHint(what string) string {
 	return "ось не объявлена (" + what + "): назовите значение через servicecontract.Value(...) " +
 		"либо объявите servicecontract.NotApplicable(\"почему предмета нет\") — с НЕПУСТОЙ причиной, " +

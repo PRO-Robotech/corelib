@@ -3,7 +3,10 @@
 
 package observability
 
-import "log/slog"
+import (
+	"errors"
+	"log/slog"
+)
 
 // BootPostureMsg — сообщение единственной boot-строки, в которой процесс
 // САМ отчитывается о posture, с которой он реально стартовал.
@@ -248,18 +251,22 @@ type BootPosture struct {
 	// двоих скрывало бы ровно тот случай, ради которого ось заведена, — один
 	// фронт под транспортом, другой открытым текстом.
 	OwnRESTInternalTLS string
-	// HostForm — ФОРМА ХОСТА принятого дескриптора процесса: какие
-	// gRPC-слушатели он поднимает. Заполняется `d.HostForm().String()` того
-	// дескриптора, по которому процесс стартует (corelib `servicecontract`), —
-	// своего словаря написаний у самоотчёта нет, второго литерала не заводится.
-	// Строка, а не тип оси, чтобы пакет самоотчёта остался листом графа импортов.
+	// ListenerForm — ФОРМА СЛУШАТЕЛЯ, которую процесс поднимает: пара (нулевое
+	// значение) либо только внутренний слушатель. Печатается ключом
+	// `listener_form`.
 	//
-	// Значение «gRPC-слушателей нет» — это и есть «процесс не служит ни одного
-	// сервиса» (производное `Descriptor.NoServedServices`): отдельного ключа под
-	// него нет, иначе в одной строке было бы два утверждения об одном предмете.
-	// Гейт посадки оценивает значение оси; пустая строка не совпадает ни с одним
-	// написанием и судится отказом наравне с отсутствием ключа.
-	HostForm string
+	// Корень формы литералом не присваивает: обе величины — эту и
+	// [BootPosture.NoServedServices] — он берёт ОДНОЙ функцией corelib
+	// `servicehost.PostureOf` из того же значения дескриптора, которое передаёт
+	// носителю. Тип свой, а не тип оси дескриптора, чтобы пакет самоотчёта
+	// остался листом графа импортов.
+	ListenerForm ListenerForm
+	// NoServedServices — процесс не служит ни одного gRPC-сервиса: слушателей
+	// нет вовсе. Ключа своего не имеет — при истине `listener_form` печатает
+	// `none`, а сочетание с ненулевой [BootPosture.ListenerForm] отвергает
+	// [NewBootPosture]: строка несла бы два утверждения о форме, из которых
+	// верно одно.
+	NoServedServices bool
 	// ServiceIdentity — звено идентичности служб, которое процесс РЕАЛЬНО
 	// поднял: перечень методов и строки таблицы `{SAN → имя службы}` одной
 	// строкой. Заполняется `grpcsrv.ServiceIdentity.Report()` того звена, что
@@ -285,7 +292,76 @@ func LogBootPosture(logger *slog.Logger, p BootPosture) {
 		"identity_provider", p.IdentityProvider,
 		"own_rest_public_tls", p.OwnRESTPublicTLS,
 		"own_rest_internal_tls", p.OwnRESTInternalTLS,
-		"host_form", p.HostForm,
+		"listener_form", p.listenerFormWire(),
 		"service_identity", p.ServiceIdentity,
 	)
+}
+
+// ListenerForm — форма слушателя в самоотчёте посадки. Нулевое значение —
+// пара: у каждой службы, не знающей о поле, это её настоящая форма, а не «не
+// объявлено».
+type ListenerForm uint8
+
+const (
+	// ListenerFormPair — пара gRPC-слушателей (публичный и внутренний).
+	ListenerFormPair ListenerForm = iota
+	// ListenerFormInternalOnly — только внутренний gRPC-слушатель.
+	ListenerFormInternalOnly
+)
+
+// Написания ключа `listener_form`. Закрытый набор: гейт посадки читает его
+// разбором строки самоотчёта, поэтому это — хард-контракт.
+const (
+	listenerFormPairWire         = "pair"
+	listenerFormInternalOnlyWire = "internal_only"
+	listenerFormNoneWire         = "none"
+	// listenerFormInvalidWire — запись, которую конструктор не принял бы:
+	// значение вне перечня либо «слушателей нет» вместе с формой. Не совпадает ни
+	// с одним написанием набора, поэтому гейт посадки судит её отказом наравне с
+	// отсутствием ключа, а не читает как одну из форм.
+	listenerFormInvalidWire = "<invalid>"
+)
+
+// String — написание формы. Значение вне перечня печатается
+// [listenerFormInvalidWire]: разбор — исчерпывающий switch без default.
+func (f ListenerForm) String() string {
+	switch f {
+	case ListenerFormPair:
+		return listenerFormPairWire
+	case ListenerFormInternalOnly:
+		return listenerFormInternalOnlyWire
+	}
+	return listenerFormInvalidWire
+}
+
+// listenerFormWire — значение ключа `listener_form` записи: `none` тогда и
+// только тогда, когда запись несёт [BootPosture.NoServedServices].
+func (p BootPosture) listenerFormWire() string {
+	if p.NoServedServices {
+		if p.ListenerForm != ListenerFormPair {
+			return listenerFormInvalidWire
+		}
+		return listenerFormNoneWire
+	}
+	return p.ListenerForm.String()
+}
+
+// NewBootPosture — конструктор записи: отвергает запись, строка которой несла
+// бы противоречие о форме слушателя.
+//
+// Из дескриптора такая запись не выражается (`servicehost.PostureOf` её не
+// производит); конструктор — второй рубеж для корня, собирающего запись
+// напрямую. Печать ([LogBootPosture]) запись не отвергает, а пишет
+// противоречие написанием вне набора — гейт посадки судит его отказом.
+func NewBootPosture(p BootPosture) (BootPosture, error) {
+	if p.ListenerForm.String() == listenerFormInvalidWire {
+		return BootPosture{}, errors.New("observability: форма слушателя вне перечня (ListenerFormPair | " +
+			"ListenerFormInternalOnly): строка самоотчёта несла бы написание, которого гейт посадки не знает")
+	}
+	if p.NoServedServices && p.ListenerForm != ListenerFormPair {
+		return BootPosture{}, errors.New("observability: запись несёт NoServedServices и форму слушателя " +
+			p.ListenerForm.String() + " — строка утверждала бы и «слушателей нет», и «слушатель есть»; " +
+			"берите обе величины из servicehost.PostureOf")
+	}
+	return p, nil
 }

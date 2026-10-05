@@ -53,8 +53,8 @@ func TestHostForm_ZeroValueIsThePair(t *testing.T) {
 	}
 }
 
-// TestHostForm_WireNamesAreTheParsedContract — написания значений оси читает
-// гейт посадки из самоотчёта. Переименование молча ослепило бы его.
+// TestHostForm_WireNamesAreTheParsedContract — написания значений оси в текстах
+// отказов конструктора и носителя: по ним оператор находит форму в дескрипторе.
 func TestHostForm_WireNamesAreTheParsedContract(t *testing.T) {
 	for _, c := range []struct {
 		form servicecontract.HostForm
@@ -62,6 +62,7 @@ func TestHostForm_WireNamesAreTheParsedContract(t *testing.T) {
 	}{
 		{servicecontract.HostPair, "pair"},
 		{servicecontract.HostNoGRPC, "no-grpc"},
+		{servicecontract.HostInternalOnly, "internal-only"},
 	} {
 		if got := c.form.String(); got != c.want {
 			t.Fatalf("форма %d печатается как %q, гейт посадки ждёт %q", uint8(c.form), got, c.want)

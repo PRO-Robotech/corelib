@@ -13,6 +13,7 @@ package servicecontract_test
 import (
 	"testing"
 
+	"github.com/PRO-Robotech/corelib/authz/proxytuple"
 	"github.com/PRO-Robotech/corelib/grpcsrv"
 	"github.com/PRO-Robotech/corelib/servicecontract"
 )
@@ -97,4 +98,78 @@ func TestHostInternalOnly_RefusesThePublicHalfOfAdmission(t *testing.T) {
 		Internal: grpcsrv.PlatformInternalAdmission(),
 	})
 	t.Logf("красный: %s", refuses(t, s, "Admission"))
+}
+
+// TestHostInternalOnly_WithdrawnIdentityAxesAreRefused — у формы контур
+// поднимает носитель, и звенья извлечения личности на её единственном слушателе
+// стоят всегда. Изъятие круга пересылающих или домена доверия означало бы право
+// говорить за пользователя у любого пира с проверенным сертификатом — отказ с
+// именем поля. Законный близнец — то же изъятие у формы без gRPC-слушателей
+// принимается (звеньев там нет вовсе).
+func TestHostInternalOnly_WithdrawnIdentityAxesAreRefused(t *testing.T) {
+	noCircle := internalOnlyLawful()
+	noCircle.Forwarders = servicecontract.NotApplicable[grpcsrv.TrustedForwarders]("внутренним вызывающим верим")
+	t.Logf("красный: %s", refuses(t, noCircle, "Forwarders"))
+
+	noDomain := internalOnlyLawful()
+	noDomain.TrustDomain = servicecontract.NotApplicable[grpcsrv.TrustDomain]("внутренним вызывающим верим")
+	t.Logf("красный: %s", refuses(t, noDomain, "TrustDomain"))
+
+	twin := noGRPCSpec()
+	twin.Forwarders = servicecontract.NotApplicable[grpcsrv.TrustedForwarders]("внутренним вызывающим верим")
+	twin.TrustDomain = servicecontract.NotApplicable[grpcsrv.TrustDomain]("внутренним вызывающим верим")
+	if _, err := servicecontract.New(twin); err != nil {
+		t.Fatalf("близнец без gRPC-слушателей с теми же изъятиями отвергнут — отрицание выше вакуумно: %v", err)
+	}
+}
+
+// TestHostInternalOnly_CarriedContourIsJudgedLikeThePair — проводка формы
+// судится тем же перечнем, что у пары: внутренний адрес и транспорт, источник
+// решения, обязательная внутренняя половина потолка, О10. Каждая строка меняет
+// против контроля ровно одно поле.
+func TestHostInternalOnly_CarriedContourIsJudgedLikeThePair(t *testing.T) {
+	for _, c := range []struct {
+		field string
+		drop  func(*servicecontract.Spec)
+	}{
+		{"Authz", func(s *servicecontract.Spec) {
+			s.Authz = servicecontract.AuthzSource(0)
+			s.CheckEdge = servicecontract.PeerEdge{}
+			s.PeerCheck = nil
+		}},
+		{"InternalAddr", func(s *servicecontract.Spec) { s.InternalAddr = "" }},
+		{"InternalCreds", func(s *servicecontract.Spec) { s.InternalCreds = nil }},
+		{"Emits", func(s *servicecontract.Spec) { s.Emits = servicecontract.Axis[[]proxytuple.Relation]{} }},
+		{"Admission", func(s *servicecontract.Spec) {
+			s.Admission = servicecontract.Value(servicecontract.Admission{})
+		}},
+		{"Admission", func(s *servicecontract.Spec) {
+			s.Admission = servicecontract.NotApplicable[servicecontract.Admission]("внутренним вызывающим верим")
+		}},
+	} {
+		s := internalOnlyLawful()
+		c.drop(&s)
+		t.Logf("красный %s: %s", c.field, refuses(t, s, c.field))
+	}
+}
+
+// TestHostInternalOnly_RefusesAnOwnContour — собственный контур объявляет, что
+// контур поднимает не носитель, а форма — обратное: отказ с именем поля.
+func TestHostInternalOnly_RefusesAnOwnContour(t *testing.T) {
+	s := internalOnlyLawful()
+	s.OwnContour = "контур собираю сам"
+	t.Logf("красный: %s", refuses(t, s, "OwnContour"))
+}
+
+// TestHostFormReason_IsRefusedOnTheOtherForms — причина формы у пары и у формы
+// без gRPC-слушателей — второе утверждение о форме рядом с осью: отказ с именем
+// поля. Близнецы — те же дескрипторы без причины — принимаются (контроли групп).
+func TestHostFormReason_IsRefusedOnTheOtherForms(t *testing.T) {
+	pair := lawful()
+	pair.HostFormReason = internalOnlyReason
+	t.Logf("красный пара: %s", refuses(t, pair, "HostFormReason"))
+
+	none := noGRPCSpec()
+	none.HostFormReason = internalOnlyReason
+	t.Logf("красный no-grpc: %s", refuses(t, none, "HostFormReason"))
 }
