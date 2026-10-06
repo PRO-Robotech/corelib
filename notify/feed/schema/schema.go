@@ -41,6 +41,17 @@ func Current() Version { return V2 }
 type vocabulary struct {
 	states []string
 	pairs  map[string][]string
+	// reasonRequired — CHECK outcome_pair требует причину у состояния с
+	// причинами (с V2; outcomePairRequired).
+	reasonRequired bool
+}
+
+// outcomePair — выражение CHECK outcome_pair словаря.
+func (v vocabulary) outcomePair() string {
+	if v.reasonRequired {
+		return outcomePairRequired(v.pairs)
+	}
+	return outcomePairCheck(v.pairs)
 }
 
 // v1Vocabulary — словарь V1 как выпущен. Не правится: миграция V1 применена
@@ -65,11 +76,13 @@ func v1Vocabulary() vocabulary {
 const suppressed = "suppressed"
 
 // v2Vocabulary — словарь V1 плюс suppressed с закрытым перечнем причин Р17.
-// Ни одна из причин подавления не допускается при другом состоянии.
+// Ни одна из причин подавления не допускается при другом состоянии; у
+// состояния с причинами причина обязательна.
 func v2Vocabulary() vocabulary {
 	v := v1Vocabulary()
 	v.states = append(v.states, suppressed)
 	v.pairs[suppressed] = []string{"hard_bounce", "soft_bounce", "complaint", "unsubscribe"}
+	v.reasonRequired = true
 	return v
 }
 
@@ -166,20 +179,46 @@ func quoteList(words []string) string {
 // outcomePairCheck — выражение CHECK outcome_pair: у состояния без причин
 // причина NULL, у прочих — из своего перечня.
 func outcomePairCheck(pairs map[string][]string) string {
+	return strings.Join(outcomePairCells(pairs), "\n    OR ")
+}
+
+// outcomePairRequired — выражение CHECK outcome_pair с V2: клетки
+// outcomePairCheck и сверх них — у состояния с причинами причина не NULL.
+// CHECK над NULL не ложен, и одних клеток недостаточно: «denied без причины»
+// дала бы NULL в своей клетке и прошла бы (так у V1, применённой и
+// неизменной).
+func outcomePairRequired(pairs map[string][]string) string {
+	var bare []string
+	for _, s := range sortedStates(pairs) {
+		if len(pairs[s]) == 0 {
+			bare = append(bare, s)
+		}
+	}
+	return fmt.Sprintf("(%s)\n    AND (outcome_reason IS NOT NULL OR state IN (%s))",
+		strings.Join(outcomePairCells(pairs), "\n    OR "), quoteList(bare))
+}
+
+func sortedStates(pairs map[string][]string) []string {
 	states := make([]string, 0, len(pairs))
 	for s := range pairs {
 		states = append(states, s)
 	}
 	sort.Strings(states)
+	return states
+}
+
+// outcomePairCells — клетки «состояние × причина» по состояниям в порядке
+// имён.
+func outcomePairCells(pairs map[string][]string) []string {
 	var parts []string
-	for _, s := range states {
+	for _, s := range sortedStates(pairs) {
 		if len(pairs[s]) == 0 {
 			parts = append(parts, fmt.Sprintf("(state = '%s' AND outcome_reason IS NULL)", s))
 			continue
 		}
 		parts = append(parts, fmt.Sprintf("(state = '%s' AND outcome_reason IN (%s))", s, quoteList(pairs[s])))
 	}
-	return strings.Join(parts, "\n    OR ")
+	return parts
 }
 
 // vocabularyChange — переход ленты svc на словарь voc: CHECK состояния (имя,
@@ -193,7 +232,7 @@ func vocabularyChange(svc string, voc vocabulary) string {
   DROP CONSTRAINT outcome_pair,
   ADD CONSTRAINT outcome_pair CHECK (
     %[4]s);
-`, tablename.Of(svc, tablename.Outbox), tablename.StateCheck(svc), quoteList(voc.states), outcomePairCheck(voc.pairs))
+`, tablename.Of(svc, tablename.Outbox), tablename.StateCheck(svc), quoteList(voc.states), voc.outcomePair())
 }
 
 // tablesUp — лента с нуля со словарём voc. Результат tablename.Of только
@@ -247,7 +286,7 @@ CREATE TABLE %[3]s (
   PRIMARY KEY (notification_id, scope, window_seconds)
 );
 `, tablename.Of(svc, tablename.Outbox), tablename.Of(svc, tablename.Window), tablename.Of(svc, tablename.Contrib),
-		quoteList(voc.states), outcomePairCheck(voc.pairs),
+		quoteList(voc.states), voc.outcomePair(),
 		tablename.Index(svc, tablename.Outbox, tablename.Pending), tablename.Index(svc, tablename.Outbox, tablename.Closed))
 }
 
