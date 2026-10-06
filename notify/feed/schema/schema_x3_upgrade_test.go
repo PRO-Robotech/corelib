@@ -15,10 +15,11 @@ import (
 
 // Х3 NTF-4 (Р17), NTF1-D04: служба, у которой схема V1 уже применена,
 // получает действующую версию переходом, а не правкой применённого файла.
-// Переход несёт только смену двух ограничений строки ленты — CHECK состояния
-// и outcome_pair; таблиц не создаёт, функций, процедур, триггеров нет
+// Переход несёт смену двух ограничений словаря строки ленты — CHECK состояния
+// и outcome_pair (с V3 — и строения C5: столбцы, класс, их ограничения и
+// индекс нити); таблиц не создаёт, функций, процедур, триггеров нет
 // (УК87 (а)). Заголовок несёт from — по нему notifygen -check узнаёт переход.
-func TestNTF4X3_UpgradeFromV1CarriesOnlyTheTwoConstraints(t *testing.T) {
+func TestNTF4X3_UpgradeFromV1CarriesTheVocabularyConstraints(t *testing.T) {
 	cur := schema.Current()
 	m, err := schema.Upgrade("probe", schema.V1, cur)
 	require.NoError(t, err)
@@ -53,8 +54,8 @@ func TestNTF4X3_UpgradeFromV1CarriesOnlyTheTwoConstraints(t *testing.T) {
 	}
 }
 
-// Переход выпущен ровно один — V1 → действующая. Прочие пары и негодный
-// префикс — отказ с именем пары, а не пустой файл.
+// Переход выпущен только вверх, между выпущенными версиями. Прочие пары и
+// негодный префикс — отказ с именем пары, а не пустой файл.
 func TestNTF4X3_UpgradeRefusesAnUnreleasedTransition(t *testing.T) {
 	cur := schema.Current()
 	for _, tc := range []struct{ from, to schema.Version }{

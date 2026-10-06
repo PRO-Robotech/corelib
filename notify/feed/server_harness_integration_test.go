@@ -52,7 +52,7 @@ func newStand(t *testing.T, o standOpts) *stand {
 	f := fixtureSealed(t, o.pool, true, o.putRing)
 	srv, err := feed.NewServer(feed.ServerConfig{
 		Module: "probe", Service: "probe", Enabled: enabled(t, true), DB: o.pool,
-		Keyring: o.serverRing, Clock: o.clock, Metrics: f.reg,
+		Keyring: o.serverRing, Clock: o.clock, Metrics: f.reg, Observer: feed.NopObserver,
 	})
 	require.NoError(t, err)
 	return &stand{fixture: f, ring: r, server: srv}

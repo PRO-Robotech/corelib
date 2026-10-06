@@ -31,6 +31,10 @@ const (
 	// исход с причиной из закрытого перечня; вклад строки в окна лимита
 	// источника не возвращается.
 	KindSuppressed Kind = "suppressed"
+	// KindSuperseded — строка стала неактуальна до отправки (NTF-5 Р5; замысел
+	// issue-2924 З8 п.5). Ставит только Supersede; в контракте сети его нет
+	// (LocalOnlyOutcomes).
+	KindSuperseded Kind = "superseded"
 )
 
 // Reason — причина исхода (словарь Р11). Пустое значение — «причины нет»: так
@@ -58,6 +62,9 @@ const (
 	ReasonSoftBounce              Reason = "soft_bounce"
 	ReasonComplaint               Reason = "complaint"
 	ReasonUnsubscribe             Reason = "unsubscribe"
+	// ReasonNotCurrent — единственная причина KindSuperseded (клетка
+	// SUPERSEDED, schema.SupersededReason).
+	ReasonNotCurrent Reason = schema.SupersededReason
 )
 
 // Outcome — исход строки: вид и причина. Равенство исходов — равенство пары
@@ -67,8 +74,24 @@ type Outcome struct {
 	Reason Reason
 }
 
-// Classes — закрытый перечень классов (метка class).
-func Classes() []Class { return []Class{ClassSecurity, ClassNotice} }
+// Classes — закрытый перечень классов (метка class): классы контракта сети и
+// LocalOnlyClasses.
+func Classes() []Class { return []Class{ClassSecurity, ClassNotice, ClassObligation} }
+
+// LocalOnlyClasses — классы, которых нет в контракте сети corelib.notify:
+// строки этих классов берёт только точка входа в процессе (Local), Claim
+// сервера ленты их не выдаёт (NTF-5 Р12: obligation — только у notify).
+func LocalOnlyClasses() []Class { return []Class{ClassObligation} }
+
+// LocalOnlyOutcomes — исходы, которые лента пишет у источника помимо записи
+// исхода Ack: в контракте сети их нет, Ack их не принимает, метрика исходов
+// ленты их не считает — их ставит Supersede в транзакции вызывающего, и счёт
+// ведёт он (замысел issue-2924 З8 п.5, З21 п.1).
+func LocalOnlyOutcomes() []Outcome {
+	return []Outcome{{Kind: KindSuperseded, Reason: ReasonNotCurrent}}
+}
+
+func localOnly(o Outcome) bool { return slices.Contains(LocalOnlyOutcomes(), o) }
 
 // Kinds — закрытый перечень видов исхода (метка kind).
 func Kinds() []Kind {
@@ -76,13 +99,16 @@ func Kinds() []Kind {
 }
 
 // Reasons — закрытый перечень причин (метка reason), выведенный из ЕДИНСТВЕННОЙ
-// таблицы «состояние × причина» схемы (schema.OutcomePairs): второго перечня
-// нет, и CHECK outcome_pair, сервер ленты и метрики читают одно.
+// таблицы «состояние × причина» схемы (schema.OutcomePairs) без причин
+// LocalOnlyOutcomes: второго перечня нет, и CHECK outcome_pair, сервер ленты
+// и метрики читают одно.
 func Reasons() []Reason {
 	seen := map[Reason]bool{}
-	for _, rs := range schema.OutcomePairs() {
+	for state, rs := range schema.OutcomePairs() {
 		for _, r := range rs {
-			seen[Reason(r)] = true
+			if !localOnly(Outcome{Kind: Kind(state), Reason: Reason(r)}) {
+				seen[Reason(r)] = true
+			}
 		}
 	}
 	out := make([]Reason, 0, len(seen))

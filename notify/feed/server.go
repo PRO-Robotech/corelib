@@ -82,9 +82,12 @@ type ServerConfig struct {
 	// (Р9, NTF1-N07).
 	Enabled Enabled
 	// DB — пул источника.
-	DB DB
+	DB TxDB
 	// Keyring — кольцо ключей секрета (З11).
 	Keyring *Keyring
+	// Observer — наблюдатель исхода (замысел issue-2924 З28 п.3); nil —
+	// ErrNilObserver, отсутствие пишется NopObserver (серверы лент модулей).
+	Observer OutcomeObserver
 	// Clock — монотонные часы; nil — часы процесса.
 	Clock Clock
 	// Metrics — регистратор метрик ленты.
@@ -100,18 +103,16 @@ type ServerConfig struct {
 type Server struct {
 	notifyv1.UnimplementedInternalNotificationFeedServiceServer
 
-	module  string
-	service string
-	db      DB
-	ring    *Keyring
-	clock   Clock
-	metrics *metrics
-	log     *slog.Logger
+	module string
+	e      entry
+	clock  Clock
+	log    *slog.Logger
 }
 
 // NewServer судит конфигурацию и регистрирует метрики ленты. Выключенный или
 // не разобранный флаг — отказ: сервер ленты при выключенной доставке не
-// поднимается (уборщик — StartSweeper — поднимается при любом флаге).
+// поднимается (уборщик — StartSweeper — поднимается при любом флаге). Без
+// наблюдателя исхода — ErrNilObserver.
 func NewServer(cfg ServerConfig) (*Server, error) {
 	if !moduleForm.MatchString(cfg.Module) {
 		return nil, fmt.Errorf("feed: ServerConfig.Module %q не DNS-метка", cfg.Module)
@@ -131,6 +132,9 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 	if cfg.Keyring == nil {
 		return nil, fmt.Errorf("feed: ServerConfig.Keyring модуля %s не задан", cfg.Module)
 	}
+	if cfg.Observer == nil {
+		return nil, fmt.Errorf("feed: ServerConfig.Observer модуля %s: %w", cfg.Module, ErrNilObserver)
+	}
 	if cfg.Metrics == nil {
 		return nil, fmt.Errorf("feed: ServerConfig.Metrics модуля %s не задан", cfg.Module)
 	}
@@ -147,8 +151,8 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 		log = slog.New(slog.DiscardHandler)
 	}
 	return &Server{
-		module: cfg.Module, service: cfg.Service, db: cfg.DB, ring: cfg.Keyring,
-		clock: clock, metrics: m, log: log,
+		module: cfg.Module, clock: clock, log: log,
+		e: entry{module: cfg.Module, service: cfg.Service, db: cfg.DB, ring: cfg.Keyring, obs: cfg.Observer, metrics: m, log: log},
 	}, nil
 }
 
