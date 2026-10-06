@@ -31,6 +31,12 @@ func migrations(t *testing.T, tr *tree) []string {
 	return out
 }
 
+// feedFile — имя миграции ленты действующей версии, которую init пишет на
+// чистом дереве службы с меткой testOptions.
+func feedFile() string {
+	return fmt.Sprintf("20261001120000_notification_feed_v%d.sql", int(schema.Current()))
+}
+
 // NTF1-D03, УК87 (а): init пишет одну миграцию с меткой времени; повторный
 // init — изменений 0; в миграции нет функций, процедур, триггеров.
 func TestNTF1D03_InitWritesOnceAndIsIdempotent(t *testing.T) {
@@ -40,9 +46,9 @@ func TestNTF1D03_InitWritesOnceAndIsIdempotent(t *testing.T) {
 	r := tr.run("init", "-service", "svc", "-migrations", "svc/migrations")
 	require.Equal(t, 0, r.code, r.stderr)
 	got := migrations(t, tr)
-	require.Equal(t, []string{"20260101000000_items.sql", "20261001120000_notification_feed_v1.sql"}, got)
-	body := tr.read("svc/migrations/20261001120000_notification_feed_v1.sql")
-	want, err := schema.Migration("svc", schema.V1)
+	require.Equal(t, []string{"20260101000000_items.sql", feedFile()}, got)
+	body := tr.read("svc/migrations/" + feedFile())
+	want, err := schema.Migration("svc", schema.Current())
 	require.NoError(t, err)
 	require.Equal(t, want, body)
 	up := strings.ToUpper(body)
@@ -65,7 +71,8 @@ func TestInitLabelOutranksEveryAppliedMigration(t *testing.T) {
 	tr.write("svc/migrations/20991231235959_future.sql", "-- +goose Up\nSELECT 1;\n")
 	r := tr.run("init", "-service", "svc", "-migrations", "svc/migrations")
 	require.Equal(t, 0, r.code, r.stderr)
-	require.Equal(t, []string{"20991231235959_future.sql", "20991231235960_notification_feed_v1.sql"}, migrations(t, tr))
+	require.Equal(t, []string{"20991231235959_future.sql",
+		fmt.Sprintf("20991231235960_notification_feed_v%d.sql", int(schema.Current()))}, migrations(t, tr))
 }
 
 // fakeSchemas — выпущенные версии v1 и v2: пин corelib поднят до схемы v2.
@@ -93,7 +100,9 @@ func (fakeSchemas) Upgrade(svc string, from, to schema.Version) (string, error) 
 func TestNTF1D04_SchemaVersionChangeWritesANewFile(t *testing.T) {
 	tr := newTree(t)
 	tr.generate()
-	require.Equal(t, 0, tr.run("init", "-service", "svc", "-migrations", "svc/migrations").code)
+	applied, err := schema.Migration("svc", schema.V1)
+	require.NoError(t, err)
+	tr.write("svc/migrations/20261001120000_notification_feed_v1.sql", applied)
 	v1 := tr.read("svc/migrations/20261001120000_notification_feed_v1.sql")
 
 	opts := testOptions()
@@ -118,4 +127,33 @@ func runWith(tr *tree, o options, args ...string) result {
 	var out, errb strings.Builder
 	code := run(append([]string{"-root", tr.root}, args...), &out, &errb, o)
 	return result{code: code, stdout: out.String(), stderr: errb.String()}
+}
+
+// Х3 NTF-4: служба со схемой ленты V1 на пине corelib с действующей версией
+// новее получает от init файл перехода — выпущенное содержимое
+// schema.Upgrade, а не отказ «переход не выпущен»; применённый V1 побайтово
+// тот же; -check сверяет оба файла и зелёный; повторный init — изменений 0.
+func TestNTF4X3_InitUpgradesAnAppliedV1WithTheReleasedTransition(t *testing.T) {
+	tr := newTree(t)
+	tr.generate()
+	applied, err := schema.Migration("svc", schema.V1)
+	require.NoError(t, err)
+	const v1File = "20260901000000_notification_feed_v1.sql"
+	tr.write("svc/migrations/"+v1File, applied)
+
+	r := tr.run("init", "-service", "svc", "-migrations", "svc/migrations")
+	require.Equal(t, 0, r.code, r.stderr)
+	cur := int(schema.Current())
+	upgrade := fmt.Sprintf("20261001120000_notification_feed_v%d_from_v1.sql", cur)
+	require.Equal(t, []string{v1File, upgrade}, migrations(t, tr))
+	require.Equal(t, applied, tr.read("svc/migrations/"+v1File))
+	want, err := schema.Upgrade("svc", schema.V1, schema.Current())
+	require.NoError(t, err)
+	require.Equal(t, want, tr.read("svc/migrations/"+upgrade))
+
+	c := tr.run("-check")
+	require.Equal(t, 0, c.code, "%s%s", c.stdout, c.stderr)
+	r = tr.run("init", "-service", "svc", "-migrations", "svc/migrations")
+	require.Equal(t, 0, r.code, r.stderr)
+	require.Contains(t, r.stdout, "изменений 0")
 }

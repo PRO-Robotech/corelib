@@ -108,15 +108,13 @@ func initFanout(tr *tree, o options) result {
 	return runWith(tr, o, "init", "-service", "svc", "-migrations", "svc/migrations", "-journal", fanoutJournalPath)
 }
 
-const feedV1File = "20261001120000_notification_feed_v1.sql"
-
-// fanoutFiles — файлы миграций svc/migrations, кроме миграции ленты v1, по
-// имени.
+// fanoutFiles — файлы миграций svc/migrations, кроме миграции ленты
+// действующей версии, по имени.
 func fanoutFiles(t *testing.T, tr *tree) []string {
 	t.Helper()
 	var out []string
 	for _, n := range migrations(t, tr) {
-		if n != feedV1File {
+		if n != feedFile() {
 			out = append(out, n)
 		}
 	}
@@ -133,7 +131,7 @@ func requireInitOK(t *testing.T, r result) {
 	require.Equal(t, 0, r.code, "notifygen init с объявлением журнала: stdout=%q stderr=%q", r.stdout, r.stderr)
 }
 
-// З10 п.1–5, Р3: init с объявлением журнала пишет миграцию ленты v1
+// З10 п.1–5, Р3: init с объявлением журнала пишет миграцию ленты действующей версии
 // побайтово выпущенной (функций в ней нет, NTF1-D03) и РЯДОМ — миграцию
 // функции resource-event и её триггера AFTER INSERT на журнале модуля с
 // условием WHEN, исключающим строку сигнала; функция читает флаг
@@ -143,9 +141,9 @@ func TestNTF3_X2F_InitWritesResourceEventFunctionBesideFeedMigration(t *testing.
 	tr := fanoutTree(t)
 	requireInitOK(t, initFanout(tr, testOptions()))
 
-	want, err := schema.Migration("svc", schema.V1)
+	want, err := schema.Migration("svc", schema.Current())
 	require.NoError(t, err)
-	require.Equal(t, want, tr.read(migrationPath(feedV1File)), "миграция ленты v1 — выпущенное содержимое")
+	require.Equal(t, want, tr.read(migrationPath(feedFile())), "миграция ленты действующей версии — выпущенное содержимое")
 
 	files := fanoutFiles(t, tr)
 	require.Len(t, files, 1, "функция resource-event и триггер — одна отдельная миграция: %v", files)
@@ -281,7 +279,7 @@ func TestNTF3_X2F_InitWithoutJournalWritesOnlyTheFeedMigration(t *testing.T) {
 	tr.generate()
 	r := tr.run("init", "-service", "svc", "-migrations", "svc/migrations")
 	require.Equal(t, 0, r.code, r.stderr)
-	require.Equal(t, []string{feedV1File}, migrations(t, tr))
+	require.Equal(t, []string{feedFile()}, migrations(t, tr))
 	_, err := os.Stat(tr.path(fanoutJournalPath))
 	require.True(t, os.IsNotExist(err))
 }
