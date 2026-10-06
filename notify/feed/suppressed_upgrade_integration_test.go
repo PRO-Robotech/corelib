@@ -5,9 +5,11 @@ package feed_test
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/stretchr/testify/require"
 
@@ -40,8 +42,13 @@ SELECT c.conname, pg_get_constraintdef(c.oid)
 // ограничения ленты, что служба, чья лента создана действующей версией с
 // нуля; состояние suppressed с причиной Р17 выразимо. Переход вниз
 // возвращает ограничения V1. Префикс «старой» службы — на границе длины
-// (Valid): имя CHECK состояния, которое снимает переход, — то, что сервер дал
-// ему по умолчанию, без усечения.
+// (Valid, граница выводится у самого Valid через schema.DDL): имя CHECK
+// состояния, которое снимает переход, — то, что сервер дал ему по умолчанию,
+// без усечения.
+//
+// Состояние, у которого в таблице есть причины, без причины невыразимо в
+// действующей версии: CHECK над NULL не ложен, и outcome_pair V1 такую строку
+// пропускал (V1 применена и не правится; действующая — закрывает).
 func TestNTF4X3_UpgradedV1EqualsTheCurrentSchema(t *testing.T) {
 	ctx := context.Background()
 	pool, err := pgxpool.New(ctx, pgtest.NewDB(t))
@@ -59,20 +66,44 @@ func TestNTF4X3_UpgradedV1EqualsTheCurrentSchema(t *testing.T) {
 		exec(up)
 	}
 
-	const old = "o2345678901234567890123456789ab" // 31 байт — граница Valid
+	// Три префикса одной длины: имена ограничений, которые сервер усекает
+	// по умолчанию (not_before, schema_rev у префикса на границе), у них
+	// совпадают после снятия префикса.
+	tail := ""
+	for n := 1; n <= 63; n++ {
+		p := strings.Repeat("x", n)
+		if _, _, err := schema.DDL("o"+p, schema.V1); err != nil {
+			break
+		}
+		tail = p
+	}
+	require.NotEmpty(t, tail, "граница длины префикса не найдена")
+	old, fresh, released := "o"+tail, "f"+tail, "r"+tail
+	t.Logf("префикс на границе Valid: %d байт", len(old))
 	apply(old, schema.V1)
-	apply("fresh", schema.Current())
-	apply("released", schema.V1)
-	v1 := constraintsOf(t, pool, "released")
+	apply(fresh, schema.Current())
+	apply(released, schema.V1)
+	v1 := constraintsOf(t, pool, released)
 	require.Equal(t, v1, constraintsOf(t, pool, old), "фикстура: обе ленты V1 одинаковы")
-	require.NotEqual(t, v1, constraintsOf(t, pool, "fresh"), "фикстура: действующая версия отличается от V1")
+	require.NotEqual(t, v1, constraintsOf(t, pool, fresh), "фикстура: действующая версия отличается от V1")
 
 	up, down, err := schema.UpgradeDDL(old, schema.V1, schema.Current())
 	require.NoError(t, err)
 	exec(up)
-	require.Equal(t, constraintsOf(t, pool, "fresh"), constraintsOf(t, pool, old), "переход V1 → действующая")
+	require.Equal(t, constraintsOf(t, pool, fresh), constraintsOf(t, pool, old), "переход V1 → действующая")
 	exec(`INSERT INTO "` + old + `_notification_outbox" (id, template, schema_rev, class, recipient_address, attrs, state, outcome_reason, outcome_at, expires_at)
 VALUES ('n1', 't', 1, 'notice', 'a@example.invalid', '{}', 'suppressed', 'hard_bounce', now(), now() + interval '1 hour')`)
+	exec(`DELETE FROM "` + old + `_notification_outbox"`)
+
+	for _, st := range []string{"denied", "invalid", "dropped", "expired", "suppressed"} {
+		_, err := pool.Exec(ctx, `INSERT INTO "`+old+`_notification_outbox" (id, template, schema_rev, class, recipient_address, attrs, state, outcome_at, expires_at)
+VALUES ('n2', 't', 1, 'notice', 'a@example.invalid', '{}', $1, now(), now() + interval '1 hour')`, st)
+		var pgErr *pgconn.PgError
+		require.True(t, errors.As(err, &pgErr), "%s без причины: ждали отказ outcome_pair, получили %v", st, err)
+		require.Equal(t, "outcome_pair", pgErr.ConstraintName, "%s: %v", st, err)
+	}
+	exec(`INSERT INTO "` + old + `_notification_outbox" (id, template, schema_rev, class, recipient_address, attrs, state, outcome_at, expires_at)
+VALUES ('n3', 't', 1, 'notice', 'a@example.invalid', '{}', 'sent', now(), now() + interval '1 hour')`)
 	exec(`DELETE FROM "` + old + `_notification_outbox"`)
 
 	exec(down)
