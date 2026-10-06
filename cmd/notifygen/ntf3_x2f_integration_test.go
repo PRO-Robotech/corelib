@@ -77,9 +77,9 @@ func newFanoutDB(t *testing.T) *fanoutDB {
 		t.Fatalf("проба НЕ ИСПОЛНЯЛАСЬ: пул: %v", err)
 	}
 	pgtest.ClosePoolAtEnd(t, pool)
-	up, _, err := schema.DDL("svc", schema.V1)
+	up, _, err := schema.DDL("svc", schema.Current())
 	if err != nil {
-		t.Fatalf("проба НЕ ИСПОЛНЯЛАСЬ: схема ленты v1: %v", err)
+		t.Fatalf("проба НЕ ИСПОЛНЯЛАСЬ: схема ленты действующей версии: %v", err)
 	}
 	if _, err := pool.Exec(ctx, svcJournalDDL+up); err != nil {
 		t.Fatalf("проба НЕ ИСПОЛНЯЛАСЬ: журнал и лента svc: %v", err)

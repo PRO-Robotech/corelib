@@ -59,8 +59,10 @@ type InternalNotificationFeedServiceClient interface {
 	// Исход записывается только действующей арендой. Повтор того же вызова
 	// (тот же токен, тот же исход) после записанного исхода — успех без изменения
 	// строки: ответ мог потеряться в сети после коммита. Тот же токен с другим
-	// исходом — `FAILED_PRECONDITION` (`OUTCOME_ALREADY_RECORDED`); прочие случаи
-	// утраченной аренды — `FAILED_PRECONDITION` (`LEASE_LOST`).
+	// исходом — `FAILED_PRECONDITION` (`OUTCOME_ALREADY_RECORDED`); исход — пара
+	// вида и причины, поэтому другая причина при том же виде — тоже другой исход.
+	// Прочие случаи утраченной аренды — `FAILED_PRECONDITION` (`LEASE_LOST`).
+	// Правило одно для всех видов словаря, исключений нет.
 	Ack(ctx context.Context, in *AckRequest, opts ...grpc.CallOption) (*AckResponse, error)
 }
 
@@ -125,8 +127,10 @@ type InternalNotificationFeedServiceServer interface {
 	// Исход записывается только действующей арендой. Повтор того же вызова
 	// (тот же токен, тот же исход) после записанного исхода — успех без изменения
 	// строки: ответ мог потеряться в сети после коммита. Тот же токен с другим
-	// исходом — `FAILED_PRECONDITION` (`OUTCOME_ALREADY_RECORDED`); прочие случаи
-	// утраченной аренды — `FAILED_PRECONDITION` (`LEASE_LOST`).
+	// исходом — `FAILED_PRECONDITION` (`OUTCOME_ALREADY_RECORDED`); исход — пара
+	// вида и причины, поэтому другая причина при том же виде — тоже другой исход.
+	// Прочие случаи утраченной аренды — `FAILED_PRECONDITION` (`LEASE_LOST`).
+	// Правило одно для всех видов словаря, исключений нет.
 	Ack(context.Context, *AckRequest) (*AckResponse, error)
 	mustEmbedUnimplementedInternalNotificationFeedServiceServer()
 }

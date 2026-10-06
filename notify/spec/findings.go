@@ -56,6 +56,19 @@ const (
 	RuleWhenUndeclared          = "when на необъявленном атрибуте"
 	RuleRevision                = "ревизия — целое ≥ 1"
 	RuleFingerprintForm         = "отпечаток набора — v<N>:sha256:<64 hex>"
+	// Класс obligation (NTF-5 Р12).
+	RuleObligationOwner    = "класс obligation — только у владельца notify"
+	RuleObligationAttrKind = "атрибут класса obligation — только timestamp или path"
+	RuleObligationNoTTL    = "у класса obligation ключа ttl нет — срока у письма нет"
+	RuleObligationNoLimits = "у класса obligation ключа limits нет — письмо неотключаемо"
+	// Отписка (Д9; NTF-4 Р6; NTF-5 Р12). Формат знает блок unsubscribe только
+	// затем, чтобы назвать нарушение: отписка — заголовок List-Unsubscribe
+	// письма класса notice, а не блок тела.
+	RuleUnsubscribeSecurity   = "отписка в классе security"
+	RuleUnsubscribeObligation = "отписка в классе obligation"
+	RuleUnsubscribeBody       = "отписка в теле — только заголовок List-Unsubscribe класса notice"
+	// Перечень обязательного класса (NTF-2 Р3, NTF2-99).
+	RuleRequiredListForm = "перечень required-security.yaml — последовательность имён шаблонов без повторов"
 )
 
 // Finding — находка валидатора: файл (от корня каталога), строка, номер

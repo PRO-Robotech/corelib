@@ -41,6 +41,11 @@ func (d *untouchedDB) QueryRow(context.Context, string, ...any) pgx.Row {
 	return errRow{}
 }
 
+func (d *untouchedDB) Begin(context.Context) (pgx.Tx, error) {
+	d.calls.Add(1)
+	return nil, context.Canceled
+}
+
 type errRow struct{}
 
 func (errRow) Scan(...any) error { return context.Canceled }
@@ -61,7 +66,7 @@ func validatingServer(t *testing.T) (*feed.Server, *untouchedDB) {
 	db := &untouchedDB{}
 	s, err := feed.NewServer(feed.ServerConfig{
 		Module: "probe", Service: "probe", Enabled: enabled(t, true), DB: db,
-		Keyring: ring(t, key(1, 0xA1)), Metrics: prometheus.NewRegistry(),
+		Keyring: ring(t, key(1, 0xA1)), Metrics: prometheus.NewRegistry(), Observer: feed.NopObserver,
 	})
 	require.NoError(t, err)
 	return s, db
@@ -201,7 +206,7 @@ func TestServerConfigIsJudgedAtConstruction(t *testing.T) {
 	base := func() feed.ServerConfig {
 		return feed.ServerConfig{
 			Module: "probe", Service: "probe", Enabled: enabled(t, true), DB: &untouchedDB{},
-			Keyring: ring(t, key(1, 1)), Metrics: prometheus.NewRegistry(),
+			Keyring: ring(t, key(1, 1)), Metrics: prometheus.NewRegistry(), Observer: feed.NopObserver,
 		}
 	}
 	for name, mut := range map[string]func(*feed.ServerConfig){
@@ -212,6 +217,7 @@ func TestServerConfigIsJudgedAtConstruction(t *testing.T) {
 		"хранилище":        func(c *feed.ServerConfig) { c.DB = nil },
 		"кольцо":           func(c *feed.ServerConfig) { c.Keyring = nil },
 		"метрики":          func(c *feed.ServerConfig) { c.Metrics = nil },
+		"наблюдатель":      func(c *feed.ServerConfig) { c.Observer = nil },
 	} {
 		c := base()
 		mut(&c)

@@ -100,6 +100,8 @@ func classIdent(c spec.Class) (string, error) {
 		return "feed.ClassSecurity", nil
 	case spec.ClassNotice:
 		return "feed.ClassNotice", nil
+	case spec.ClassObligation:
+		return "feed.ClassObligation", nil
 	}
 	return "", fmt.Errorf("класс %q вне перечня", string(c))
 }

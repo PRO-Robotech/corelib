@@ -67,6 +67,7 @@ func (g *generator) load() ([]loaded, spec.Census, error) {
 		total.Templates += census.Templates
 		total.Files += census.Files
 		total.Blocks += census.Blocks
+		total.Unsubscribe += census.Unsubscribe
 		var fs spec.Findings
 		switch {
 		case errors.As(err, &fs):
@@ -165,6 +166,7 @@ func (g *generator) nextRevision(o owner, t spec.Template) spec.Revision {
 }
 
 // check — сверка без записи (NTF1-D02, D04, D07): ревизия против набора,
+// число ссылок отписки в телах (каждая — находка формата, NTF2-99 (б)),
 // эталон порождённого файла, побайтовое содержимое выпущенных миграций
 // ленты; с базой — правило базы Р7 со знаменателем.
 func (g *generator) check() error {
@@ -205,7 +207,7 @@ func (g *generator) check() error {
 	if g.base != nil {
 		g.checkBase(owners)
 	}
-	g.stdout.printf("шаблонов %d, файлов %d, блоков %d, миграций ленты %d, функций resource-event %d\n",
-		census.Templates, census.Files, census.Blocks, migrations, functions)
+	g.stdout.printf("шаблонов %d, файлов %d, блоков %d, ссылок отписки %d, миграций ленты %d, функций resource-event %d\n",
+		census.Templates, census.Files, census.Blocks, census.Unsubscribe, migrations, functions)
 	return g.flush()
 }

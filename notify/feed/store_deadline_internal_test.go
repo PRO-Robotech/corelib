@@ -51,6 +51,11 @@ func (d *deadlineDB) QueryRow(ctx context.Context, _ string, _ ...any) pgx.Row {
 	return failedRow{}
 }
 
+func (d *deadlineDB) Begin(ctx context.Context) (pgx.Tx, error) {
+	d.note(ctx)
+	return nil, errStore
+}
+
 type failedRow struct{}
 
 func (failedRow) Scan(...any) error { return errStore }
@@ -76,7 +81,7 @@ func TestStoreCallsRunUnderTheirOwnDeadline(t *testing.T) {
 	en, err := ParseEnabled("X", func(string) (string, bool) { return "true", true })
 	require.NoError(t, err)
 	reg := prometheus.NewRegistry()
-	srv, err := NewServer(ServerConfig{Module: "probe", Service: "probe", Enabled: en, DB: db, Keyring: ring, Metrics: reg})
+	srv, err := NewServer(ServerConfig{Module: "probe", Service: "probe", Enabled: en, DB: db, Keyring: ring, Metrics: reg, Observer: NopObserver})
 	require.NoError(t, err)
 
 	_, err = srv.Claim(context.Background(), &notifyv1.ClaimRequest{Max: 1, Classes: []notifyv1.NotificationClass{notifyv1.NotificationClass_NOTICE}})

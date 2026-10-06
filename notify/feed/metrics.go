@@ -112,8 +112,8 @@ func newMetrics(reg prometheus.Registerer, module string) (*metrics, error) {
 }
 
 // cells — законные клетки исхода: каждое терминальное состояние таблицы схемы
-// со своими причинами (без причин — одна клетка с ReasonNone) и DEFER с
-// причинами, которые принимает Ack.
+// со своими причинами (без причин — одна клетка с ReasonNone), кроме
+// LocalOnlyOutcomes, и DEFER с причинами, которые принимает Ack.
 func cells() []Outcome {
 	pairs := schema.OutcomePairs()
 	var out []Outcome
@@ -126,7 +126,9 @@ func cells() []Outcome {
 			continue
 		}
 		for _, r := range rs {
-			out = append(out, Outcome{Kind: Kind(state), Reason: Reason(r)})
+			if o := (Outcome{Kind: Kind(state), Reason: Reason(r)}); !localOnly(o) {
+				out = append(out, o)
+			}
 		}
 	}
 	for _, r := range ackReasons()[KindDefer] {
@@ -150,7 +152,7 @@ func (m *metrics) observeOutcome(c Class, o Outcome) {
 		m.delivered.Inc()
 	case KindDefer:
 		m.defers.WithLabelValues(m.module, string(o.Reason)).Inc()
-	case KindRecipientRejected, KindDenied, KindInvalid, KindDropped, KindExpired:
+	case KindRecipientRejected, KindDenied, KindInvalid, KindDropped, KindExpired, KindSuppressed, KindSuperseded:
 		// Своего счётчика сверх клетки исхода у этих видов нет.
 	}
 }

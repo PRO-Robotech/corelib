@@ -3,9 +3,13 @@
 
 // Package feed — лента почтовых извещений у источника (NTF-1, З6–З12, З27):
 // постановка Put в транзакции вызывающего, окно лимита, флаг источника;
-// сервер ленты Claim/Ack (Server), уборщик истечения и уборка закрытых строк
-// и прошедших окон (StartSweeper, RetentionSubjects), кольцо ключей секрета
-// (Keyring), словарь исходов и метрики ленты.
+// две точки входа к строкам над одним ядром взятия и записи исхода — сервер
+// ленты Claim/Ack по сети (Server) и взятие в процессе (Local) с
+// наблюдателем исхода (OutcomeObserver); закрытие неактуальных строк
+// (Supersede) и удаление строк без аренды (DeleteUnleased) в транзакции
+// вызывающего; уборщик истечения и уборка закрытых строк и прошедших окон
+// (StartSweeper, RetentionSubjects), кольцо ключей секрета (Keyring), словарь
+// исходов и метрики ленты.
 //
 // Порядок внутри Put несущий (З7): всё, что может отвергнуть вызов, стоит до
 // первого оператора SQL либо выражено нулём строк условного оператора под
@@ -39,10 +43,14 @@ import (
 // области initiator; нужен, когда у шаблона есть лимит на инициатора.
 // Project — ключ окна области project (NTF-3 Р14): id проекта, который
 // заполняет код источника из своей записи; нужен, когда у шаблона есть лимит
-// на проект. Атрибут набора ключом окна не служит.
+// на проект. Атрибут набора ключом окна не служит. ThreadKey — ключ почтовой
+// нити строки (замысел issue-2924 З12 п.1): строки одного ключа выдаются
+// взятием по одной, в порядке постановки; нет ключа — nil, единственное
+// написание отсутствия (CX5-52 (а)), пустая строка — сторож.
 type Values struct {
 	Initiator string
 	Project   string
+	ThreadKey *string
 	Attrs     map[string]any
 }
 
@@ -105,7 +113,7 @@ func (s *Source) put(ctx context.Context, tx pgx.Tx, desc TemplateDesc, to strin
 		switch desc.Class {
 		case ClassNotice:
 			return Queued{}, nil
-		case ClassSecurity:
+		case ClassSecurity, ClassObligation:
 			return Queued{}, ErrDeliveryNotConfigured
 		}
 		return Queued{}, desc.invalid("класс вне перечня")
@@ -116,6 +124,9 @@ func (s *Source) put(ctx context.Context, tx pgx.Tx, desc TemplateDesc, to strin
 	}
 	if err := checkComposition(desc, values); err != nil {
 		return Queued{}, err
+	}
+	if values.ThreadKey != nil && *values.ThreadKey == "" {
+		return Queued{}, desc.invalid("ключ нити пуст — отсутствие ключа пишется nil")
 	}
 	// 3. Адресат — по форме описания — и ключи окон.
 	recipient, err := recipientOf(desc, to)
@@ -157,6 +168,7 @@ func (s *Source) put(ctx context.Context, tx pgx.Tx, desc TemplateDesc, to strin
 	}
 	if err := s.write(ctx, tx, sp, desc, row{
 		id: id, recipient: recipient, initiator: values.Initiator, project: values.Project, attrs: attrsJSON, sealed: sealed,
+		threadKey: values.ThreadKey,
 	}); err != nil {
 		// Откат к точке сохранения снимает вклад, отметку и замки строк окна
 		// этой постановки; транзакция вызывающего остаётся пригодной.
@@ -188,6 +200,18 @@ func rollbackSavepoint(ctx context.Context, sp pgx.Tx) error {
 type row struct {
 	id, recipient, initiator, project string
 	attrs, sealed                     []byte
+	threadKey                         *string
+}
+
+// ttlSeconds — срок строки в секундах для оператора постановки; у класса без
+// срока (obligation) — nil, и expires_at строки — NULL (§3 З19, CHECK
+// expiry_matches_class).
+func ttlSeconds(desc TemplateDesc) *float64 {
+	if desc.Class == ClassObligation {
+		return nil
+	}
+	secs := desc.TTL.Seconds()
+	return &secs
 }
 
 // write — шаги 5 и 6 в точке сохранения sp. Сигнал пишется через tx
@@ -205,10 +229,11 @@ func (s *Source) write(ctx context.Context, tx, sp pgx.Tx, desc TemplateDesc, r 
 		}
 	}
 	if _, err := sp.Exec(ctx, fmt.Sprintf(`INSERT INTO %s
-		(id, template, schema_rev, class, recipient_address, attrs, secret_attrs, state, expires_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, 'pending', now() + make_interval(secs => $8))`,
+		(id, template, schema_rev, class, recipient_address, attrs, secret_attrs, state, expires_at, thread_key)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, 'pending',
+		        CASE WHEN $8::float8 IS NULL THEN NULL ELSE now() + make_interval(secs => $8::float8) END, $9)`,
 		tablename.Of(s.service, tablename.Outbox)),
-		r.id, desc.Name, desc.SchemaRev, string(desc.Class), r.recipient, r.attrs, r.sealed, desc.TTL.Seconds()); err != nil {
+		r.id, desc.Name, desc.SchemaRev, string(desc.Class), r.recipient, r.attrs, r.sealed, ttlSeconds(desc), r.threadKey); err != nil {
 		return fmt.Errorf("feed: шаблон %s: вставка строки ленты: %w", desc.Name, err)
 	}
 	for _, w := range windows {
