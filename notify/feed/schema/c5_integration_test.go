@@ -24,6 +24,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"slices"
 	"strings"
 	"testing"
 
@@ -67,12 +68,17 @@ func requireCheckViolation(t *testing.T, err error, what string) {
 
 const c5Svc = "cfive"
 
-// insertRow — вставка строки ленты c5Svc; cols — дополнительные столбцы со
-// значениями (имя → значение SQL-литералом).
+// insertRow — вставка строки ленты c5Svc; extra — столбцы со значениями (имя
+// → значение SQL-литералом): дополнительные либо заменяющие столбец основы
+// (state) — столбец в операторе назван один раз.
 func insertRow(pool *pgxpool.Pool, id, class, expires string, extra map[string]string) error {
 	cols := []string{"id", "template", "schema_rev", "class", "recipient_address", "attrs", "state", "expires_at"}
 	vals := []string{"'" + id + "'", "'t'", "1", "'" + class + "'", "'a@example.invalid'", "'{}'", "'pending'", expires}
 	for c, v := range extra {
+		if i := slices.Index(cols, c); i >= 0 {
+			vals[i] = v
+			continue
+		}
 		cols = append(cols, c)
 		vals = append(vals, v)
 	}

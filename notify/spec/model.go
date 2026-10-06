@@ -9,14 +9,29 @@ import (
 	"github.com/PRO-Robotech/corelib/notify/form"
 )
 
-// Class — класс шаблона (Р7): security | notice.
+// Class — класс шаблона (Р7; NTF-5 Р12): security | notice | obligation.
 type Class string
 
 // Классы шаблона.
 const (
 	ClassSecurity Class = "security"
 	ClassNotice   Class = "notice"
+	// ClassObligation — извещение оператора (NTF-5 Р12): только у владельца
+	// ObligationOwner, атрибуты только ObligationAttrKinds, ключей ttl и
+	// limits нет, отписки нет.
+	ClassObligation Class = "obligation"
 )
+
+// Classes — закрытый набор классов шаблона.
+func Classes() []Class { return []Class{ClassSecurity, ClassNotice, ClassObligation} }
+
+// ObligationOwner — единственный владелец шаблонов класса obligation (NTF-5
+// Р12, ТВ3): ключ ведомости источников сборки, а не сегмент пути каталога.
+const ObligationOwner = "notify"
+
+// ObligationAttrKinds — виды атрибута, допустимые у шаблона класса obligation
+// (NTF-5 Р12, ТВ4): пользовательскому и операторскому тексту неоткуда взяться.
+func ObligationAttrKinds() []form.Kind { return []form.Kind{form.KindTimestamp, form.KindPath} }
 
 // Presence — обязательность атрибута (Д21): ключ есть у каждого атрибута,
 // значений два, умолчания нет.
@@ -166,14 +181,29 @@ type Template struct {
 	HasRevision bool
 }
 
-// Catalog — проверенный каталог шаблонов владельца, упорядоченный по имени.
-type Catalog struct {
-	Templates []Template
+// RequiredList — перечень обязательного класса security владельца
+// (RequiredSecurityFile, NTF-2 Р3): имена шаблонов в порядке файла. Формат
+// судит форму (последовательность имён шаблона, без повторов); смысл перечня
+// — класс, существование шаблона, непустоту — судит гейт владельца
+// (NTF2-99 (а), (в), (г)).
+type RequiredList struct {
+	Names []string
 }
 
-// Census — знаменатель проверки: сколько прочитано.
+// Catalog — проверенный каталог шаблонов владельца, упорядоченный по имени.
+// RequiredSecurity — перечень обязательного класса из каталога; nil — файла
+// перечня в каталоге нет (отсутствие отлично от пустого перечня).
+type Catalog struct {
+	Templates        []Template
+	RequiredSecurity *RequiredList
+}
+
+// Census — знаменатель проверки: сколько прочитано. Unsubscribe — сколько
+// блоков ссылки отписки прочитано в телах (каждый — находка: у формата
+// отписки в теле нет).
 type Census struct {
-	Templates int
-	Files     int
-	Blocks    int
+	Templates   int
+	Files       int
+	Blocks      int
+	Unsubscribe int
 }

@@ -88,6 +88,13 @@ type feedLedger struct {
 // видами лента, вклад, окно) и уборка прошедших окон (RetentionSubjects).
 // Новый писатель окна появляется только правкой этой ведомости, и ревью
 // правки судит его место в полном порядке замков (З7).
+//
+// C5 NTF-5 (замысел issue-2924 З28 п.1, п.6): SQL взятия и записи исхода —
+// только в ядре, claimTx (взятие) и recordOutcome (запись исхода и чтение
+// классификации повтора); обе точки входа — сервер ленты и Local — зовут
+// ядро и своих мест не имеют, закрытие строки после расшифровки идёт вызовом
+// recordOutcome. Supersede (закрытие неактуальных) и DeleteUnleased (чтение
+// аренды под замком и удаление) — писатели транзакции вызывающего.
 func corelibFeedLedger() feedLedger {
 	f := func(name string) string { return feedPkg + "." + name }
 	s := func(name string) string { return feedSchemaPkg + "." + name }
@@ -97,11 +104,10 @@ func corelibFeedLedger() feedLedger {
 		owners: map[string]feedOwner{
 			"(*" + feedPkg + ".Source).write":  {sites: []string{"Contrib", "Outbox"}},
 			f("takeWindows"):                   {sites: []string{"Window"}},
-			f("claimSQL"):                      {sites: []string{"Outbox"}},
-			f("sealedCloseSQL"):                {sites: []string{"Outbox"}},
-			f("ackTerminalSQL"):                {sites: []string{"Outbox"}},
-			f("ackDeferSQL"):                   {sites: []string{"Outbox"}},
-			f("ackRecordedSQL"):                {sites: []string{"Outbox"}},
+			f("claimTx"):                       {sites: []string{"Outbox"}},
+			f("recordOutcome"):                 {sites: []string{"Outbox", "Outbox"}},
+			f("Supersede"):                     {sites: []string{"Outbox"}},
+			f("DeleteUnleased"):                {sites: []string{"Outbox", "Outbox"}},
 			f("expireSQL"):                     {sites: []string{"Contrib,Outbox,Window"}},
 			f("pendingSQL"):                    {sites: []string{"Outbox"}},
 			f("closedSweepSQL"):                {sites: []string{"Outbox"}},
@@ -110,6 +116,8 @@ func corelibFeedLedger() feedLedger {
 			s("tablesUp"):                      {sites: []string{"Contrib,Outbox,Window"}, ddl: true},
 			s("tablesDown"):                    {sites: []string{"Contrib,Outbox,Window"}, ddl: true},
 			s("vocabularyChange"):              {sites: []string{"Outbox"}, ddl: true},
+			s("structureChange"):               {sites: []string{"Outbox"}, ddl: true},
+			s("threadIndexDDL"):                {sites: []string{"Outbox"}, ddl: true},
 		},
 	}
 }

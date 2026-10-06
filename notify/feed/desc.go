@@ -7,16 +7,21 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/PRO-Robotech/corelib/notify/feed/schema"
 	"github.com/PRO-Robotech/corelib/notify/form"
 )
 
-// Class — класс шаблона: security | notice.
+// Class — класс шаблона: security | notice | obligation.
 type Class string
 
 // Классы шаблона.
 const (
 	ClassSecurity Class = "security"
 	ClassNotice   Class = "notice"
+	// ClassObligation — извещение оператора (NTF-5 Р12): срока у строки нет
+	// (expires_at NULL, §3 З19), лимитов нет, при выключенном флаге — отказ,
+	// как у security. Строки класса берёт только Local.
+	ClassObligation Class = schema.ClassObligation
 )
 
 // Scope — область лимита: адресат, инициатор либо проект.
@@ -66,7 +71,8 @@ const (
 	PresenceOptional Presence = "optional"
 )
 
-// Границы ttl (Р7): expires_at = enqueued_at + ttl.
+// Границы ttl (Р7): expires_at = enqueued_at + ttl. У класса obligation ttl
+// нулевой и срока у строки нет.
 const (
 	TTLMin = time.Second
 	TTLMax = 720 * time.Hour
@@ -121,7 +127,8 @@ func (d TemplateDesc) invalid(rule string, a ...any) error {
 }
 
 // Validate судит описание (З7, шаг 2): имя, класс, ревизия ≥ 1, ttl в
-// [TTLMin..TTLMax], форма адресата из перечня RecipientForms, лимиты строго
+// [TTLMin..TTLMax] (у obligation — нулевой ttl и ни одного лимита, NTF-5 Р12),
+// форма адресата из перечня RecipientForms, лимиты строго
 // возрастают по LimitLess (повтор пары (scope, window_seconds) — тоже
 // нарушение), у формы fanout нет лимита на адресата (адресата нет, NTF-3 Р3),
 // атрибуты с именем, видом и обязательностью, тема — только на required.
@@ -131,14 +138,21 @@ func (d TemplateDesc) Validate() error {
 		return fmt.Errorf("%w: шаблон без имени", ErrAttrsInvalid)
 	}
 	switch d.Class {
-	case ClassSecurity, ClassNotice:
+	case ClassSecurity, ClassNotice, ClassObligation:
 	default:
 		return d.invalid("класс вне перечня")
 	}
 	if d.SchemaRev < 1 {
 		return d.invalid("schema_rev < 1")
 	}
-	if d.TTL < TTLMin || d.TTL > TTLMax {
+	if d.Class == ClassObligation {
+		if d.TTL != 0 {
+			return d.invalid("у класса obligation срока нет — ttl ненулевой")
+		}
+		if len(d.Limits) > 0 {
+			return d.invalid("у класса obligation лимитов нет")
+		}
+	} else if d.TTL < TTLMin || d.TTL > TTLMax {
 		return d.invalid("ttl вне [%s..%s]", TTLMin, TTLMax)
 	}
 	switch d.Recipient {

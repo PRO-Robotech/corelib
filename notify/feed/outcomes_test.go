@@ -4,6 +4,8 @@
 package feed_test
 
 import (
+	"maps"
+	"slices"
 	"sort"
 	"strings"
 	"testing"
@@ -17,12 +19,18 @@ import (
 
 // УК62, УК66: перечни меток экспортированы и закрыты. Классы и виды сверяются
 // с контрактом в обе стороны: значение контракта без слова в перечне и слово
-// перечня без значения контракта — оба красные.
+// перечня без значения контракта — оба красные. Классы LocalOnlyClasses (C5:
+// obligation берёт только Local) в контракте сети не бывают и из сверки
+// вычитаются явным перечнем, а не пропуском.
 func TestUK62_ClassesAndKindsMatchTheContractBothWays(t *testing.T) {
 	classes := map[string]bool{}
 	for _, c := range feed.Classes() {
-		classes[string(c)] = true
+		if !slices.Contains(feed.LocalOnlyClasses(), c) {
+			classes[string(c)] = true
+		}
 	}
+	require.Len(t, classes, len(feed.Classes())-len(feed.LocalOnlyClasses()),
+		"класс LocalOnlyClasses вне перечня Classes")
 	contractClasses := map[string]bool{}
 	for n, name := range notifyv1.NotificationClass_name {
 		if n == 0 {
@@ -47,7 +55,8 @@ func TestUK62_ClassesAndKindsMatchTheContractBothWays(t *testing.T) {
 	t.Logf("классов %d, видов %d", len(classes), len(kinds))
 }
 
-// УК62: перечень причин — объединение причин таблицы сочетаний схемы (Р11) и
+// УК62: перечень причин — объединение причин таблицы сочетаний схемы (Р11)
+// без причин LocalOnlyOutcomes (C5: superseded ставит только Supersede) и
 // равен словарю контракта без UNSPECIFIED. Второго перечня нет.
 func TestUK62_ReasonsAreTheContractVocabularyAndTheSchemaTable(t *testing.T) {
 	got := map[string]bool{}
@@ -70,7 +79,13 @@ func TestUK62_ReasonsAreTheContractVocabularyAndTheSchemaTable(t *testing.T) {
 			fromSchema[r] = true
 		}
 	}
-	require.Equal(t, fromSchema, got, "перечень причин разошёлся с таблицей сочетаний схемы")
+	withLocal := maps.Clone(got)
+	for _, o := range feed.LocalOnlyOutcomes() {
+		require.Contains(t, schema.OutcomePairs()[string(o.Kind)], string(o.Reason), "исход LocalOnlyOutcomes вне таблицы схемы")
+		require.False(t, got[string(o.Reason)], "причина LocalOnlyOutcomes %s попала в перечень контракта", o.Reason)
+		withLocal[string(o.Reason)] = true
+	}
+	require.Equal(t, fromSchema, withLocal, "перечень причин разошёлся с таблицей сочетаний схемы")
 	t.Logf("причин %d", len(got))
 }
 

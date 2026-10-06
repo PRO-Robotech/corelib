@@ -12,11 +12,18 @@
 //	<owner>/notifications/<name>/notification.yaml
 //	<owner>/notifications/<name>/body.<locale>.yaml
 //	<owner>/notifications/<name>/revision.yaml   (порождает генератор)
+//	<owner>/notifications/required-security.yaml (необязателен: перечень
+//	                                              обязательного класса, NTF-2 Р3)
+//
+// Набор файлов каталога закрыт: подкаталоги шаблонов и перечень
+// required-security.yaml — последовательность YAML имён шаблонов. Смысл
+// перечня (класс security, шаблон есть, перечень непуст) судит гейт
+// владельца; формат судит форму.
 //
 // notification.yaml:
 //
 //	name: invite                      # имя каталога
-//	class: security                   # security | notice
+//	class: security                   # security | notice | obligation
 //	recipient: address                # address | subject | fanout | account_owner;
 //	                                  # нет поля — address
 //	ttl: 168h                         # [1s..720h], целые секунды
@@ -44,6 +51,14 @@
 //	  - warning: "…"
 //	  - divider: {}
 //
+// Класс obligation (NTF-5 Р12) — только у владельца ObligationOwner (ключ
+// ведомости источников сборки, LoadOwnerFS), атрибуты только
+// ObligationAttrKinds, ключей ttl и limits нет.
+//
+// Отписки в теле нет: блок unsubscribe формат знает только затем, чтобы
+// назвать нарушение по классу (Д9; NTF-4 Р6; NTF-5 Р12), а не отвергнуть его
+// общим «блок вне закрытого набора».
+//
 // Формат закрыт: неизвестный ключ, посторонний файл, повтор ключа — находка.
 // Формат только расширяется: замороженный корпус corpus/<версия>/ каждой
 // выпущенной версии обязан приниматься (NTF1-A08).
@@ -69,6 +84,12 @@ import (
 const (
 	notificationFile = "notification.yaml"
 	revisionFile     = "revision.yaml"
+	// RequiredSecurityFile — перечень обязательного класса в каталоге
+	// шаблонов владельца (NTF-2 Р3, NTF2-99).
+	RequiredSecurityFile = "required-security.yaml"
+	// unsubscribeBlock — вид блока ссылки отписки: вне набора BlockKinds,
+	// узнаётся только для находки.
+	unsubscribeBlock = "unsubscribe"
 )
 
 var (
@@ -84,12 +105,22 @@ func Load(dir string) (Catalog, Census, error) {
 	return LoadFS(fsFromDir(dir), ".")
 }
 
-// LoadFS проверяет каталог шаблонов root в fsys: каждый подкаталог — шаблон.
+// LoadFS проверяет каталог шаблонов root в fsys без названного владельца:
+// шаблон класса obligation в нём — находка (владелец не назван, а класс
+// допустим только у ObligationOwner). См. LoadOwnerFS.
+func LoadFS(fsys fs.FS, root string) (Catalog, Census, error) {
+	return LoadOwnerFS(fsys, root, "")
+}
+
+// LoadOwnerFS проверяет каталог шаблонов root владельца owner в fsys: каждый
+// подкаталог — шаблон, файл RequiredSecurityFile — перечень обязательного
+// класса. owner — ключ ведомости источников сборки (NTF-3), а не сегмент пути
+// каталога (NTF-5 Р12, CX5-20); пустой owner — владелец не назван.
 // Находки возвращаются все сразу ошибкой типа Findings, и проверенного
 // каталога тогда нет. Census — знаменатель: сколько шаблонов, файлов и блоков
 // прочитано; пустой каталог — Census{} без ошибки, судить знаменатель —
 // дело вызывающего. Имена на «.» пропускаются.
-func LoadFS(fsys fs.FS, root string) (Catalog, Census, error) {
+func LoadOwnerFS(fsys fs.FS, root, owner string) (Catalog, Census, error) {
 	entries, err := fs.ReadDir(fsys, root)
 	if err != nil {
 		return Catalog{}, Census{}, fmt.Errorf("notify/spec: каталог шаблонов %s не читается: %w", root, err)
@@ -105,11 +136,20 @@ func LoadFS(fsys fs.FS, root string) (Catalog, Census, error) {
 			continue
 		}
 		if !e.IsDir() {
-			all = append(all, Finding{File: name, Rule: RuleFile})
+			if name != RequiredSecurityFile {
+				all = append(all, Finding{File: name, Rule: RuleFile})
+				continue
+			}
+			list, fs, err := loadRequired(fsys, root, &census)
+			if err != nil {
+				return Catalog{}, census, err
+			}
+			all = append(all, fs...)
+			cat.RequiredSecurity = list
 			continue
 		}
 		census.Templates++
-		tpl, fs, err := loadTemplate(fsys, root, name, &census)
+		tpl, fs, err := loadTemplate(fsys, root, name, owner, &census)
 		if err != nil {
 			return Catalog{}, census, err
 		}
@@ -134,9 +174,54 @@ type attrInfo struct {
 	presenceOK bool
 }
 
+// loadRequired читает перечень обязательного класса: последовательность имён
+// шаблона без повторов. Пустой документ — пустой перечень: его судит гейт
+// владельца («пустой перечень»), а не формат.
+func loadRequired(fsys fs.FS, root string, census *Census) (*RequiredList, Findings, error) {
+	c := &collector{file: RequiredSecurityFile}
+	b, err := fs.ReadFile(fsys, path.Join(root, RequiredSecurityFile))
+	if err != nil {
+		return nil, nil, fmt.Errorf("notify/spec: %s не читается: %w", RequiredSecurityFile, err)
+	}
+	census.Files++
+	var node yaml.Node
+	if err := yaml.Unmarshal(b, &node); err != nil {
+		c.add(nil, 0, "", RuleYAML, yamlReason(err))
+		return nil, c.out, nil
+	}
+	list := &RequiredList{}
+	seq := docNode(&node)
+	if node.Kind == 0 || seq == nil {
+		// Документа нет (пустой файл) либо он пуст.
+		return list, nil, nil
+	}
+	if seq.Kind != yaml.SequenceNode {
+		c.add(seq, 0, "", RuleRequiredListForm, "ожидается последовательность")
+		return nil, c.out, nil
+	}
+	seen := map[string]bool{}
+	for i, it := range seq.Content {
+		field := "[" + strconv.Itoa(i+1) + "]"
+		switch {
+		case it.Kind != yaml.ScalarNode || it.Tag != "!!str" || !templateNameRe.MatchString(it.Value):
+			c.add(it, 0, field, RuleRequiredListForm, "элемент — имя шаблона")
+		case seen[it.Value]:
+			c.add(it, 0, field, RuleRequiredListForm, "имя повторено: "+it.Value)
+		default:
+			seen[it.Value] = true
+			list.Names = append(list.Names, it.Value)
+		}
+	}
+	if len(c.out) > 0 {
+		return nil, c.out, nil
+	}
+	return list, nil, nil
+}
+
 // tmplState — шаблон в разборе.
 type tmplState struct {
 	dir        string
+	owner      string
 	t          Template
 	classOK    bool
 	attrs      map[string]*attrInfo
@@ -149,8 +234,8 @@ type tmplState struct {
 	bodyLocs    map[string]bool
 }
 
-func loadTemplate(fsys fs.FS, root, dir string, census *Census) (Template, Findings, error) {
-	st := &tmplState{dir: dir, t: Template{Dir: dir, Subject: map[string]string{}}, attrs: map[string]*attrInfo{}, subject: map[string]*yaml.Node{}, subjectLocs: map[string]*yaml.Node{}, bodyLocs: map[string]bool{}}
+func loadTemplate(fsys fs.FS, root, dir, owner string, census *Census) (Template, Findings, error) {
+	st := &tmplState{dir: dir, owner: owner, t: Template{Dir: dir, Subject: map[string]string{}}, attrs: map[string]*attrInfo{}, subject: map[string]*yaml.Node{}, subjectLocs: map[string]*yaml.Node{}, bodyLocs: map[string]bool{}}
 	var out Findings
 	entries, err := fs.ReadDir(fsys, path.Join(root, dir))
 	if err != nil {
@@ -218,7 +303,7 @@ func loadTemplate(fsys fs.FS, root, dir string, census *Census) (Template, Findi
 			return Template{}, nil, err
 		}
 		if node != nil {
-			body := Body{Locale: loc, Blocks: parseBody(c, node, census)}
+			body := Body{Locale: loc, Blocks: parseBody(c, node, census, st.unsubscribeRule())}
 			st.checkBody(c, body)
 			parsedBodies = append(parsedBodies, body)
 		}
@@ -269,10 +354,17 @@ func (st *tmplState) parseNotification(c *collector, root *yaml.Node) {
 
 	if n, ok := f["class"]; !ok {
 		c.add(m, 0, "class", RuleClass, "")
-	} else if n.Kind != yaml.ScalarNode || (Class(n.Value) != ClassSecurity && Class(n.Value) != ClassNotice) {
+	} else if n.Kind != yaml.ScalarNode || !slices.Contains(Classes(), Class(n.Value)) {
 		c.add(n, 0, "class", RuleClass, "")
 	} else {
 		st.t.Class, st.classOK = Class(n.Value), true
+		if st.obligation() && st.owner != ObligationOwner {
+			who := "владелец не назван"
+			if st.owner != "" {
+				who = "владелец " + st.owner
+			}
+			c.add(n, 0, "class", RuleObligationOwner, who)
+		}
 	}
 
 	st.t.Recipient = RecipientAddress
@@ -319,8 +411,30 @@ func (st *tmplState) parseNotification(c *collector, root *yaml.Node) {
 	}
 }
 
+// obligation — класс шаблона разобран и это obligation.
+func (st *tmplState) obligation() bool { return st.classOK && st.t.Class == ClassObligation }
+
+// unsubscribeRule — правило находки о блоке отписки по классу шаблона. Класс
+// не разобран — правило без класса: отписка в теле не допустима ни у одного.
+func (st *tmplState) unsubscribeRule() string {
+	switch {
+	case st.classOK && st.t.Class == ClassSecurity:
+		return RuleUnsubscribeSecurity
+	case st.obligation():
+		return RuleUnsubscribeObligation
+	}
+	return RuleUnsubscribeBody
+}
+
 func (st *tmplState) parseTTL(c *collector, m *yaml.Node, f map[string]*yaml.Node) {
 	n, ok := f["ttl"]
+	if st.obligation() {
+		// Срока у письма obligation нет (NTF-5 Р12, §3 З19): ключ — отказ.
+		if ok {
+			c.add(n, 0, "ttl", RuleObligationNoTTL, st.dir)
+		}
+		return
+	}
 	if !ok {
 		c.add(m, 0, "ttl", RuleTTLPositive, "ttl нет")
 		return
@@ -343,6 +457,10 @@ func (st *tmplState) parseTTL(c *collector, m *yaml.Node, f map[string]*yaml.Nod
 func (st *tmplState) parseLimits(c *collector, f map[string]*yaml.Node) {
 	n, ok := f["limits"]
 	if !ok {
+		return
+	}
+	if st.obligation() {
+		c.add(n, 0, "limits", RuleObligationNoLimits, st.dir)
 		return
 	}
 	if n.Kind != yaml.SequenceNode {
@@ -423,6 +541,9 @@ func (st *tmplState) parseAttributes(c *collector, f map[string]*yaml.Node) {
 			c.add(orNode(k, vm), 0, field+".type", RuleAttrKind, "")
 		} else {
 			info.attr.Kind, info.kindOK = form.Kind(k.Value), true
+			if st.obligation() && !slices.Contains(ObligationAttrKinds(), info.attr.Kind) {
+				c.add(k, 0, field+".type", RuleObligationAttrKind, name)
+			}
 		}
 		if p, ok := vf["presence"]; !ok {
 			c.add(vm, 0, field+".presence", RulePresenceMissing, "")
@@ -435,8 +556,9 @@ func (st *tmplState) parseAttributes(c *collector, f map[string]*yaml.Node) {
 }
 
 // parseBody разбирает блоки тела. В тело попадают только блоки без находок
-// разбора: проверки мест ссылок на сломанном блоке дали бы каскад.
-func parseBody(c *collector, root *yaml.Node, census *Census) []Block {
+// разбора: проверки мест ссылок на сломанном блоке дали бы каскад. Блок
+// отписки — находка правила unsubscribeRule, и он считается в census.
+func parseBody(c *collector, root *yaml.Node, census *Census, unsubscribeRule string) []Block {
 	m := c.mapping(docNode(root), 0, "")
 	if m == nil {
 		return nil
@@ -459,7 +581,7 @@ func parseBody(c *collector, root *yaml.Node, census *Census) []Block {
 	for i, item := range n.Content {
 		census.Blocks++
 		before := len(c.out)
-		b := parseBlock(c, item, i+1)
+		b := parseBlock(c, item, i+1, census, unsubscribeRule)
 		if len(c.out) == before {
 			out = append(out, b)
 		}
@@ -467,7 +589,7 @@ func parseBody(c *collector, root *yaml.Node, census *Census) []Block {
 	return out
 }
 
-func parseBlock(c *collector, item *yaml.Node, idx int) Block {
+func parseBlock(c *collector, item *yaml.Node, idx int, census *Census, unsubscribeRule string) Block {
 	b := Block{Index: idx}
 	field := "blocks[" + strconv.Itoa(idx) + "]"
 	if item.Kind != yaml.MappingNode {
@@ -477,6 +599,11 @@ func parseBlock(c *collector, item *yaml.Node, idx int) Block {
 	keys := c.keys(item, field, idx)
 	var kinds []string
 	unknown := 0
+	if u, ok := keys.nodes[unsubscribeBlock]; ok {
+		census.Unsubscribe++
+		c.add(u, idx, field+"."+unsubscribeBlock, unsubscribeRule, "")
+		return b
+	}
 	for _, k := range keys.order {
 		switch {
 		case k == "when":
