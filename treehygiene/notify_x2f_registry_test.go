@@ -4,14 +4,11 @@
 package treehygiene_test
 
 // Пробы полосы X2-F NTF-3 (приёмка ac1f9fc9…; замысел issue-2918 З10
-// «Посадка», Д33, CX3J-01) на реестре исключений гейта AuditFeedTableWrites
-// после Д120: запись «функция resource-event формы fanout, одна на журнал
-// модуля» с областью kacho идёт в реестр ВМЕСТЕ со своим предметом — её
-// возвращает полоса kacho, которая заводит функции resource-event, тем же
-// изменением, с повышением пина. До того запись в реестре не стоит: дерево
-// kacho без функции зелёное (самоистечением не краснеет), а функция,
-// которую пишет notifygen init, на дереве kacho без записи — находка SQL с
-// координатой файла: завести функцию, не вернув запись, нельзя.
+// «Посадка», Д33, CX3J-01) на реестре исключений гейта AuditFeedTableWrites:
+// запись «функция resource-event формы fanout, одна на журнал модуля» с
+// областью kacho признаёт функцию, которую пишет notifygen init, и только её;
+// без функции в дереве области краснеет самоистечением; на дереве kaname (и
+// corelib — TestAuditFeedTableWritesOnCorelib) применимых записей 0.
 //
 // Функция берётся у настоящего генератора этого дерева (go run
 // ./cmd/notifygen), а не выписывается: копии шаблона в пробе нет.
@@ -126,13 +123,16 @@ func (e *initRefused) Error() string {
 }
 
 // kachoMigrations — файлы генератора под services/svc/internal/migrations
-// дерева потребителя.
-func kachoMigrations(gen map[string]string) map[string]string {
+// дерева потребителя; edit правит содержимое функции (не миграции ленты).
+func kachoMigrations(gen map[string]string, edit func(string) string) map[string]string {
 	files := map[string]string{
 		"services/svc/x/x.go":                       x2fGo,
 		"services/svc/internal/migrations/0001.sql": x2fItems,
 	}
 	for name, body := range gen {
+		if edit != nil && strings.Contains(body, "notify_feed_resource_event") {
+			body = edit(body)
+		}
 		files["services/svc/internal/migrations/"+name] = body
 	}
 	return files
@@ -147,10 +147,11 @@ func hasKind(fs []treehygiene.Finding, kind, sub string) bool {
 	return false
 }
 
-// Д120: на дереве kacho без функции resource-event применимых записей
-// реестра 0 и находок 0 — запись без предмета в реестре не стоит; близнец —
-// то же дерево модуля kaname: 0 и 0. Отличие — путь модуля.
-func TestD120_KachoTreeWithoutTheFunctionCarriesNoRegistryEntry(t *testing.T) {
+// З10 «Посадка», Д33: на дереве kacho без функции resource-event запись
+// реестра применима и краснеет самоистечением с именем записи; близнец —
+// то же дерево модуля kaname: применимых записей 0, находок 0. Отличие —
+// путь модуля.
+func TestNTF3_X2F_ResourceEventEntryExpiresOnAKachoTreeWithoutTheFunction(t *testing.T) {
 	files := map[string]string{
 		"services/vpc/x/x.go":                       x2fGo,
 		"services/vpc/internal/migrations/0001.sql": x2fItems,
@@ -170,55 +171,52 @@ func TestD120_KachoTreeWithoutTheFunctionCarriesNoRegistryEntry(t *testing.T) {
 		t.Fatalf("гейт не исполнился на дереве kacho: %v", err)
 	}
 	t.Logf("kacho: %s\n%s", r, kindsOf(r.Findings))
-	if r.Exceptions != 0 || len(r.Findings) != 0 {
-		t.Fatalf("дерево kacho без функции resource-event: применимых записей %d, находок %d — ожидалось 0 и 0 (Д120)\n%s",
-			r.Exceptions, len(r.Findings), kindsOf(r.Findings))
+	if r.Exceptions != 1 {
+		t.Fatalf("применимых к дереву kacho записей реестра %d, ожидалась 1 (функция resource-event формы fanout)", r.Exceptions)
+	}
+	if !hasKind(r.Findings, "feed-exception-without-subject", "resource-event") {
+		t.Fatalf("запись resource-event без функции в дереве не краснеет самоистечением:\n%s", kindsOf(r.Findings))
 	}
 }
 
-// Д120, З10, Д33: функция, которую пишет notifygen init, на дереве kacho без
-// записи реестра — находка SQL с координатой файла функции (признанных 0);
-// близнец — то же дерево без файла функции: находок 0. Отличие — файл
-// функции. Запись возвращает полоса kacho вместе с функцией.
-func TestD120_GeneratedFunctionOnAKachoTreeIsAFindingWithoutTheEntry(t *testing.T) {
+// З10, Д33, CX3J-01: функцию, которую пишет notifygen init, запись признаёт
+// (признанных 1, находок 0); близнец — та же функция с правкой тела (одна
+// подстрока: имя настройки флага) — не признана: находка SQL с координатой
+// файла и самоистечение записи. Отличие — правка тела.
+func TestNTF3_X2F_ResourceEventEntryRecognizesOnlyTheGeneratedFunction(t *testing.T) {
 	gen, err := generatedFanout(t)
 	if err != nil {
 		t.Fatalf("генератор не дал функции resource-event: %v", err)
 	}
-	var fnName string
+	var fn string
 	for name, body := range gen {
 		if strings.Contains(body, "notify_feed_resource_event") {
-			fnName = name
+			fn = "services/svc/internal/migrations/" + name
 		}
 	}
-	if fnName == "" {
+	if fn == "" {
 		t.Fatalf("в выводе init нет функции notify_feed_resource_event: %v", keys(gen))
 	}
-	fn := "services/svc/internal/migrations/" + fnName
 
-	r, err := treehygiene.AuditFeedTableWrites(goSynth(t, realKacho, kachoMigrations(gen)), "pkg/api")
+	r, err := treehygiene.AuditFeedTableWrites(goSynth(t, realKacho, kachoMigrations(gen, nil)), "pkg/api")
 	if err != nil {
 		t.Fatalf("гейт не исполнился: %v", err)
 	}
 	t.Logf("%s\n%s", r, kindsOf(r.Findings))
-	if r.Exceptions != 0 || r.Recognized != 0 || !hasKind(r.Findings, "feed-table-sql-writer", fn) {
-		t.Fatalf("функция генератора без записи: применимых %d, признанных %d — ожидалось 0, 0 и находка SQL в %s\n%s",
-			r.Exceptions, r.Recognized, fn, kindsOf(r.Findings))
+	if r.Exceptions != 1 || r.Recognized != 1 || len(r.Findings) != 0 {
+		t.Fatalf("функция генератора: применимых %d, признанных %d, находок %d — ожидалось 1, 1, 0\n%s",
+			r.Exceptions, r.Recognized, len(r.Findings), kindsOf(r.Findings))
 	}
 
-	without := map[string]string{}
-	for name, body := range gen {
-		if name != fnName {
-			without[name] = body
-		}
-	}
-	twin, err := treehygiene.AuditFeedTableWrites(goSynth(t, realKacho, kachoMigrations(without)), "pkg/api")
+	edited, err := treehygiene.AuditFeedTableWrites(goSynth(t, realKacho, kachoMigrations(gen, func(s string) string {
+		return strings.Replace(s, "kacho_feed.enabled", "kacho_feed.enabledx", 1)
+	})), "pkg/api")
 	if err != nil {
 		t.Fatalf("гейт не исполнился: %v", err)
 	}
-	t.Logf("без функции: %s\n%s", twin, kindsOf(twin.Findings))
-	if len(twin.Findings) != 0 {
-		t.Fatalf("дерево без функции дало находки:\n%s", kindsOf(twin.Findings))
+	t.Logf("правленое тело: %s\n%s", edited, kindsOf(edited.Findings))
+	if edited.Recognized != 0 || !hasKind(edited.Findings, "feed-table-sql-writer", fn) {
+		t.Fatalf("правленое тело признано либо не найдено с координатой %s:\n%s", fn, kindsOf(edited.Findings))
 	}
 }
 
