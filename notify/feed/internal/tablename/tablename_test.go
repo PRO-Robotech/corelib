@@ -85,3 +85,23 @@ func TestValidRefusesAPrefixWhoseDerivedNameWouldBeTruncated(t *testing.T) {
 		tablename.Index(atLimit, tablename.Outbox, tablename.Pending),
 		tablename.Index(atLimit, tablename.Outbox, tablename.Closed))
 }
+
+// Х3 NTF-4: переход схемы снимает CHECK колонки state ленты по имени, которое
+// сервер дал ему по умолчанию (<таблица>_state_check). Имя — от функции
+// пакета; без схемы, как у индекса. Бюджет длины Valid его покрывает: на
+// префиксе у границы имя не длиннее 63 байт, и сервер его не усёк.
+func TestStateCheckIsTheDefaultNameOfTheStateColumnCheck(t *testing.T) {
+	require.Equal(t, `"probe_notification_outbox_state_check"`, tablename.StateCheck("probe"))
+	require.Equal(t, `"vpc_notification_outbox_state_check"`, tablename.StateCheck("kacho_vpc.vpc"))
+
+	atLimit := ""
+	for n := 1; n <= 63; n++ {
+		p := "s" + strings.Repeat("v", n-1)
+		if tablename.Valid(p) != nil {
+			break
+		}
+		atLimit = p
+	}
+	require.NotEmpty(t, atLimit)
+	require.LessOrEqual(t, len(strings.Trim(tablename.StateCheck(atLimit), `"`)), 63)
+}

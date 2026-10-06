@@ -150,7 +150,7 @@ func (m *metrics) observeOutcome(c Class, o Outcome) {
 		m.delivered.Inc()
 	case KindDefer:
 		m.defers.WithLabelValues(m.module, string(o.Reason)).Inc()
-	case KindRecipientRejected, KindDenied, KindInvalid, KindDropped, KindExpired:
+	case KindRecipientRejected, KindDenied, KindInvalid, KindDropped, KindExpired, KindSuppressed:
 		// Своего счётчика сверх клетки исхода у этих видов нет.
 	}
 }

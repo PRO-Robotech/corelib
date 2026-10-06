@@ -101,6 +101,12 @@ const (
 	// EXPIRED — срок строки истёк. Ставит только уборщик источника; в `Ack` —
 	// `INVALID_ARGUMENT`.
 	OutcomeKind_EXPIRED OutcomeKind = 7
+	// SUPPRESSED — письмо не отправлено: адресат подавлен действующей записью
+	// подавления службы отправки. Терминален: секрет строки стирается, лимит
+	// источника не возвращается (это не `EXPIRED`). Причина обязательна и
+	// входит в исход: повтор `Ack` тем же токеном с другой причиной —
+	// `OUTCOME_ALREADY_RECORDED`, как при всяком другом исходе.
+	OutcomeKind_SUPPRESSED OutcomeKind = 8
 )
 
 // Enum value maps for OutcomeKind.
@@ -114,6 +120,7 @@ var (
 		5: "INVALID",
 		6: "DROPPED",
 		7: "EXPIRED",
+		8: "SUPPRESSED",
 	}
 	OutcomeKind_value = map[string]int32{
 		"OUTCOME_UNSPECIFIED": 0,
@@ -124,6 +131,7 @@ var (
 		"INVALID":             5,
 		"DROPPED":             6,
 		"EXPIRED":             7,
+		"SUPPRESSED":          8,
 	}
 )
 
@@ -158,7 +166,8 @@ func (OutcomeKind) EnumDescriptor() ([]byte, []int) {
 //
 // Какие причины допустимы при каком виде, решает одна таблица сочетаний на
 // стороне сервера ленты; сочетание вне неё — `INVALID_ARGUMENT`. `SENT` и
-// `RECIPIENT_REJECTED` причины не несут.
+// `RECIPIENT_REJECTED` причины не несут. Причин отсрочки сверх перечисленных
+// здесь нет: отсрочка по ограничению на адресата — `DEFER` с `RECIPIENT_NET`.
 type OutcomeReason int32
 
 const (
@@ -198,6 +207,16 @@ const (
 	OutcomeReason_UNCLAIMED OutcomeReason = 13
 	// NO_ACK — строка выдана, исход не записан. Только у `EXPIRED`.
 	OutcomeReason_NO_ACK OutcomeReason = 14
+	// HARD_BOUNCE — адресат подавлен после постоянного отказа доставки. Вид
+	// `SUPPRESSED`; единственная причина, подавляющая класс `SECURITY`.
+	OutcomeReason_HARD_BOUNCE OutcomeReason = 15
+	// SOFT_BOUNCE — адресат подавлен после серии временных отказов доставки.
+	// Вид `SUPPRESSED`.
+	OutcomeReason_SOFT_BOUNCE OutcomeReason = 16
+	// COMPLAINT — адресат пожаловался на письмо. Вид `SUPPRESSED`.
+	OutcomeReason_COMPLAINT OutcomeReason = 17
+	// UNSUBSCRIBE — адресат отписался. Вид `SUPPRESSED`.
+	OutcomeReason_UNSUBSCRIBE OutcomeReason = 18
 )
 
 // Enum value maps for OutcomeReason.
@@ -218,6 +237,10 @@ var (
 		12: "KEY_UNAVAILABLE",
 		13: "UNCLAIMED",
 		14: "NO_ACK",
+		15: "HARD_BOUNCE",
+		16: "SOFT_BOUNCE",
+		17: "COMPLAINT",
+		18: "UNSUBSCRIBE",
 	}
 	OutcomeReason_value = map[string]int32{
 		"OUTCOME_REASON_UNSPECIFIED": 0,
@@ -235,6 +258,10 @@ var (
 		"KEY_UNAVAILABLE":            12,
 		"UNCLAIMED":                  13,
 		"NO_ACK":                     14,
+		"HARD_BOUNCE":                15,
+		"SOFT_BOUNCE":                16,
+		"COMPLAINT":                  17,
+		"UNSUBSCRIBE":                18,
 	}
 )
 
@@ -748,7 +775,7 @@ const file_corelib_notify_feed_proto_rawDesc = "" +
 	"\x1eNOTIFICATION_CLASS_UNSPECIFIED\x10\x00\x12\f\n" +
 	"\bSECURITY\x10\x01\x12\n" +
 	"\n" +
-	"\x06NOTICE\x10\x02*\x86\x01\n" +
+	"\x06NOTICE\x10\x02*\x96\x01\n" +
 	"\vOutcomeKind\x12\x17\n" +
 	"\x13OUTCOME_UNSPECIFIED\x10\x00\x12\b\n" +
 	"\x04SENT\x10\x01\x12\x16\n" +
@@ -758,7 +785,9 @@ const file_corelib_notify_feed_proto_rawDesc = "" +
 	"\x06DENIED\x10\x04\x12\v\n" +
 	"\aINVALID\x10\x05\x12\v\n" +
 	"\aDROPPED\x10\x06\x12\v\n" +
-	"\aEXPIRED\x10\a*\xc6\x02\n" +
+	"\aEXPIRED\x10\a\x12\x0e\n" +
+	"\n" +
+	"SUPPRESSED\x10\b*\x88\x03\n" +
 	"\rOutcomeReason\x12\x1e\n" +
 	"\x1aOUTCOME_REASON_UNSPECIFIED\x10\x00\x12\x18\n" +
 	"\x14PLATFORM_UNAVAILABLE\x10\x01\x12\x0e\n" +
@@ -777,7 +806,11 @@ const file_corelib_notify_feed_proto_rawDesc = "" +
 	"\x0fKEY_UNAVAILABLE\x10\f\x12\r\n" +
 	"\tUNCLAIMED\x10\r\x12\n" +
 	"\n" +
-	"\x06NO_ACK\x10\x0e2\xc3\x02\n" +
+	"\x06NO_ACK\x10\x0e\x12\x0f\n" +
+	"\vHARD_BOUNCE\x10\x0f\x12\x0f\n" +
+	"\vSOFT_BOUNCE\x10\x10\x12\r\n" +
+	"\tCOMPLAINT\x10\x11\x12\x0f\n" +
+	"\vUNSUBSCRIBE\x10\x122\xc3\x02\n" +
 	"\x1fInternalNotificationFeedService\x12\x92\x01\n" +
 	"\x05Claim\x12\x1c.corelib.notify.ClaimRequest\x1a\x1d.corelib.notify.ClaimResponse\"L\x8a\xb5\x18 platform.notification_feed.claim\x92\xb5\x18\x06reader\x9a\xb5\x18\x15\n" +
 	"\x11notification_feed \x01\xa2\xb5\x18\x011\x12\x8a\x01\n" +

@@ -107,8 +107,9 @@ func corelibFeedLedger() feedLedger {
 			f("closedSweepSQL"):                {sites: []string{"Outbox"}},
 			f("RetentionSubjects"):             {sites: []string{"Window"}, names: []string{"Outbox", "Window"}},
 			resourceEventPkg + ".outboxInsert": {sites: []string{"Outbox"}},
-			s("v1Up"):                          {sites: []string{"Contrib,Outbox,Window"}, ddl: true},
-			s("v1Down"):                        {sites: []string{"Contrib,Outbox,Window"}, ddl: true},
+			s("tablesUp"):                      {sites: []string{"Contrib,Outbox,Window"}, ddl: true},
+			s("tablesDown"):                    {sites: []string{"Contrib,Outbox,Window"}, ddl: true},
+			s("vocabularyChange"):              {sites: []string{"Outbox"}, ddl: true},
 		},
 	}
 }

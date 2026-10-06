@@ -48,8 +48,10 @@ func TestMigrationIsDeterministic(t *testing.T) {
 	b, err := schema.Migration("probe", schema.V1)
 	require.NoError(t, err)
 	require.Equal(t, a, b)
-	require.Equal(t, []schema.Version{schema.V1}, schema.Versions())
-	require.Equal(t, schema.V1, schema.Current())
+	// Х3 NTF-4: словарь исходов расширен новой версией схемы; V1 остаётся
+	// выпущенной (применённая миграция не правится).
+	require.Equal(t, []schema.Version{schema.V1, 2}, schema.Versions())
+	require.Equal(t, schema.Version(2), schema.Current())
 }
 
 func TestMigrationRefusesAnUnknownVersionAndABadPrefix(t *testing.T) {
@@ -70,8 +72,9 @@ func TestOutcomePairsAreTheOneTable(t *testing.T) {
 	require.Equal(t, []string{"recipient_net"}, pairs["dropped"])
 	require.Contains(t, pairs["invalid"], "attrs_invalid")
 	require.Contains(t, pairs["expired"], "unclaimed")
-	require.Len(t, schema.States(), 7)
-	m, err := schema.Migration("probe", schema.V1)
+	// Х3 NTF-4: восьмое состояние — suppressed.
+	require.Len(t, schema.States(), 8)
+	m, err := schema.Migration("probe", schema.Current())
 	require.NoError(t, err)
 	for _, st := range schema.States() {
 		require.Contains(t, m, "'"+st+"'")

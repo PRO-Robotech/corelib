@@ -38,8 +38,8 @@ func (releasedSchemas) Migration(svc string, v schema.Version) (string, error) {
 	return schema.Migration(svc, v)
 }
 
-func (releasedSchemas) Upgrade(_ string, from, to schema.Version) (string, error) {
-	return "", fmt.Errorf("переход схемы ленты v%d→v%d не выпущен", int(from), int(to))
+func (releasedSchemas) Upgrade(svc string, from, to schema.Version) (string, error) {
+	return schema.Upgrade(svc, from, to)
 }
 
 // feedMigration — имя файла миграции ленты: <метка>_notification_feed_v<N>

@@ -27,6 +27,10 @@ const (
 	KindInvalid           Kind = "invalid"
 	KindDropped           Kind = "dropped"
 	KindExpired           Kind = "expired"
+	// KindSuppressed — письмо подавлено notify (Х3 NTF-4, Р17): терминальный
+	// исход с причиной из закрытого перечня; вклад строки в окна лимита
+	// источника не возвращается.
+	KindSuppressed Kind = "suppressed"
 )
 
 // Reason — причина исхода (словарь Р11). Пустое значение — «причины нет»: так
@@ -50,6 +54,10 @@ const (
 	ReasonKeyUnavailable          Reason = "key_unavailable"
 	ReasonUnclaimed               Reason = "unclaimed"
 	ReasonNoAck                   Reason = "no_ack"
+	ReasonHardBounce              Reason = "hard_bounce"
+	ReasonSoftBounce              Reason = "soft_bounce"
+	ReasonComplaint               Reason = "complaint"
+	ReasonUnsubscribe             Reason = "unsubscribe"
 )
 
 // Outcome — исход строки: вид и причина. Равенство исходов — равенство пары
@@ -64,7 +72,7 @@ func Classes() []Class { return []Class{ClassSecurity, ClassNotice} }
 
 // Kinds — закрытый перечень видов исхода (метка kind).
 func Kinds() []Kind {
-	return []Kind{KindSent, KindRecipientRejected, KindDefer, KindDenied, KindInvalid, KindDropped, KindExpired}
+	return []Kind{KindSent, KindRecipientRejected, KindDefer, KindDenied, KindInvalid, KindDropped, KindExpired, KindSuppressed}
 }
 
 // Reasons — закрытый перечень причин (метка reason), выведенный из ЕДИНСТВЕННОЙ
@@ -110,7 +118,7 @@ func ackReasons() map[Kind][]Reason {
 		return out
 	}
 	out := map[Kind][]Reason{KindDefer: strip(pairs[string(KindExpired)], sweeperOnly)}
-	for _, k := range []Kind{KindSent, KindRecipientRejected, KindDenied, KindInvalid, KindDropped} {
+	for _, k := range []Kind{KindSent, KindRecipientRejected, KindDenied, KindInvalid, KindDropped, KindSuppressed} {
 		rs := strip(pairs[string(k)], serverOnly)
 		if len(rs) == 0 {
 			rs = []Reason{ReasonNone}
