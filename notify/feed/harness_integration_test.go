@@ -30,14 +30,15 @@ import (
 )
 
 // TestMain выдаёт пакету один Postgres: лента фикстурного источника probe —
-// миграцией, которую строит schema (та же, что пишет notifygen init), журнал
+// миграцией ДЕЙСТВУЮЩЕЙ версии, которую строит schema (та же, что пишет
+// notifygen init на чистом дереве службы), журнал
 // подписки формы NTF-3 (колонка инициатора из настройки транзакции) и таблица
 // фикстурного ресурса — строка, записанная до постановки в той же транзакции.
 func TestMain(m *testing.M) {
 	os.Exit(pgtest.Run(m, pgtest.Config{
 		Name: "feed",
 		Migrate: func(ctx context.Context, dsn string) error {
-			up, _, err := schema.DDL("probe", schema.V1)
+			up, _, err := schema.DDL("probe", schema.Current())
 			if err != nil {
 				return err
 			}
