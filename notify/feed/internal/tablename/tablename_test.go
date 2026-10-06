@@ -105,3 +105,35 @@ func TestStateCheckIsTheDefaultNameOfTheStateColumnCheck(t *testing.T) {
 	require.NotEmpty(t, atLimit)
 	require.LessOrEqual(t, len(strings.Trim(tablename.StateCheck(atLimit), `"`)), 63)
 }
+
+// Потребитель получает имя таблицы от сервера (поле TableName отказа,
+// information_schema.tables.table_name) — без схемы и без кавычек. KindOf
+// узнаёт по нему вид таблицы ленты службы; суффиксы остаются только здесь.
+// Близнецы меняют ровно один факт: другая служба, имя в кавычках, имя со
+// схемой, вид вне перечня, негодный префикс — не таблица ленты.
+func TestKindOfRecognisesTheServerReportedNameOfEachFeedTable(t *testing.T) {
+	for _, svc := range []string{"probe", "kacho_vpc.vpc"} {
+		last := svc[strings.LastIndex(svc, ".")+1:]
+		for _, k := range tablename.Kinds() {
+			bare := strings.Trim(tablename.Of(last, k), `"`)
+			got, ok := tablename.KindOf(svc, bare)
+			require.True(t, ok, "%s: %q", svc, bare)
+			require.Equal(t, k, got)
+
+			_, ok = tablename.KindOf("other", bare)
+			require.False(t, ok, "чужая служба: %q", bare)
+			_, ok = tablename.KindOf(svc, `"`+bare+`"`)
+			require.False(t, ok, "имя в кавычках: %q", bare)
+			_, ok = tablename.KindOf(svc, "kacho_vpc."+bare)
+			require.False(t, ok, "имя со схемой: %q", bare)
+		}
+	}
+	_, ok := tablename.KindOf("probe", "probe")
+	require.False(t, ok, "имя самой службы — не таблица ленты")
+	_, ok = tablename.KindOf("probe", "probe_notification_grants")
+	require.False(t, ok, "суффикс вне перечня")
+	_, ok = tablename.KindOf("Probe", "Probe_notification_outbox")
+	require.False(t, ok, "негодный префикс службы ничего не узнаёт")
+	_, ok = tablename.KindOf("", "_notification_outbox")
+	require.False(t, ok, "пустой префикс ничего не узнаёт")
+}

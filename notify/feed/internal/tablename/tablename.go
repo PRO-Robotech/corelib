@@ -154,3 +154,21 @@ func Index(svc string, k Kind, role Role) string {
 	parts := strings.Split(svc, ".")
 	return pgx.Identifier{parts[len(parts)-1] + indexTail(k, role)}.Sanitize()
 }
+
+// KindOf — вид таблицы ленты службы svc, которую называет table, и признак,
+// что table — таблица ленты этой службы. table — имя так, как его отдаёт
+// сервер (поле TableName отказа, information_schema.tables.table_name): без
+// схемы и без кавычек. Схему KindOf не судит — у отказа она в своём поле.
+// Префикс, который отвергает Valid, не узнаёт ни одной таблицы.
+func KindOf(svc, table string) (Kind, bool) {
+	if Valid(svc) != nil {
+		return 0, false
+	}
+	parts := strings.Split(svc, ".")
+	for _, k := range Kinds() {
+		if table == parts[len(parts)-1]+suffixes[k] {
+			return k, true
+		}
+	}
+	return 0, false
+}
