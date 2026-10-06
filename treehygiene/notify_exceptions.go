@@ -10,18 +10,32 @@
 // области к дереву не применяется и самоистечением не краснеет; гейт печатает
 // число применимых записей (CX1-74 (а)).
 //
-// Реестр пуст (Д120): запись идёт в реестр ВМЕСТЕ со своим предметом.
-// Запись функции resource-event формы fanout (Д33, NTF-3 З10) с областью
-// kacho возвращает полоса kacho, которая заводит функции resource-event, тем
-// же изменением, с повышением пина; признание функции — сверка с выводом
-// шаблона (resourceevent.Recognize), копии шаблона в гейте нет. До того
-// функция resource-event на дереве kacho — находка SQL.
+// Запись одна — функция resource-event формы fanout, одна на журнал модуля
+// (Д33, NTF-3 З10): её вносит в реестр та же полоса NTF-3 (X2-F), которая
+// даёт генератору эту форму и выпущенные версии шаблона тела. Признание
+// функции — сверка с выводом шаблона (resourceevent.Recognize: извлечь входы
+// из тела, вывести шаблон на них, сравнить побайтно); копии шаблона в гейте
+// нет. Область — дерево kacho: на corelib и kaname запись не применяется и
+// самоистечением не краснеет.
 package treehygiene
 
 import (
 	"errors"
 	"fmt"
+	"os"
+	"path"
+	"path/filepath"
+	"strings"
+
+	"github.com/PRO-Robotech/corelib/notify/feed/resourceevent"
 )
+
+// kachoModulePath — модуль дерева kacho: область записи resource-event.
+const kachoModulePath = "github.com/PRO-Robotech/kacho"
+
+// resourceEventEntry — имя записи функции resource-event; печатается в
+// находке самоистечения.
+const resourceEventEntry = "resource-event: функция базы формы fanout, одна на журнал модуля"
 
 // feedWriteException — запись реестра исключений.
 type feedWriteException struct {
@@ -40,8 +54,43 @@ type feedWriteException struct {
 	Recognizes func(content []byte) bool
 }
 
-// feedWriteExceptions — реестр. Пуст (Д120).
-func feedWriteExceptions() []feedWriteException { return nil }
+// feedWriteExceptions — реестр.
+func feedWriteExceptions() []feedWriteException {
+	return []feedWriteException{{
+		Name:  resourceEventEntry,
+		Scope: kachoModulePath,
+		Reason: "Д33, NTF-3 З10: строку ленты формы fanout на каждую строку журнала модуля ставит функция базы " +
+			"на таблице журнала; её тело — вывод выпущенной версии шаблона notifygen, а не ручной писатель ленты",
+		Removal:    resourceEventFunctions,
+		Recognizes: recognizesResourceEvent,
+	}}
+}
+
+func recognizesResourceEvent(content []byte) bool {
+	_, ok := resourceevent.Recognize(content)
+	return ok
+}
+
+// resourceEventFunctions — предикат снятия записи resource-event: число
+// функций, признанных выводом шаблона, в отслеживаемых *.sql дерева.
+// Функция — пара (каталог миграций, журнал): CREATE OR REPLACE той же
+// функции новой миграцией второй функцией не считается.
+func resourceEventFunctions(g *goTree) (int, error) {
+	seen := map[string]bool{}
+	for _, rel := range g.tree.SortedFiles() {
+		if !strings.HasSuffix(rel, ".sql") {
+			continue
+		}
+		data, err := os.ReadFile(filepath.Join(g.root, filepath.FromSlash(rel)))
+		if err != nil {
+			return 0, fmt.Errorf("%s не читается: %w", rel, err)
+		}
+		if p, ok := resourceevent.Recognize(data); ok {
+			seen[path.Dir(rel)+" "+p.File.Up.Inputs.Table] = true
+		}
+	}
+	return len(seen), nil
+}
 
 // recognizers — признающие файлы записи, применимые к дереву module.
 func recognizers(module string, entries []feedWriteException) []func([]byte) bool {
