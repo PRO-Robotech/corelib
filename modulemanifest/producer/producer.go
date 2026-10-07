@@ -54,10 +54,13 @@
 //	        enabledBy: notifyProbe.enabled
 //
 // `enabledBy` — путь к ТОМУ ЖЕ значению, которым чарт включает сам модуль, и
-// читается оно тем же наложением профилей. Второго объявления «включено» нет:
-// манифест и нагрузка не могут разойтись, потому что спрашивают одно значение.
-// Необъявленное значение удерживает манифест так же, как чарт не рендерит
-// объект при пустом `(.Values.x).enabled`. Ключ доставки — каталог источника
+// читается оно тем же наложением профилей, что у helm (см. mergeValues): не
+// отображение на любом префиксе пути, null в том числе, перекрывает прежнее
+// значение целиком. Второго объявления «включено» нет: манифест и нагрузка не
+// могут разойтись, потому что спрашивают одно значение, полученное одним
+// законом. Необъявленное значение удерживает манифест так же, как чарт не
+// рендерит объект при пустом `(.Values.x).enabled`; скаляр на префиксе — находка,
+// как у чарта, который на нём отказывает в рендере. Ключ доставки — каталог источника
 // под `services/` с `/`, заменённым на `-` (`notify-probe.manifest.yaml`);
 // совпадение с ключом другого источника — находка, а не перезапись.
 package producer
@@ -196,7 +199,11 @@ func Collect(repoRoot string, profiles []string) (Delivery, error) {
 	if err != nil {
 		return d, err
 	}
-	name := chain.configMapName()
+	vals := chain.merged()
+	name, err := vals.configMapName()
+	if err != nil {
+		return d, err
+	}
 	if name == "" {
 		return d, ErrNotDeclared
 	}
@@ -211,7 +218,7 @@ func Collect(repoRoot string, profiles []string) (Delivery, error) {
 		return d, err
 	}
 
-	conditional, err := chain.conditional(repoRoot, sources, &d.Census)
+	conditional, err := vals.conditional(repoRoot, sources, &d.Census)
 	if err != nil {
 		return d, err
 	}
@@ -261,34 +268,90 @@ func readChain(profiles []string) (profileChain, error) {
 	return chain, nil
 }
 
-// lookup — значение по пути с учётом наложения: побеждает последнее
-// ОБЪЯВЛЕНИЕ, даже пустое.
-func (c profileChain) lookup(path ...string) (any, bool) {
-	var (
-		val      any
-		declared bool
-	)
+// values — значения цепочки, наложенные одним законом с helm.
+type values map[string]any
+
+// merged — профили цепочки, наложенные СЛЕВА НАПРАВО правилом helm.
+//
+// Поиск пути по каждому профилю отдельно этого закона не выражает: слой
+// `notifyProbe: null` пути `notifyProbe.enabled` не содержит, и прежнее `true`
+// пережило бы его — а helm ветку удаляет, и модуль не рендерится. Значение,
+// которое читает производитель, обязано быть тем, которое получает чарт, иначе
+// манифест и модуль расходятся молча (возврат ревью corelib#100).
+func (c profileChain) merged() values {
+	out := map[string]any{}
 	for _, tree := range c {
-		if v, ok := nestedValue(tree, path...); ok {
-			val, declared = v, true
+		out = mergeValues(out, tree)
+	}
+	return out
+}
+
+// mergeValues — наложение b поверх a по правилу helm для цепочки `-f`:
+// отображение поверх отображения сливается по ключам, всё прочее — скаляр,
+// перечень, null — заменяет прежнее значение целиком. null остаётся в дереве
+// пометкой «удалено»: helm снимает такие ключи при слиянии с умолчаниями чарта,
+// и lookup читает их как необъявленные.
+func mergeValues(a, b map[string]any) map[string]any {
+	out := make(map[string]any, len(a)+len(b))
+	for k, v := range a {
+		out[k] = v
+	}
+	for k, v := range b {
+		if bm, ok := v.(map[string]any); ok {
+			if am, ok := out[k].(map[string]any); ok {
+				out[k] = mergeValues(am, bm)
+				continue
+			}
+		}
+		out[k] = v
+	}
+	return out
+}
+
+// lookup — значение по пути в наложенных значениях и признак того, что оно
+// ОБЪЯВЛЕНО. null на любом префиксе пути или на листе — «не объявлено»: helm
+// такой ключ снимает. Скаляр или перечень на префиксе — находка: чарт, читающий
+// под ним поле, отказывает в рендере, и тихо вернуться к нижнему слою значило бы
+// доставить то, чего helm не поднимет.
+func (v values) lookup(path ...string) (any, bool, error) {
+	cur := any(map[string]any(v))
+	for i, seg := range path {
+		if cur == nil {
+			return nil, false, nil
+		}
+		m, ok := cur.(map[string]any)
+		if !ok {
+			return nil, false, fmt.Errorf("%s объявлено %T (%v), а не отображением — "+
+				"под ним нечего читать %s; helm на такой цепочке отказывает в рендере",
+				strings.Join(path[:i], "."), cur, cur, strings.Join(path, "."))
+		}
+		cur, ok = m[seg]
+		if !ok {
+			return nil, false, nil
 		}
 	}
-	return val, declared
+	if cur == nil {
+		return nil, false, nil
+	}
+	return cur, true, nil
 }
 
 // configMapName — имя ConfigMap, объявленное цепочкой профилей.
 //
-// Побеждает последнее ОБЪЯВЛЕНИЕ, даже если оно пустое. Пустое объявление — это
-// решение посадки («доставки здесь нет»), а не молчание, и перебивать его
-// предыдущим значило бы принимать решение за оператора.
-func (c profileChain) configMapName() string {
-	name := ""
-	for _, tree := range c {
-		if v, ok := nestedString(tree, chartValuesPath...); ok {
-			name = v
-		}
+// Пустое имя, null на листе или на префиксе — «доставки здесь нет»: это решение
+// посадки, и прежним слоем оно не перебивается. Не строка — находка: чарт
+// подставил бы в имя объекта то, чего производитель не положит.
+func (v values) configMapName() (string, error) {
+	raw, declared, err := v.lookup(chartValuesPath...)
+	if err != nil || !declared {
+		return "", err
 	}
-	return name
+	name, ok := raw.(string)
+	if !ok {
+		return "", fmt.Errorf("%s объявлено %T (%v), а не строкой",
+			strings.Join(chartValuesPath, "."), raw, raw)
+	}
+	return name, nil
 }
 
 // conditional — условные источники, которые эта цепочка включает.
@@ -296,10 +359,10 @@ func (c profileChain) configMapName() string {
 // Каждое объявление проверяется ЦЕЛИКОМ при любом значении условия: источник,
 // которого нет в дереве, — находка и в цепочке, где он удержан, иначе
 // объявление переживёт свой предмет молча.
-func (c profileChain) conditional(repoRoot string, unconditional []Source, census *Census) ([]Source, error) {
-	raw, declared := c.lookup(conditionalValuesPath...)
-	if !declared || raw == nil {
-		return nil, nil
+func (v values) conditional(repoRoot string, unconditional []Source, census *Census) ([]Source, error) {
+	raw, declared, err := v.lookup(conditionalValuesPath...)
+	if err != nil || !declared {
+		return nil, err
 	}
 	where := strings.Join(conditionalValuesPath, ".")
 	items, ok := raw.([]any)
@@ -334,7 +397,7 @@ func (c profileChain) conditional(repoRoot string, unconditional []Source, censu
 		}
 		s.Body = body
 
-		on, state, err := c.enabled(enabledBy)
+		on, state, err := v.enabled(enabledBy)
 		if err != nil {
 			return nil, fmt.Errorf("%s[%d] (%s): %w", where, i, s.Path, err)
 		}
@@ -402,57 +465,25 @@ func conditionalSource(item any) (Source, string, error) {
 
 // enabled — значение условия по наложению профилей. Не булево — находка: чарт
 // читает его истинностью шаблона, и строка "false" там включила бы модуль.
-func (c profileChain) enabled(path string) (bool, string, error) {
+func (v values) enabled(path string) (bool, string, error) {
 	segs := strings.Split(path, ".")
 	for _, s := range segs {
 		if s == "" {
 			return false, "", fmt.Errorf("условие %q: пустой сегмент пути", path)
 		}
 	}
-	v, declared := c.lookup(segs...)
-	if !declared || v == nil {
+	raw, declared, err := v.lookup(segs...)
+	if err != nil {
+		return false, "", fmt.Errorf("условие %s: %w", path, err)
+	}
+	if !declared {
 		return false, "не объявлено", nil
 	}
-	b, ok := v.(bool)
+	b, ok := raw.(bool)
 	if !ok {
-		return false, "", fmt.Errorf("условие %s объявлено %T (%v), а не булевым", path, v, v)
+		return false, "", fmt.Errorf("условие %s объявлено %T (%v), а не булевым", path, raw, raw)
 	}
 	return b, fmt.Sprint(b), nil
-}
-
-// nestedString — значение по пути и признак того, что ключ ОБЪЯВЛЕН.
-//
-// Пустое объявленное значение и отсутствие ключа — разные утверждения, и
-// различать их обязан вызывающий.
-func nestedString(tree map[string]any, path ...string) (string, bool) {
-	cur, ok := nestedValue(tree, path...)
-	if !ok {
-		return "", false
-	}
-	if cur == nil {
-		return "", true
-	}
-	s, ok := cur.(string)
-	if !ok {
-		return "", false
-	}
-	return s, true
-}
-
-// nestedValue — значение по пути и признак того, что ключ ОБЪЯВЛЕН.
-func nestedValue(tree map[string]any, path ...string) (any, bool) {
-	cur := any(tree)
-	for _, seg := range path {
-		m, ok := cur.(map[string]any)
-		if !ok {
-			return nil, false
-		}
-		cur, ok = m[seg]
-		if !ok {
-			return nil, false
-		}
-	}
-	return cur, true
 }
 
 // discover — манифесты дерева и перепись осмотренного.
