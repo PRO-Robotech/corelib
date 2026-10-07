@@ -38,6 +38,31 @@
 // ConfigMap может быть только одно, а подкаталога внутри ключа не бывает вовсе —
 // замер обеими командами приведён в
 // `services/iam/internal/manifest/delivery.go`.
+//
+// # Условная доставка: манифест модуля, который есть не в каждой установке
+//
+// Безусловный обход раздаёт найденное ВСЕМ цепочкам. Для модуля, который
+// поднимается не везде (стендовая проба), это неверно: манифест — строка модели
+// прав, и применитель заведёт по ней кортежи и запись выдачи для службы, которой
+// в установке нет. Поэтому такой манифест лежит ВНЕ безусловного обхода
+// (глубже `services/<каталог>/`), а доставку объявляет сторона развёртывания:
+//
+//	kaname:
+//	  manifests:
+//	    conditional:
+//	      - source: services/notify/probe/manifest.yaml
+//	        enabledBy: notifyProbe.enabled
+//
+// `enabledBy` — путь к ТОМУ ЖЕ значению, которым чарт включает сам модуль, и
+// читается оно тем же наложением профилей, что у helm (см. mergeValues): не
+// отображение на любом префиксе пути, null в том числе, перекрывает прежнее
+// значение целиком. Второго объявления «включено» нет: манифест и нагрузка не
+// могут разойтись, потому что спрашивают одно значение, полученное одним
+// законом. Необъявленное значение удерживает манифест так же, как чарт не
+// рендерит объект при пустом `(.Values.x).enabled`; скаляр на префиксе — находка,
+// как у чарта, который на нём отказывает в рендере. Ключ доставки — каталог источника
+// под `services/` с `/`, заменённым на `-` (`notify-probe.manifest.yaml`);
+// совпадение с ключом другого источника — находка, а не перезапись.
 package producer
 
 import (
@@ -45,6 +70,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 
@@ -87,6 +113,13 @@ const ConfigMapDataLimit = 1 << 20
 // приедет пустым, и снаружи это неотличимо от «модулей нет».
 var chartValuesPath = []string{"kaname", "manifests", "configMapName"}
 
+// conditionalValuesPath — путь к перечню условно доставляемых манифестов в
+// профилях стенда (шапка пакета, §«Условная доставка»).
+var conditionalValuesPath = []string{"kaname", "manifests", "conditional"}
+
+// configMapKey — допустимый ключ ConfigMap (так его судит apiserver).
+var configMapKey = regexp.MustCompile(`^[-._a-zA-Z0-9]+$`)
+
 // ErrNotDeclared — цепочка профилей доставку не объявляет.
 //
 // Это ЗАКОННЫЙ исход, а не отказ: стенд вправе не опираться на манифесты, и
@@ -103,7 +136,8 @@ var ErrNoManifests = errors.New("манифеста в дереве нет ни 
 
 // Source — манифест модуля, найденный в дереве.
 type Source struct {
-	// Dir — каталог службы под `services/`. Он же — начало ключа ConfigMap.
+	// Dir — каталог источника под `services/`: у безусловного — каталог службы,
+	// у условного — вложенный путь (`notify/probe`). Из него собирается ключ.
 	Dir string
 	// Path — путь манифеста ОТ КОРНЯ ДЕРЕВА: координата для находки.
 	Path string
@@ -114,7 +148,9 @@ type Source struct {
 }
 
 // Key — ключ ConfigMap для этого источника.
-func (s Source) Key() string { return modulemanifest.DeliveryKey(s.Dir) }
+func (s Source) Key() string {
+	return modulemanifest.DeliveryKey(strings.ReplaceAll(s.Dir, "/", "-"))
+}
 
 // Census — объём осмотренного. Печатается ВСЕГДА, на всяком исходе: без него
 // «ноль находок» не отличается от «ноль прочитанного».
@@ -132,8 +168,16 @@ type Census struct {
 	// Но и молчать нельзя: доставка пяти манифестов из шести снаружи выглядит
 	// точно так же, как доставка всех.
 	WithoutManifest []string
-	// Bytes — байт манифестов, доставляемых в ConfigMap.
+	// Bytes — байт манифестов, доставляемых в ConfigMap (безусловных и условно
+	// доставленных).
 	Bytes int
+	// ConditionalDelivered — условные источники, доставленные этой цепочкой:
+	// путь и значение условия.
+	ConditionalDelivered []string
+	// ConditionalWithheld — условные источники, удержанные этой цепочкой: путь и
+	// значение условия либо «не объявлено». Не находка — решение посадки; но
+	// назван каждый, иначе «удержан по условию» неотличим от «не найден».
+	ConditionalWithheld []string
 }
 
 // Delivery — то, что производитель собрал: имя объекта, источники и перепись.
@@ -150,8 +194,13 @@ type Delivery struct {
 func Collect(repoRoot string, profiles []string) (Delivery, error) {
 	var d Delivery
 
-	name, read, err := declaredConfigMapName(profiles)
-	d.Census.ProfilesRead = read
+	chain, err := readChain(profiles)
+	d.Census.ProfilesRead = len(chain)
+	if err != nil {
+		return d, err
+	}
+	vals := chain.merged()
+	name, err := vals.configMapName()
 	if err != nil {
 		return d, err
 	}
@@ -168,6 +217,14 @@ func Collect(repoRoot string, profiles []string) (Delivery, error) {
 	if err != nil {
 		return d, err
 	}
+
+	conditional, err := vals.conditional(repoRoot, sources, &d.Census)
+	if err != nil {
+		return d, err
+	}
+	sources = append(sources, conditional...)
+	sort.Slice(sources, func(i, j int) bool { return sources[i].Key() < sources[j].Key() })
+
 	if len(sources) == 0 {
 		return d, ErrNoManifests
 	}
@@ -181,64 +238,252 @@ func Collect(repoRoot string, profiles []string) (Delivery, error) {
 	return d, nil
 }
 
-// declaredConfigMapName — имя ConfigMap, объявленное цепочкой профилей.
-//
-// Профили накладываются СЛЕВА НАПРАВО, ровно как их получает helm: побеждает
-// последнее ОБЪЯВЛЕНИЕ, даже если оно пустое. Пустое объявление — это решение
-// посадки («доставки здесь нет»), а не молчание, и перебивать его предыдущим
-// значило бы принимать решение за оператора.
-func declaredConfigMapName(profiles []string) (string, int, error) {
+// profileChain — разобранные профили цепочки в порядке наложения.
+type profileChain []map[string]any
+
+// readChain читает и разбирает профили СЛЕВА НАПРАВО, ровно как их получает
+// helm. Длина результата — число прочитанных профилей, включая тот, что
+// прочитан, но не разобран.
+func readChain(profiles []string) (profileChain, error) {
 	if len(profiles) == 0 {
-		return "", 0, errors.New(
+		return nil, errors.New(
 			"цепочка профилей пуста — читать объявление неоткуда; " +
 				"пустая цепочка это отказ чтения, а не стенд без профилей")
 	}
-	name := ""
-	read := 0
+	chain := make(profileChain, 0, len(profiles))
 	for _, p := range profiles {
 		// #nosec G304 -- путь приходит от вызывающего (цепочка стенда из
 		// stacks.txt); посторонний файл подставить нечем.
 		raw, err := os.ReadFile(p)
 		if err != nil {
-			return "", read, fmt.Errorf("профиль %s не прочитан: %w — непрочитанное есть "+
+			return chain, fmt.Errorf("профиль %s не прочитан: %w — непрочитанное есть "+
 				"НАХОДКА, а не «объявления нет»", p, err)
 		}
-		read++
 		var tree map[string]any
 		if err := yaml.Unmarshal(raw, &tree); err != nil {
-			return "", read, fmt.Errorf("профиль %s не разобран: %w", p, err)
+			return append(chain, nil), fmt.Errorf("профиль %s не разобран: %w", p, err)
 		}
-		if v, ok := nestedString(tree, chartValuesPath...); ok {
-			name = v
-		}
+		chain = append(chain, tree)
 	}
-	return name, read, nil
+	return chain, nil
 }
 
-// nestedString — значение по пути и признак того, что ключ ОБЪЯВЛЕН.
+// values — значения цепочки, наложенные одним законом с helm.
+type values map[string]any
+
+// merged — профили цепочки, наложенные СЛЕВА НАПРАВО правилом helm.
 //
-// Пустое объявленное значение и отсутствие ключа — разные утверждения, и
-// различать их обязан вызывающий.
-func nestedString(tree map[string]any, path ...string) (string, bool) {
-	cur := any(tree)
-	for _, seg := range path {
+// Поиск пути по каждому профилю отдельно этого закона не выражает: слой
+// `notifyProbe: null` пути `notifyProbe.enabled` не содержит, и прежнее `true`
+// пережило бы его — а helm ветку удаляет, и модуль не рендерится. Значение,
+// которое читает производитель, обязано быть тем, которое получает чарт, иначе
+// манифест и модуль расходятся молча (возврат ревью corelib#100).
+func (c profileChain) merged() values {
+	out := map[string]any{}
+	for _, tree := range c {
+		out = mergeValues(out, tree)
+	}
+	return out
+}
+
+// mergeValues — наложение b поверх a по правилу helm для цепочки `-f`:
+// отображение поверх отображения сливается по ключам, всё прочее — скаляр,
+// перечень, null — заменяет прежнее значение целиком. null остаётся в дереве
+// пометкой «удалено»: helm снимает такие ключи при слиянии с умолчаниями чарта,
+// и lookup читает их как необъявленные.
+func mergeValues(a, b map[string]any) map[string]any {
+	out := make(map[string]any, len(a)+len(b))
+	for k, v := range a {
+		out[k] = v
+	}
+	for k, v := range b {
+		if bm, ok := v.(map[string]any); ok {
+			if am, ok := out[k].(map[string]any); ok {
+				out[k] = mergeValues(am, bm)
+				continue
+			}
+		}
+		out[k] = v
+	}
+	return out
+}
+
+// lookup — значение по пути в наложенных значениях и признак того, что оно
+// ОБЪЯВЛЕНО. null на любом префиксе пути или на листе — «не объявлено»: helm
+// такой ключ снимает. Скаляр или перечень на префиксе — находка: чарт, читающий
+// под ним поле, отказывает в рендере, и тихо вернуться к нижнему слою значило бы
+// доставить то, чего helm не поднимет.
+func (v values) lookup(path ...string) (any, bool, error) {
+	cur := any(map[string]any(v))
+	for i, seg := range path {
+		if cur == nil {
+			return nil, false, nil
+		}
 		m, ok := cur.(map[string]any)
 		if !ok {
-			return "", false
+			return nil, false, fmt.Errorf("%s объявлено %T (%v), а не отображением — "+
+				"под ним нечего читать %s; helm на такой цепочке отказывает в рендере",
+				strings.Join(path[:i], "."), cur, cur, strings.Join(path, "."))
 		}
 		cur, ok = m[seg]
 		if !ok {
-			return "", false
+			return nil, false, nil
 		}
 	}
 	if cur == nil {
-		return "", true
+		return nil, false, nil
 	}
-	s, ok := cur.(string)
+	return cur, true, nil
+}
+
+// configMapName — имя ConfigMap, объявленное цепочкой профилей.
+//
+// Пустое имя, null на листе или на префиксе — «доставки здесь нет»: это решение
+// посадки, и прежним слоем оно не перебивается. Не строка — находка: чарт
+// подставил бы в имя объекта то, чего производитель не положит.
+func (v values) configMapName() (string, error) {
+	raw, declared, err := v.lookup(chartValuesPath...)
+	if err != nil || !declared {
+		return "", err
+	}
+	name, ok := raw.(string)
 	if !ok {
-		return "", false
+		return "", fmt.Errorf("%s объявлено %T (%v), а не строкой",
+			strings.Join(chartValuesPath, "."), raw, raw)
 	}
-	return s, true
+	return name, nil
+}
+
+// conditional — условные источники, которые эта цепочка включает.
+//
+// Каждое объявление проверяется ЦЕЛИКОМ при любом значении условия: источник,
+// которого нет в дереве, — находка и в цепочке, где он удержан, иначе
+// объявление переживёт свой предмет молча.
+func (v values) conditional(repoRoot string, unconditional []Source, census *Census) ([]Source, error) {
+	raw, declared, err := v.lookup(conditionalValuesPath...)
+	if err != nil || !declared {
+		return nil, err
+	}
+	where := strings.Join(conditionalValuesPath, ".")
+	items, ok := raw.([]any)
+	if !ok {
+		return nil, fmt.Errorf("%s: ожидался перечень {source, enabledBy}, объявлено %T", where, raw)
+	}
+
+	taken := make(map[string]string, len(unconditional)+len(items))
+	for _, s := range unconditional {
+		taken[s.Key()] = s.Path
+	}
+
+	var out []Source
+	for i, item := range items {
+		s, enabledBy, err := conditionalSource(item)
+		if err != nil {
+			return nil, fmt.Errorf("%s[%d]: %w", where, i, err)
+		}
+		if prev, dup := taken[s.Key()]; dup {
+			return nil, fmt.Errorf("%s[%d]: источник %s даёт ключ %s, уже занятый %s — "+
+				"доставка одного ключа двумя источниками перезаписала бы один молча",
+				where, i, s.Path, s.Key(), prev)
+		}
+		taken[s.Key()] = s.Path
+
+		// #nosec G304 -- путь проверен conditionalSource: относительный,
+		// очищенный, под services/, с базовым именем манифеста.
+		body, err := os.ReadFile(filepath.Join(repoRoot, s.Path))
+		if err != nil {
+			return nil, fmt.Errorf("%s[%d]: условный манифест %s не прочитан: %w — объявление "+
+				"без предмета есть находка и там, где оно удержано", where, i, s.Path, err)
+		}
+		s.Body = body
+
+		on, state, err := v.enabled(enabledBy)
+		if err != nil {
+			return nil, fmt.Errorf("%s[%d] (%s): %w", where, i, s.Path, err)
+		}
+		mark := fmt.Sprintf("%s (%s=%s)", s.Path, enabledBy, state)
+		if !on {
+			census.ConditionalWithheld = append(census.ConditionalWithheld, mark)
+			continue
+		}
+		census.ConditionalDelivered = append(census.ConditionalDelivered, mark)
+		census.Bytes += len(body)
+		out = append(out, s)
+	}
+	return out, nil
+}
+
+// conditionalSource разбирает одну запись перечня в источник (без тела) и путь
+// условия. Ключ вне формы — находка: опечатка в имени условия иначе удержала бы
+// манифест молча.
+//
+// Источник обязан лежать ГЛУБЖЕ `services/<каталог>/`: на этой глубине его уже
+// берёт безусловный обход, и условие было бы ложью — манифест доставлялся бы
+// всем цепочкам при любом его значении.
+func conditionalSource(item any) (Source, string, error) {
+	m, ok := item.(map[string]any)
+	if !ok {
+		return Source{}, "", fmt.Errorf("запись не отображение {source, enabledBy}, а %T", item)
+	}
+	for k := range m {
+		if k != "source" && k != "enabledBy" {
+			return Source{}, "", fmt.Errorf("ключ %q вне формы {source, enabledBy}", k)
+		}
+	}
+	source, _ := m["source"].(string)
+	enabledBy, _ := m["enabledBy"].(string)
+	if source == "" {
+		return Source{}, "", errors.New("source не объявлен строкой — доставлять нечего")
+	}
+	if enabledBy == "" {
+		return Source{}, "", fmt.Errorf("%s: enabledBy не объявлен строкой — условие доставки "+
+			"обязано быть названо, иначе манифест раздаётся всем цепочкам", source)
+	}
+
+	if filepath.IsAbs(source) || filepath.Clean(source) != source ||
+		!strings.HasPrefix(source, servicesDir+"/") {
+		return Source{}, "", fmt.Errorf("источник %s не путь под %s/ от корня дерева",
+			source, servicesDir)
+	}
+	if filepath.Base(source) != manifestFileName {
+		return Source{}, "", fmt.Errorf("источник %s не манифест: базовое имя обязано быть %s",
+			source, manifestFileName)
+	}
+	dir := strings.TrimPrefix(filepath.Dir(source), servicesDir+"/")
+	if !strings.Contains(dir, "/") {
+		return Source{}, "", fmt.Errorf("источник %s уже доставляется безусловным обходом "+
+			"%s/*/%s — условие на нём ничего не удерживает; условный манифест кладётся глубже",
+			source, servicesDir, manifestFileName)
+	}
+	s := Source{Dir: dir, Path: source}
+	if !configMapKey.MatchString(s.Key()) {
+		return Source{}, "", fmt.Errorf("источник %s даёт ключ %q, недопустимый для ConfigMap",
+			source, s.Key())
+	}
+	return s, enabledBy, nil
+}
+
+// enabled — значение условия по наложению профилей. Не булево — находка: чарт
+// читает его истинностью шаблона, и строка "false" там включила бы модуль.
+func (v values) enabled(path string) (bool, string, error) {
+	segs := strings.Split(path, ".")
+	for _, s := range segs {
+		if s == "" {
+			return false, "", fmt.Errorf("условие %q: пустой сегмент пути", path)
+		}
+	}
+	raw, declared, err := v.lookup(segs...)
+	if err != nil {
+		return false, "", fmt.Errorf("условие %s: %w", path, err)
+	}
+	if !declared {
+		return false, "не объявлено", nil
+	}
+	b, ok := raw.(bool)
+	if !ok {
+		return false, "", fmt.Errorf("условие %s объявлено %T (%v), а не булевым", path, raw, raw)
+	}
+	return b, fmt.Sprint(b), nil
 }
 
 // discover — манифесты дерева и перепись осмотренного.
@@ -311,7 +556,8 @@ func Render(d Delivery) ([]byte, error) {
 
 	root.HeadComment = strings.Join([]string{
 		"ПОРОЖДЁН module-manifests-configmap (задача #1901) — руками не править.",
-		"Источник: services/*/manifest.yaml того же дерева; имя объекта — из профилей стенда.",
+		"Источник: services/*/manifest.yaml того же дерева и условные манифесты, включённые цепочкой;",
+		"имя объекта и условия — из профилей стенда.",
 		"Ключ = каталог службы: имя manifest.yaml в одном ConfigMap может быть только одно.",
 	}, "\n")
 
@@ -335,6 +581,12 @@ func (c Census) Summary() string {
 		c.ProfilesRead, c.ServiceDirs, c.Manifests, c.Bytes)
 	if len(c.WithoutManifest) > 0 {
 		s += " · без манифеста: " + strings.Join(c.WithoutManifest, ", ")
+	}
+	if len(c.ConditionalDelivered) > 0 {
+		s += " · по условию доставлено: " + strings.Join(c.ConditionalDelivered, ", ")
+	}
+	if len(c.ConditionalWithheld) > 0 {
+		s += " · по условию удержано: " + strings.Join(c.ConditionalWithheld, ", ")
 	}
 	return s
 }
