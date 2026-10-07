@@ -144,6 +144,13 @@ type ForwarderGate struct {
 	SANsKnob string
 	// TrustAnyKnob — имя ручки опт-ина (для текста отказа).
 	TrustAnyKnob string
+	// NoOptIn — у процесса опт-ина «не сужаем» НЕТ вовсе: пустой круг для него
+	// отказ в ЛЮБОМ режиме, а текст отказа не зовёт взвести ручку, которой у
+	// процесса быть не должно. Это объявление, а не ручка со значением false:
+	// «опт-ина нет» и «опт-ин есть, но не испрошен» — разные состояния, и одно
+	// значение bool их не различает. Вместе с DevTrustAny — самопротиворечие и
+	// отказ.
+	NoOptIn bool
 }
 
 // Require — стража круга отправителей, ОДНА на все семь сервисов.
@@ -162,6 +169,9 @@ type ForwarderGate struct {
 // Иначе он был бы ручкой, снимающей защиту на боевом стенде, — то есть ровно тем
 // именованным обходом, которого у нас быть не должно.
 func (f TrustedForwarders) Require(g ForwarderGate) error {
+	if g.NoOptIn {
+		return f.requireWithoutOptIn(g)
+	}
 	if f.IsNarrowed() {
 		return nil
 	}
@@ -177,6 +187,26 @@ func (f TrustedForwarders) Require(g ForwarderGate) error {
 	return fmt.Errorf("secure-by-default: %s is empty, which trusts ANY certificate-verified peer "+
 		"to forward an end-user identity; pin the api-gateway SAN, or opt into trust-any for local "+
 		"in-process fixtures by setting %s to true", g.SANsKnob, g.TrustAnyKnob)
+}
+
+// requireWithoutOptIn — стража круга у процесса, объявившего, что опт-ина у
+// него нет (ForwarderGate.NoOptIn).
+//
+// Испрошенный при этом опт-ин — отказ ДО суждения о круге: два утверждения об
+// одном предмете, и верно из них одно; суженный круг противоречия не снимает.
+// Пустой круг — отказ в любом режиме: способа его не получить, кроме сужения,
+// у такого процесса нет, и текст говорит ровно это.
+func (f TrustedForwarders) requireWithoutOptIn(g ForwarderGate) error {
+	if g.DevTrustAny {
+		return fmt.Errorf("contradictory forwarder declaration: the process declares no trust-any opt-in, "+
+			"yet the opt-in is requested; drop one of the two statements (circle knob %s)", g.SANsKnob)
+	}
+	if f.IsNarrowed() {
+		return nil
+	}
+	return fmt.Errorf("%s must pin at least one trusted-forwarder SAN: an unnarrowed circle lets ANY "+
+		"certificate-verified peer forward an end-user identity, and this process has no trust-any opt-in, "+
+		"so the circle is refused in every mode; pin the api-gateway SAN", g.SANsKnob)
 }
 
 // PrincipalExtractUnary — пара звеньев, отвечающая на вопрос «чью личность несёт

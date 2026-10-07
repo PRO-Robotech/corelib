@@ -65,6 +65,7 @@ import "sort"
 var selfGated = map[string][]string{
 	"compute":  {"v_cpu", "v_get"},
 	"nlb":      {"v_get"},
+	"notify":   {"v_get"},
 	"registry": {"v_create", "v_delete", "v_get", "v_list", "v_update"},
 	"storage":  {"v_delete", "v_get", "v_update"},
 	"vpc":      {"v_get"},
