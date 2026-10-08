@@ -368,6 +368,17 @@ const (
 	// тому же классу, что у `lim`, `mbr` и `ak`: без неё `validate.ResourceID`
 	// отвергал бы корректный ключ, который служба сама и выдала.
 	PrefixTokenFamilyHyphen = "tfm"
+	// PrefixHumanSessionHyphen — iam запись сессии человека (`hss-…`): одна
+	// сессия входа человека в службе доступа. NewHyphenID("hss") →
+	// "hss-<17-base32>" (21 символ).
+	//
+	// Идентификатор — АДРЕС: перечень своих сессий его называет, выход из
+	// выбранной сессии его принимает (PRO-Robotech/kaname#634). Запись в каноне
+	// обязательна по тому же классу, что у `lim`, `mbr`, `ak` и `tfm`: без неё
+	// `validate.ResourceID` отвергал бы корректный идентификатор, который служба
+	// сама и выдала, и выход из выбранной сессии отвечал бы `INVALID_ARGUMENT`
+	// на всяком входе.
+	PrefixHumanSessionHyphen = "hss"
 )
 
 // hyphenFormPrefixes — going-forward hyphen-form id prefixes (B3, redesign-2026
@@ -405,6 +416,10 @@ var hyphenFormPrefixes = []string{
 	// Именованная константа: единый источник истины с NewHyphenID-генерацией в
 	// крючке чеканки церемонии (см. объявление выше).
 	PrefixTokenFamilyHyphen,
+	// iam: запись сессии человека — адрес перечня своих сессий и выхода из
+	// выбранной. Именованная константа: единый источник истины с
+	// NewHyphenID-генерацией службы доступа (см. объявление выше).
+	PrefixHumanSessionHyphen,
 	// compute: Instance/MachineType/PlacementGroup/VolumeType (ins/mt — именованные
 	// константы: единый источник истины с NewHyphenID-генерацией).
 	PrefixInstanceHyphen, PrefixMachineTypeHyphen, "plg", "vt",
