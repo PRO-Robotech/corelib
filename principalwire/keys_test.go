@@ -135,3 +135,36 @@ func TestIdentityShapeSeesAForeignNamespaceAndSparesNeighbours(t *testing.T) {
 	require.Equal(t, "x-kacho-principal-id", principalwire.Bare("Grpc-Metadata-X-Kacho-Principal-Id"),
 		"мостовая приставка снимается сама: обе поверхностные формы обязаны сводиться к одному имени")
 }
+
+// TestSessionRecordKeyCrossesTheBridge — номер записи сессии человека, которым
+// край называет службе текущую сессию (corelib#97, kaname#677), объявлен В
+// КАТАЛОГЕ и едет за мост.
+//
+// Ключ ищется по записи каталога, а не по константе: проба обязана краснеть
+// «записи нет», а не «не собирается».
+//
+// Свойства — каждое на один факт:
+//   - имя — в подсемействе проверенного удостоверения: вычистка края снимает
+//     клиентское значение до выбора полосы именно по этой приставке;
+//   - не EdgeOnly: у ключа есть потребитель за краем (служба доступа), и
+//     мост, не пропустивший его, потерял бы номер молча;
+//   - не Fundament: общий слой слушателя его не читает — читает служба, своим
+//     читателем, за вердиктом о доверенном отправителе.
+func TestSessionRecordKeyCrossesTheBridge(t *testing.T) {
+	var found *principalwire.Key
+	for _, k := range principalwire.Keys() {
+		if k.Name == "token-session-id" {
+			found = &k
+		}
+	}
+	require.NotNil(t, found, "каталог не несёт записи token-session-id — край и служба "+
+		"писали бы имя номера записи сессии каждый своей рукой")
+	require.Equal(t, "x-kacho-token-session-id", found.Meta,
+		"имя ключа обязано совпасть побайтово с тем, что читает служба доступа")
+	require.True(t, strings.HasPrefix(found.Meta, principalwire.MetaTokenPrefix),
+		"ключ вне подсемейства проверенного удостоверения — вычистка края его не снимет")
+	require.NotEmpty(t, found.Header, "у ключа нет заголовка — краю нечем его поставить")
+	require.False(t, found.EdgeOnly, "ключ помечен оставаться на краю — до службы он не доедет")
+	require.False(t, found.Fundament, "общий слой слушателя ключ не читает")
+	require.False(t, principalwire.IsEdgeOnly(found.Meta))
+}
