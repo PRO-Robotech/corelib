@@ -493,6 +493,11 @@ type shipperSQL struct {
 
 // buildShipperSQL собирает операторы вывоза для одной таблицы.
 //
+// Повтор назначается от `clock_timestamp()`, а не от `now()`: `now()` — время
+// НАЧАЛА транзакции партии, и приёмник, отказывающий дольше паузы, съедал бы её
+// целиком — строка была бы в выборке уже к фиксации. Пауза обещана ПОСЛЕ отказа
+// ([ShipperConfig.BackoffMin]), и отсчитывается она от него.
+//
 // Состояния стоят в операторах ЛИТЕРАЛАМИ, а не глаголами форматирования.
 // Причина не в стиле: предикат `status <> 'sent'` обязан читаться в тексте
 // запроса дословно — по нему гейт курсорных индексов узнаёт, что
@@ -520,7 +525,7 @@ func buildShipperSQL(table string) shipperSQL {
 			`UPDATE %s SET status = 'sent', sent_at = now(), last_error = NULL WHERE id = ANY($1)`,
 			tbl),
 		defer_: fmt.Sprintf(
-			`UPDATE %s SET status = 'pending', next_attempt_at = now() + make_interval(secs => $2),
+			`UPDATE %s SET status = 'pending', next_attempt_at = clock_timestamp() + make_interval(secs => $2),
 			     last_error = $3 WHERE id = $1`, tbl),
 	}
 }

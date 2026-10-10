@@ -243,6 +243,7 @@ func TestRefusedRowKeepsItsPlaceAndIsRetried(t *testing.T) {
 
 	insertRow(t, pool, "aud01", "instance.create")
 
+	before := dbNow(t, pool)
 	res, err := sh.Pass(context.Background())
 	require.NoError(t, err)
 	require.Zero(t, res.Shipped)
@@ -252,7 +253,11 @@ func TestRefusedRowKeepsItsPlaceAndIsRetried(t *testing.T) {
 	require.Equal(t, "pending", row.status, "отказ приёмника оставляет запись в очереди")
 	require.Equal(t, 1, row.attempts)
 	require.NotNil(t, row.lastError)
-	require.True(t, row.nextAt.After(time.Now()), "повтор обязан ЖДАТЬ: иначе отказавший приёмник получает шквал")
+	// Граница берётся по часам базы ДО прохода, а не по часам процесса ПОСЛЕ
+	// него: «ещё не наступило к моменту чтения» зависело бы от того, сколько
+	// прошло между фиксацией и чтением, а под нагрузкой это больше паузы пробы.
+	require.False(t, row.nextAt.Before(before.Add(50*time.Millisecond)),
+		"повтор обязан ЖДАТЬ не меньше BackoffMin: иначе отказавший приёмник получает шквал")
 
 	sink.refuse("aud01", false)
 	require.Eventually(t, func() bool {
@@ -589,4 +594,49 @@ func TestPassOffersEveryRowAtMostOnce(t *testing.T) {
 	require.Equal(t, 1, res.Deferred, "одна отказная строка — один отложенный исход за проход")
 	require.Equal(t, 1, sink.callsFor("aud01"), "приёмнику строка предлагается один раз за проход")
 	require.Equal(t, 1, readRow(t, pool, "aud01").attempts, "один проход — одна попытка")
+}
+
+// dbNow — время по часам БАЗЫ: пауза повтора записывается ими, и сравнивать её
+// с часами процесса пробы значило бы мерить два разных прибора.
+func dbNow(t *testing.T, pool *pgxpool.Pool) time.Time {
+	t.Helper()
+	var now time.Time
+	require.NoError(t, pool.QueryRow(context.Background(), `SELECT clock_timestamp()`).Scan(&now))
+	return now
+}
+
+// TestRetryWaitCountsFromTheRefusal — пауза повтора отсчитывается от ОТКАЗА
+// приёмника, а не от начала транзакции партии.
+//
+// # Что здесь опровергается
+//
+// Повтор назначался `now() + пауза`, а `now()` в Postgres — время начала
+// транзакции. Приёмник, отказывающий дольше паузы, съедал её целиком: строка
+// оказывалась в выборке уже к фиксации партии, и обещанная `BackoffMin` пауза
+// после отказа не выдерживалась вовсе.
+//
+// Условие детерминированно: приёмник отказывает за 300 мс, потолок паузы
+// 100 мс. Нижняя граница берётся по часам базы ДО прохода, поэтому проба не
+// зависит от того, сколько прошло после него.
+func TestRetryWaitCountsFromTheRefusal(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration")
+	}
+	pool := newPool(t)
+	const refusalTakes = 300 * time.Millisecond
+	sink := &slowRefusingSink{delay: refusalTakes, calls: map[string]int{}}
+	sh := newTestShipper(t, pool, sink, metrics.NewMemRecorder())
+
+	insertRow(t, pool, "aud01", "instance.create")
+
+	before := dbNow(t, pool)
+	res, err := sh.Pass(context.Background())
+	require.NoError(t, err)
+	require.Equal(t, 1, res.Deferred)
+
+	row := readRow(t, pool, "aud01")
+	earliest := before.Add(refusalTakes + 50*time.Millisecond) // BackoffMin пробы
+	require.False(t, row.nextAt.Before(earliest),
+		"повтор назначен на %s, раньше конца отказа плюс паузы (%s): пауза съедена длительностью отказа",
+		row.nextAt, earliest)
 }
