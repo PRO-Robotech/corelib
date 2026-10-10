@@ -89,6 +89,14 @@ const (
 	// HeaderTokenBasicCredentialID — идентификатор СТРОКИ базового
 	// удостоверения, а не сама строка: значение секрета этот заголовок не несёт.
 	HeaderTokenBasicCredentialID = "X-Kacho-Token-Basic-Credential-Id" // #nosec G101 -- идентификатор строки, не удостоверение
+
+	// HeaderTokenSessionID — НОМЕР ЗАПИСИ сессии человека, за которую край
+	// проксирует запрос. Край узнаёт его из ответа службы о носителе и
+	// возвращает службе с каждым запросом этой сессии: по нему снятие ключа
+	// доступа оставляет текущую сессию живой. Номер ничего не аутентифицирует —
+	// им нельзя назваться и нельзя продлить сессию; доверие к нему — то же, что
+	// к пересланной личности (доверенный отправитель).
+	HeaderTokenSessionID = "X-Kacho-Token-Session-Id" // #nosec G101 -- номер записи, не удостоверение
 )
 
 // Мостовые формы тех же заголовков. Собираются приставкой, а не переписываются
@@ -100,6 +108,7 @@ const (
 	HeaderGRPCMetaTokenACR         = "Grpc-Metadata-" + HeaderTokenACR
 	HeaderGRPCMetaTokenJti         = "Grpc-Metadata-" + HeaderTokenJti
 	HeaderGRPCMetaTokenScope       = "Grpc-Metadata-" + HeaderTokenScope
+	HeaderGRPCMetaTokenSessionID   = "Grpc-Metadata-" + HeaderTokenSessionID
 )
 
 // Нижнерегистровые ключи метаданных gRPC: ровно то, что читает слушатель
@@ -128,6 +137,11 @@ const (
 	// его нет, — а ради ЗАПРЕТА: набор ключей края ведётся этими именами, и
 	// ключ, которого в нём нет, мост пропустил бы молча.
 	MetaTokenBasicCredentialID = "x-kacho-token-basic-credential-id" // #nosec G101 -- идентификатор строки, не удостоверение
+
+	// MetaTokenSessionID — нижнерегистровая форма [HeaderTokenSessionID]:
+	// ровно то, что читает служба доступа за вердиктом о доверенном
+	// отправителе.
+	MetaTokenSessionID = "x-kacho-token-session-id" // #nosec G101 -- номер записи, не удостоверение
 )
 
 // Key — одна запись КАТАЛОГА: логический ключ во всех формах, в которых он
@@ -180,6 +194,9 @@ var keys = []Key{
 	{Name: "token-amr", Ident: "MetaTokenAMR", Meta: MetaTokenAMR, Header: HeaderTokenAMR, EdgeOnly: true},
 	{Name: "token-mfa-at", Ident: "MetaTokenMfaAt", Meta: MetaTokenMfaAt, Header: HeaderTokenMfaAt, EdgeOnly: true},
 	{Name: "token-basic-credential-id", Ident: "MetaTokenBasicCredentialID", Meta: MetaTokenBasicCredentialID, Header: HeaderTokenBasicCredentialID, EdgeOnly: true},
+	// Потребитель за краем — служба доступа, своим читателем: мост пропускает,
+	// общий слой слушателя не читает.
+	{Name: "token-session-id", Ident: "MetaTokenSessionID", Meta: MetaTokenSessionID, Header: HeaderTokenSessionID},
 }
 
 // Keys возвращает копию каталога. Копия, а не срез-хранитель: каталог —
