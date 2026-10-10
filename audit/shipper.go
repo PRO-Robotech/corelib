@@ -225,60 +225,72 @@ func (s *Shipper) Run(ctx context.Context) error {
 //
 // # Каждая строка — не более одного раза за проход
 //
-// Клейм каждой партии исключает строки, уже заклеймённые этим проходом. Пауза
-// повтора отсчитывается от начала транзакции партии (`now()`), поэтому строка,
-// чья пауза истекла, пока проход шёл, иначе возвращалась бы в ТОТ ЖЕ проход: при
-// приёмнике, отказывающем дольше паузы, каждая партия «сдвигалась» бы, и проход
-// не кончался бы никогда. С исключением каждый клейм возвращает только строки,
-// которых этот проход ещё не видел, и проход ограничен длиной головы — в том
-// числе когда партия не сдвинула ни одной строки (повтор не записался): её
-// строки тоже исключены, следующий клейм их не вернёт. Отложенная строка ждёт
-// следующего прохода, а её пауза — в строке, как и прежде.
+// Клейм каждой партии исключает строки, которые этот проход уже предлагал и
+// которые клейм иначе мог бы вернуть снова. Таких два вида:
+//
+//   - отложенная. Пауза отсчитывается от отказа ЭТОЙ строки (см.
+//     buildShipperSQL), но партия идёт дальше: строка, отложенная в начале
+//     партии, ждёт, пока приёмник отвечает её соседям, и если они отвечают
+//     дольше паузы, к фиксации партии она уже снова в выборке;
+//   - застрявшая — повтор не записался, учётное состояние не сдвинулось, и
+//     клейм вернул бы её сразу же.
+//
+// С исключением каждый клейм возвращает только строки, которых этот проход ещё
+// не предлагал, и проход ограничен длиной головы. Доставленные в исключение не
+// входят: их отсекает `status <> 'sent'`, а массив исключения уходит в базу
+// параметром каждой партии — с ними его объём рос бы с длиной головы, а объём
+// параметров прохода — квадратично. Отложенная строка ждёт следующего прохода, а
+// её пауза — в строке, как и прежде.
 func (s *Shipper) Pass(ctx context.Context) (PassResult, error) {
+	res, _, err := s.pass(ctx)
+	return res, err
+}
+
+// pass — тело [Shipper.Pass]; сверх исхода возвращает строки, исключённые из
+// клейма к концу прохода.
+func (s *Shipper) pass(ctx context.Context) (PassResult, []string, error) {
 	var total PassResult
 	var seen []string
 	for {
 		if err := ctx.Err(); err != nil {
-			return total, err
+			return total, seen, err
 		}
-		res, claimed, err := s.shipBatch(ctx, seen)
+		res, claimed, retained, err := s.shipBatch(ctx, seen)
 		total.add(res)
+		seen = append(seen, retained...)
 		if err != nil {
-			return total, err
+			return total, seen, err
 		}
-		if len(claimed) == 0 {
-			return total, nil
+		if claimed == 0 {
+			return total, seen, nil
 		}
-		seen = append(seen, claimed...)
 	}
 }
 
 // shipBatch клеймит до BatchSize строк, доставляет их и фиксирует исход каждой
 // в ТОЙ ЖЕ транзакции, что держит блокировку.
 //
-// seen — строки, уже заклеймённые этим проходом: клейм их не возвращает.
-// Возвращаются идентификаторы заклеймённых в этой партии.
-func (s *Shipper) shipBatch(ctx context.Context, seen []string) (PassResult, []string, error) {
+// seen — строки, исключённые этим проходом из клейма (см. [Shipper.Pass]).
+// Возвращаются число заклеймённых в этой партии и те из них, что остались
+// заклеймляемыми: отложенные и застрявшие.
+func (s *Shipper) shipBatch(ctx context.Context, seen []string) (PassResult, int, []string, error) {
 	var res PassResult
 
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
-		return res, nil, fmt.Errorf("audit: открыть транзакцию вывоза: %w", err)
+		return res, 0, nil, fmt.Errorf("audit: открыть транзакцию вывоза: %w", err)
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 
 	records, err := s.claim(ctx, tx, seen)
 	if err != nil {
-		return res, nil, err
+		return res, 0, nil, err
 	}
 	if len(records) == 0 {
-		return res, nil, nil
-	}
-	claimed := make([]string, 0, len(records))
-	for _, r := range records {
-		claimed = append(claimed, r.ID)
+		return res, 0, nil, nil
 	}
 
+	var retained []string
 	sent := make([]string, 0, len(records))
 	for _, r := range records {
 		shipErr := r.DecodeErr
@@ -296,6 +308,7 @@ func (s *Shipper) shipBatch(ctx context.Context, seen []string) (PassResult, []s
 			// ждущими. Строка остаётся ждущей со своим прежним временем повтора
 			// — то есть хуже, чем назначено, но не хуже, чем было.
 			res.Stuck++
+			retained = append(retained, r.ID)
 			s.log.Error("не удалось назначить повтор записи журнала аудита",
 				slog.String("id", r.ID), slog.Int("attempts", r.Attempts),
 				slog.String("err", err.Error()))
@@ -305,17 +318,18 @@ func (s *Shipper) shipBatch(ctx context.Context, seen []string) (PassResult, []s
 			slog.String("id", r.ID), slog.Int("attempts", r.Attempts),
 			slog.String("err", sanitizeCause(shipErr)))
 		res.Deferred++
+		retained = append(retained, r.ID)
 	}
 
 	if len(sent) > 0 {
 		if _, err := tx.Exec(ctx, s.sentSQL, sent); err != nil {
-			return res, claimed, fmt.Errorf("audit: пометить доставленные: %w", err)
+			return res, len(records), retained, fmt.Errorf("audit: пометить доставленные: %w", err)
 		}
 	}
 	if err := tx.Commit(ctx); err != nil {
-		return res, claimed, fmt.Errorf("audit: зафиксировать вывоз: %w", err)
+		return res, len(records), retained, fmt.Errorf("audit: зафиксировать вывоз: %w", err)
 	}
-	return res, claimed, nil
+	return res, len(records), retained, nil
 }
 
 // claimedRecord — запись плюс её учётное состояние на момент клейма.

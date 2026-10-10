@@ -421,8 +421,9 @@ func TestRefusalTextTheDatabaseRejectsDoesNotRedeliverTheBatch(t *testing.T) {
 // Отказ записи повтора больше не роняет партию — значит строка остаётся
 // заклеймляемой со своим прежним временем повтора, и цикл прохода, который
 // продолжается «пока что-то заклеймлено», крутился бы вечно внутри одного тика:
-// служба перестала бы останавливаться. Выход держит исключение строк, уже
-// заклеймённых этим проходом (см. [audit.Shipper.Pass]), и это утверждается здесь.
+// служба перестала бы останавливаться. Выход держит исключение из клейма строк,
+// которые этот проход уже предлагал (см. [audit.Shipper.Pass]), и это
+// утверждается здесь.
 //
 // Условие «повтор не записывается» создаётся честно — колонка причины снимается
 // на время пробы, — а не подменой кода: проба обязана видеть тот же путь, что и
@@ -540,18 +541,24 @@ func TestUnparseableRowDoesNotWedgeTheJournal(t *testing.T) {
 
 // slowRefusingSink — приёмник, который отказывает ДОЛЬШЕ, чем назначенная пауза
 // повтора. Так ведёт себя настоящий накопитель, отвечающий отказом по истечении
-// своего таймаута.
+// своего таймаута. delayFor переопределяет длительность отказа по имени записи:
+// так в одной партии стоят быстрый и медленный отказ.
 type slowRefusingSink struct {
-	mu    sync.Mutex
-	delay time.Duration
-	calls map[string]int
+	mu       sync.Mutex
+	delay    time.Duration
+	delayFor map[string]time.Duration
+	calls    map[string]int
 }
 
 func (s *slowRefusingSink) Ship(_ context.Context, r audit.Record) error {
 	s.mu.Lock()
 	s.calls[r.ID]++
+	d, ok := s.delayFor[r.ID]
+	if !ok {
+		d = s.delay
+	}
 	s.mu.Unlock()
-	time.Sleep(s.delay)
+	time.Sleep(d)
 	return errors.New("синтетический отказ по таймауту приёмника")
 }
 
@@ -569,30 +576,47 @@ func (s *slowRefusingSink) callsFor(id string) int {
 // # Что здесь опровергается
 //
 // Цикл прохода продолжался, пока партия «сдвинулась», и полагал, что отложенная
-// строка следующим клеймом не вернётся. Это неверно: пауза повтора отсчитывается
-// от начала транзакции партии, а не от конца, и строка, чья пауза истекла, пока
-// проход шёл, возвращалась в ТОТ ЖЕ проход. Под нагрузкой это давало «Deferred:
-// 2» на одну строку, а приёмник, отказывающий дольше паузы, держал проход
-// бесконечно: каждая партия «сдвигалась», и следующий клейм возвращал её же.
+// строка следующим клеймом не вернётся. Это неверно: пауза строки, отложенной в
+// НАЧАЛЕ партии, истекает, пока партия ещё идёт, и следующий клейм того же
+// прохода возвращает её снова — приёмник получает её дважды за проход.
 //
-// Условие создаётся детерминированно: приёмник отказывает за время, втрое
-// большее потолка паузы, поэтому к фиксации партии строка уже снова в выборке.
+// # Механизм, который здесь держится
+//
+// Исключение строк, уже заклеймённых этим проходом (`id <> ALL($2)` в клейме,
+// см. [audit.Shipper.Pass]). Отсчёт паузы от отказа (`clock_timestamp()`) это
+// условие НЕ снимает: он сдвигает срок от начала партии к отказу САМОЙ строки, а
+// строка здесь отказывает первой. Его держит [TestRetryWaitCountsFromTheRefusal].
+// Выход прохода для строк без сдвига держит [TestPassEndsWhenNoRowMoves].
+//
+// # Условие создаётся детерминированно
+//
+// В партии две строки (BatchSize 2, порядок клейма — created_at, id). Первая
+// отказывает сразу, и её пауза — не больше BackoffMax (100 мс). Вторая
+// отказывает втрое дольше потолка паузы, поэтому к фиксации партии пауза первой
+// уже истекла, и без исключения следующий клейм вернёт первую строку. Пауза
+// второй отсчитана от её отказа и к следующему клейму не истекает.
 func TestPassOffersEveryRowAtMostOnce(t *testing.T) {
 	if testing.Short() {
 		t.Skip("integration")
 	}
 	pool := newPool(t)
-	sink := &slowRefusingSink{delay: 300 * time.Millisecond, calls: map[string]int{}}
+	sink := &slowRefusingSink{
+		delayFor: map[string]time.Duration{"aud01": 0, "aud02": 300 * time.Millisecond},
+		calls:    map[string]int{},
+	}
 	sh := newTestShipper(t, pool, sink, metrics.NewMemRecorder())
 
 	insertRow(t, pool, "aud01", "instance.create")
+	insertRow(t, pool, "aud02", "instance.create")
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	res, err := sh.Pass(ctx)
 	require.NoError(t, err, "проход обязан закончиться сам, а не по истечении контекста")
-	require.Equal(t, 1, res.Deferred, "одна отказная строка — один отложенный исход за проход")
-	require.Equal(t, 1, sink.callsFor("aud01"), "приёмнику строка предлагается один раз за проход")
+	require.Equal(t, 1, sink.callsFor("aud02"), "условие пробы: медленная строка предложена ровно раз")
+	require.Equal(t, 1, sink.callsFor("aud01"),
+		"строка, отложенная в начале партии, предложена приёмнику повторно в том же проходе")
+	require.Equal(t, 2, res.Deferred, "две отказные строки — два отложенных исхода за проход")
 	require.Equal(t, 1, readRow(t, pool, "aud01").attempts, "один проход — одна попытка")
 }
 
@@ -639,4 +663,37 @@ func TestRetryWaitCountsFromTheRefusal(t *testing.T) {
 	require.False(t, row.nextAt.Before(earliest),
 		"повтор назначен на %s, раньше конца отказа плюс паузы (%s): пауза съедена длительностью отказа",
 		row.nextAt, earliest)
+}
+
+// TestPassExcludesOnlyRowsTheClaimCouldReturn — проход исключает из клейма
+// только те строки, которые клейм иначе МОГ бы вернуть: отложенные и застрявшие.
+//
+// # Что здесь опровергается
+//
+// Исключение копило ВСЕ заклеймённые строки, в том числе доставленные. Их и так
+// отсекает `status <> 'sent'`, а массив исключения уходит в базу параметром
+// КАЖДОЙ партии: при разборе большой головы (после простоя приёмника) объём
+// параметров прохода рос квадратично по длине головы.
+//
+// Условие: три строки при BatchSize 2, приёмник отказывает одной. Две партии,
+// во второй — доставленная строка, то есть исключение пополняется и после неё.
+func TestPassExcludesOnlyRowsTheClaimCouldReturn(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration")
+	}
+	pool := newPool(t)
+	sink := newRecordingSink()
+	sink.refuse("aud02", true)
+	sh := newTestShipper(t, pool, sink, metrics.NewMemRecorder())
+
+	insertRow(t, pool, "aud01", "instance.create")
+	insertRow(t, pool, "aud02", "instance.create")
+	insertRow(t, pool, "aud03", "instance.create")
+
+	res, excluded, err := sh.PassExcluding(context.Background())
+	require.NoError(t, err)
+	require.Equal(t, 2, res.Shipped, "условие пробы: две строки доставлены")
+	require.Equal(t, 1, res.Deferred, "условие пробы: одна строка отложена")
+	require.ElementsMatch(t, []string{"aud02"}, excluded,
+		"исключение держит ровно отложенную строку: доставленные отсекает статус")
 }
