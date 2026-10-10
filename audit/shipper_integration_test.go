@@ -416,8 +416,8 @@ func TestRefusalTextTheDatabaseRejectsDoesNotRedeliverTheBatch(t *testing.T) {
 // Отказ записи повтора больше не роняет партию — значит строка остаётся
 // заклеймляемой со своим прежним временем повтора, и цикл прохода, который
 // продолжается «пока что-то заклеймлено», крутился бы вечно внутри одного тика:
-// служба перестала бы останавливаться. Условием выхода поэтому служит СДВИГ, а
-// не число заклеймлённых, и это утверждается здесь.
+// служба перестала бы останавливаться. Выход держит исключение строк, уже
+// заклеймённых этим проходом (см. [audit.Shipper.Pass]), и это утверждается здесь.
 //
 // Условие «повтор не записывается» создаётся честно — колонка причины снимается
 // на время пробы, — а не подменой кода: проба обязана видеть тот же путь, что и
@@ -531,4 +531,62 @@ func TestUnparseableRowDoesNotWedgeTheJournal(t *testing.T) {
 		require.NotEqual(t, "aud01", r.ID,
 			"неразобранную приёмнику не предлагают — предлагать нечего")
 	}
+}
+
+// slowRefusingSink — приёмник, который отказывает ДОЛЬШЕ, чем назначенная пауза
+// повтора. Так ведёт себя настоящий накопитель, отвечающий отказом по истечении
+// своего таймаута.
+type slowRefusingSink struct {
+	mu    sync.Mutex
+	delay time.Duration
+	calls map[string]int
+}
+
+func (s *slowRefusingSink) Ship(_ context.Context, r audit.Record) error {
+	s.mu.Lock()
+	s.calls[r.ID]++
+	s.mu.Unlock()
+	time.Sleep(s.delay)
+	return errors.New("синтетический отказ по таймауту приёмника")
+}
+
+func (s *slowRefusingSink) Name() string { return "slow-refusing" }
+
+func (s *slowRefusingSink) callsFor(id string) int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.calls[id]
+}
+
+// TestPassOffersEveryRowAtMostOnce — проход предлагает приёмнику каждую строку
+// НЕ БОЛЕЕ ОДНОГО раза, сколько бы он ни длился.
+//
+// # Что здесь опровергается
+//
+// Цикл прохода продолжался, пока партия «сдвинулась», и полагал, что отложенная
+// строка следующим клеймом не вернётся. Это неверно: пауза повтора отсчитывается
+// от начала транзакции партии, а не от конца, и строка, чья пауза истекла, пока
+// проход шёл, возвращалась в ТОТ ЖЕ проход. Под нагрузкой это давало «Deferred:
+// 2» на одну строку, а приёмник, отказывающий дольше паузы, держал проход
+// бесконечно: каждая партия «сдвигалась», и следующий клейм возвращал её же.
+//
+// Условие создаётся детерминированно: приёмник отказывает за время, втрое
+// большее потолка паузы, поэтому к фиксации партии строка уже снова в выборке.
+func TestPassOffersEveryRowAtMostOnce(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration")
+	}
+	pool := newPool(t)
+	sink := &slowRefusingSink{delay: 300 * time.Millisecond, calls: map[string]int{}}
+	sh := newTestShipper(t, pool, sink, metrics.NewMemRecorder())
+
+	insertRow(t, pool, "aud01", "instance.create")
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	res, err := sh.Pass(ctx)
+	require.NoError(t, err, "проход обязан закончиться сам, а не по истечении контекста")
+	require.Equal(t, 1, res.Deferred, "одна отказная строка — один отложенный исход за проход")
+	require.Equal(t, 1, sink.callsFor("aud01"), "приёмнику строка предлагается один раз за проход")
+	require.Equal(t, 1, readRow(t, pool, "aud01").attempts, "один проход — одна попытка")
 }
