@@ -148,8 +148,12 @@ func TestIdentityShapeSeesAForeignNamespaceAndSparesNeighbours(t *testing.T) {
 //     клиентское значение до выбора полосы именно по этой приставке;
 //   - не EdgeOnly: у ключа есть потребитель за краем (служба доступа), и
 //     мост, не пропустивший его, потерял бы номер молча;
-//   - не Fundament: общий слой слушателя его не читает — читает служба, своим
-//     читателем, за вердиктом о доверенном отправителе.
+//   - Fundament: номер читает общий слой слушателя — под тем же решением о
+//     доверенном отправителе, что и личность, — и отдаёт службе готовым
+//     (приёмка Ф11 `assurance-level-is-declared-by-our-session.md`, §9 п.7:
+//     ссылка на запись сессии доверена ТОЛЬКО ключом, который фундамент читает
+//     своим объявлением). Читатель за краем, решающий о доверии сам, был бы
+//     вторым решением об одном предмете.
 func TestSessionRecordKeyCrossesTheBridge(t *testing.T) {
 	var found *principalwire.Key
 	for _, k := range principalwire.Keys() {
@@ -165,6 +169,7 @@ func TestSessionRecordKeyCrossesTheBridge(t *testing.T) {
 		"ключ вне подсемейства проверенного удостоверения — вычистка края его не снимет")
 	require.NotEmpty(t, found.Header, "у ключа нет заголовка — краю нечем его поставить")
 	require.False(t, found.EdgeOnly, "ключ помечен оставаться на краю — до службы он не доедет")
-	require.False(t, found.Fundament, "общий слой слушателя ключ не читает")
+	require.True(t, found.Fundament, "общий слой слушателя ключ не читает — номер записи доверен "+
+		"решением службы, а не фундамента")
 	require.False(t, principalwire.IsEdgeOnly(found.Meta))
 }

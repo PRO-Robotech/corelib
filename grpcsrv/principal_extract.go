@@ -307,6 +307,15 @@ func redactMetadataValue(key string, vals []string) string {
 	return strings.Join(vals, ",")
 }
 
+// single — ровно одно непустое значение; иначе "" («не названо», а не
+// догадка, какое из нескольких верное).
+func single(vs []string) string {
+	if len(vs) != 1 {
+		return ""
+	}
+	return vs[0]
+}
+
 func first(vs []string) string {
 	if len(vs) == 0 {
 		return ""

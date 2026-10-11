@@ -58,6 +58,13 @@ import (
 // переименовано под привычное вызывающему имя (см. разбор у MDKeyPrincipalType).
 const MDKeyTokenACR = principalwire.MetaTokenACR
 
+// MDKeyTokenSessionID — доверенный ключ метаданных, несущий НОМЕР ЗАПИСИ
+// сессии человека, за которую край проксирует запрос. Читается тем же
+// извлечением и под тем же инвариантом доверия, что MDKeyTokenACR, и отдаётся
+// службе через TrustedSessionRecordFromContext. Имя — каталога
+// `principalwire`, запись token-session-id.
+const MDKeyTokenSessionID = principalwire.MetaTokenSessionID
+
 // PrincipalTypeServiceAccount — значение `kaname_principal_type`, опознающее
 // МАШИННЫЙ субъект: его проставляет перехватчик выпуска токенов iam в токене
 // сервисного аккаунта, выданном по client_credentials, и его же как значение
