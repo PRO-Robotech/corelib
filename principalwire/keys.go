@@ -194,9 +194,12 @@ var keys = []Key{
 	{Name: "token-amr", Ident: "MetaTokenAMR", Meta: MetaTokenAMR, Header: HeaderTokenAMR, EdgeOnly: true},
 	{Name: "token-mfa-at", Ident: "MetaTokenMfaAt", Meta: MetaTokenMfaAt, Header: HeaderTokenMfaAt, EdgeOnly: true},
 	{Name: "token-basic-credential-id", Ident: "MetaTokenBasicCredentialID", Meta: MetaTokenBasicCredentialID, Header: HeaderTokenBasicCredentialID, EdgeOnly: true},
-	// Потребитель за краем — служба доступа, своим читателем: мост пропускает,
-	// общий слой слушателя не читает.
-	{Name: "token-session-id", Ident: "MetaTokenSessionID", Meta: MetaTokenSessionID, Header: HeaderTokenSessionID},
+	// Потребитель за краем — служба доступа. Номер читает общий слой слушателя
+	// под тем же решением о доверенном отправителе, что и личность, и отдаёт
+	// службе готовым (`grpcsrv.TrustedSessionRecordFromContext`): ссылка на
+	// запись сессии доверена только ключом, который фундамент читает своим
+	// объявлением (приёмка Ф11, §9 п.7).
+	{Name: "token-session-id", Ident: "MetaTokenSessionID", Meta: MetaTokenSessionID, Header: HeaderTokenSessionID, Fundament: true},
 }
 
 // Keys возвращает копию каталога. Копия, а не срез-хранитель: каталог —

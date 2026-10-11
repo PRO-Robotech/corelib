@@ -316,8 +316,12 @@ type trustedPrincipal struct {
 	principal operations.Principal
 	// acr — the forwarded JWT `acr`. Carried ONLY when trusted (same boundary as
 	// principal); empty on an untrusted/unverified peer.
-	acr     string
-	trusted bool
+	acr string
+	// sessionRecord — номер записи сессии человека, пересланный краем
+	// (MDKeyTokenSessionID). Несётся ТОЛЬКО при доверенном отправителе и
+	// пересланной личности; два значения — «не названо».
+	sessionRecord string
+	trusted       bool
 }
 
 // withTrustedPrincipal решает, чью личность несёт запрос, и ОТВЕРГАЕТ его, когда
@@ -338,9 +342,10 @@ func withTrustedPrincipal(ctx context.Context, cfg trustedPrincipalConfig) (cont
 	// request that presented none — and that identity is the one the ownership
 	// predicate matches on every system-written operation.
 	p, forwarded := principalFromIncomingMetadata(ctx, defaultDebugConfig())
-	acr := ""
+	acr, sessionRecord := "", ""
 	if md, ok := metadata.FromIncomingContext(ctx); ok {
 		acr = first(md.Get(MDKeyTokenACR))
+		sessionRecord = single(md.Get(MDKeyTokenSessionID))
 	}
 	switch {
 	case !trusted:
@@ -348,6 +353,7 @@ func withTrustedPrincipal(ctx context.Context, cfg trustedPrincipalConfig) (cont
 		// dropped — and so is the acr (anti-spoof; a non-gateway peer cannot elevate
 		// its acr by forging the header).
 		acr = ""
+		sessionRecord = ""
 		// Scrub any pre-set principal carrier so a forged/leftover principal from
 		// an untrusted peer never reaches use-cases (defense-in-depth).
 		ctx = operations.WithoutPrincipal(ctx)
@@ -359,6 +365,8 @@ func withTrustedPrincipal(ctx context.Context, cfg trustedPrincipalConfig) (cont
 		// Trusted peer, but the request carried no identity at all. Record the
 		// absence: the carrier must report "no principal", not a fabricated one.
 		ctx = operations.WithoutPrincipal(ctx)
+		// Номер записи сессии человека без личности ни о ком не говорит.
+		sessionRecord = ""
 	}
 	// Исход наблюдается ВСЕГДА, включая законную безымянность: без неё «личность
 	// объявлена и не приехала» неотличимо от роста безымянных вызовов, то есть
@@ -371,7 +379,7 @@ func withTrustedPrincipal(ctx context.Context, cfg trustedPrincipalConfig) (cont
 	if outcome.refused() {
 		return ctx, refusalFor(outcome)
 	}
-	return context.WithValue(ctx, trustedPrincipalCtxKey{}, trustedPrincipal{principal: p, acr: acr, trusted: trusted}), nil
+	return context.WithValue(ctx, trustedPrincipalCtxKey{}, trustedPrincipal{principal: p, acr: acr, sessionRecord: sessionRecord, trusted: trusted}), nil
 }
 
 // principalIsTrusted implements the trust decision (see UnaryTrustedPrincipalExtract).
@@ -470,6 +478,30 @@ func TrustedACRFromContext(ctx context.Context) (acr string, trusted bool) {
 	}
 	if v, ok := ctx.Value(trustedPrincipalCtxKey{}).(trustedPrincipal); ok {
 		return v.acr, v.trusted
+	}
+	return "", false
+}
+
+// TrustedSessionRecordFromContext — номер записи сессии человека, за которую
+// край проксирует запрос, и доверен ли отправитель.
+//
+// Номер несётся под ТЕМ ЖЕ решением о доверии, что личность и `acr`: от
+// непроверенного собеседника и от проверенного, но не пересылающего, он
+// отбрасывается. Служба, читающая номер отсюда, второго решения о доверии не
+// принимает — второе разошлось бы с первым молча (приёмка Ф11, §9 п.7: ссылка
+// на запись сессии доверена только ключом, который фундамент читает своим
+// объявлением).
+//
+// Пустой номер при trusted=true — «не назван»: личность не переслана, ключа
+// нет либо значений больше одного. Форму номера здесь не судят — её знает
+// служба, хозяин записи; номер ничего не аутентифицирует, и служба обязана
+// сверить личность записи с доверенной личностью.
+func TrustedSessionRecordFromContext(ctx context.Context) (record string, trusted bool) {
+	if ctx == nil {
+		return "", false
+	}
+	if v, ok := ctx.Value(trustedPrincipalCtxKey{}).(trustedPrincipal); ok {
+		return v.sessionRecord, v.trusted
 	}
 	return "", false
 }
