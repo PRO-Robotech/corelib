@@ -93,10 +93,22 @@ func StartLimitSync(
 		// (`PRO-Robotech/kacho#2216`; `security.md` §Hardening п. 8 — сообщать о
 		// следствии для фонового механизма, умалчивая о следствии для пути
 		// запроса, значит не отличать настройку от сбоя).
+		//
+		// ЗДЕСЬ СТОЯЛО «no ceiling is stateable in this installation» — «завести
+		// потолок негде». Утверждение пережило свой предмет: величину объявляет
+		// ПОСАДКА домена, и место, где её заводят, у оператора появилось. Хуже
+		// прочих такое утверждение тем, что отправляет читателя в БЕЗДЕЙСТВИЕ —
+		// прочитавший «завести негде» не ищет, где завести.
+		//
+		// Придаточное СНЯТО, а не заменено на обещание: объявленная посадкой
+		// величина ещё не доезжает до строки учёта и не отвергает ничего. Сказать
+		// «объявите её в посадке» значило бы обещать действие, которого на этой
+		// стадии нет. Строка получит причину и следующий шаг тем же изменением,
+		// каким величина начнёт действовать.
 		logger.Info("resource-count quota: limit authority declared absent — "+
 			"on the REQUEST PATH no ceiling applies at all (mutations of counted "+
-			"kinds are charged but never refused: no ceiling is stateable in this "+
-			"installation), and the delta puller is not started",
+			"kinds are charged but never refused), and the delta puller is not "+
+			"started",
 			slog.String("schema", schema),
 			slog.String("authority_state", string(AuthorityAbsent)),
 			slog.Bool("ceilings_enforced", false))
