@@ -65,6 +65,14 @@ func TestValidateTuple(t *testing.T) {
 		{"vpc writes project object", "vpc", "project:prj1", "owner", "project:prj1", refused},
 		// cluster object запрещен даже c hierarchy-relation и даже без известного домена (dev-mode).
 		{"hierarchy relation but cluster object", "", "service_account:sva1", "project", "cluster:cluster_root", refused},
+		// system_class — тип субъектов-классов модели (аноним, вошедший; kaname#829):
+		// ресурсом модуля не бывает. Без записи в запрещённом наборе достижим ровно
+		// там, где набор — единственная преграда: при неизвестном домене, когда
+		// связывание по домену отключено.
+		{"system_class object under unknown domain", "", "project:prj1", "project", "system_class:anonymous", refused},
+		// Близнец: та же форма с типом модуля при неизвестном домене — проходит,
+		// значит отказ выше даёт запрещённый набор, а не форма записи.
+		{"module object under unknown domain", "", "project:prj1", "project", "vpc_network:net1", accepted},
 		// Легитимные owner-hierarchy tuple — проходят.
 		{"vpc registers network under project", "vpc", "project:prj1", "project", "vpc_network:net1", accepted},
 		{"compute registers instance under project", "compute", "project:prj1", "project", "compute_instance:inst1", accepted},

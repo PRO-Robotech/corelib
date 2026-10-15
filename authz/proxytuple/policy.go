@@ -187,6 +187,9 @@ var forbiddenObjectTypes = map[string]struct{}{
 	"user":            {},
 	"service_account": {},
 	"group":           {},
+	// system_class — классы субъектов модели (аноним, вошедший; kaname#829): субъект
+	// по виду, ресурсом модуля не бывает ни при какой конфигурации.
+	"system_class": {},
 	// ресурсные типы домена iam
 	"iam_user":            {},
 	"iam_service_account": {},
