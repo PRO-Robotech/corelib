@@ -208,6 +208,29 @@ var forbiddenObjectTypes = map[string]struct{}{
 	"iam_fgaproxy": {},
 }
 
+// forbiddenHierarchySubjectTypes — типы, которые не бывают СУБЪЕКТОМ отношения
+// иерархии. Субъект иерархии — предок ресурса (проект, родитель) либо его
+// создатель; класс субъектов модели (system_class: аноним, вошедший; kaname#838)
+// ни тем, ни другим не является — он означает «всякий такой субъект», и в роли
+// предка или владельца раздал бы доступ к ресурсу целому классу через иерархию,
+// мимо выдачи прав, где грант перечислим, ограничен областью и отзываем.
+//
+// Пару публичного чтения набор не трогает: её субъект закреплён дословно
+// (PublicReadSubject), и класс субъектов там не проходит и без этого набора.
+var forbiddenHierarchySubjectTypes = map[string]struct{}{
+	"system_class": {},
+}
+
+// subjectType — тип субъекта кортежа: приставка до первого двоеточия, у формы
+// множества (`тип:id#отношение`) — та же. Субъект без двоеточия типа не имеет.
+func subjectType(subject string) string {
+	colon := strings.IndexByte(subject, ':')
+	if colon <= 0 {
+		return ""
+	}
+	return subject[:colon]
+}
+
 // IsPublicReadGrant reports whether the pair is «anybody reads this resource»
 // (`user:* #v_get`).
 //
@@ -354,7 +377,8 @@ func objectDomainForCaller(callerDomain string) (string, bool) {
 // PublicReadRelation) ONLY onto an object of its own domain. callerDomain is the
 // service short name from the verified mTLS SAN (vpc/compute/nlb/registry); empty
 // (domain unknown) disables the domain binding, while the relation set, the subject
-// narrowing of a publication and the forbidden object types apply always. Any
+// narrowing of a publication and of a hierarchy link, and the forbidden object types
+// apply always. Any
 // violation → PermissionDenied, fail-closed, without leaking which clause refused.
 func ValidateTuple(callerDomain, subject, relation, object string, opts ...Option) error {
 	var p policy
@@ -370,6 +394,11 @@ func ValidateTuple(callerDomain, subject, relation, object string, opts ...Optio
 	hierarchical := Hierarchical(rel)
 	if !hierarchical && !IsPublicReadGrant(subject, string(rel)) {
 		return ErrRefused
+	}
+	if hierarchical {
+		if _, bad := forbiddenHierarchySubjectTypes[subjectType(subject)]; bad {
+			return ErrRefused
+		}
 	}
 	colon := strings.IndexByte(object, ':')
 	if colon <= 0 || colon == len(object)-1 {
