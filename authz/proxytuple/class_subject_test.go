@@ -39,10 +39,12 @@ func TestValidateTuple_ClassSubjectIsNotAHierarchySubject(t *testing.T) {
 		{"twin: user subject as owner", "vpc", "user:usr1", "owner", "vpc_network:net1", accepted},
 		// Тип, лишь начинающийся с имени класса, классом не является.
 		{"twin: type with class-like prefix", "vpc", "system_classic:x", "owner", "vpc_network:net1", accepted},
-		// Пара публичного чтения не меняется: её субъект — подстановочный
-		// пользователь, а класс субъектов на чтении отвергался и прежде.
+		// Пара публичного чтения — иное отношение, и набор иерархии её не
+		// трогает: аноним принимается её вторым входным словом (corelib#116),
+		// вошедший не принимается ни там, ни здесь.
 		{"public read pair unchanged", "registry", "user:*", "v_get", "registry_repository:reg1/app", accepted},
-		{"class subject on public read", "registry", "system_class:anonymous", "v_get", "registry_repository:reg1/app", refused},
+		{"anonymous class on public read", "registry", "system_class:anonymous", "v_get", "registry_repository:reg1/app", accepted},
+		{"authenticated class on public read", "registry", "system_class:authenticated", "v_get", "registry_repository:reg1/app", refused},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			got := verdictOf(ValidateTuple(tt.domain, tt.subject, tt.relation, tt.object))
