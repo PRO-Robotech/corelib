@@ -32,7 +32,9 @@
 # больше 1 МБ. Исключение — только строкой перечня `prepush-added-files.allow`
 # рядом, с доводом; строка, под шаблон которой не подпадает ни один файл дерева
 # судимой вершины, — находка: исключение истекает вместе с предметом. Перечня
-# нет — исключений нет.
+# нет — исключений нет. Шаблон перечня судится ПОСЕГМЕНТНО: `*`, `?` и `[…]` не
+# пересекают `/`, `**` целым сегментом — любое число каталогов (и ни одного);
+# шаблон шире предмета исключил бы и файл, которому строки никто не писал.
 #
 # Вход — строки git `<local_ref> <local_sha> <remote_ref> <remote_sha>` на stdin;
 # $1 — имя удалённого (по умолчанию origin). Пустой вход — судится HEAD.
@@ -167,8 +169,21 @@ if os.path.isfile(allow_path):
             allow.append([f[0], f[1], False])
 
 
+def seg(parts, pats):
+    # Сегмент шаблона судит ровно одно имя пути; `**` — любое их число.
+    if not pats:
+        return not parts
+    if pats[0] == '**':
+        return any(seg(parts[i:], pats[1:]) for i in range(len(parts) + 1))
+    return bool(parts) and fnmatch.fnmatchcase(parts[0], pats[0]) and seg(parts[1:], pats[1:])
+
+
+def match(pat, path):
+    return seg(path.split('/'), pat.split('/'))
+
+
 def allowed(kind, path):
-    return any(a[0] == kind and fnmatch.fnmatchcase(path, a[1]) for a in allow)
+    return any(a[0] == kind and match(a[1], path) for a in allow)
 
 
 bad, excused = [], 0
@@ -189,7 +204,7 @@ if allow:
     for tc in tcs:
         for path in git(['ls-tree', '-r', '--name-only', '-z', tc]).decode('utf-8', 'surrogateescape').split('\0'):
             for a in allow:
-                if path and not a[2] and fnmatch.fnmatchcase(path, a[1]):
+                if path and not a[2] and match(a[1], path):
                     a[2] = True
 for a in allow:
     if not a[2]:

@@ -24,16 +24,21 @@
 #     перечня; бинарь, добавленный и снятый следующим коммитом; бинарь, внесённый
 #     руками в слияние; бинарь под «*.bin diff» в `.gitattributes`, под «* diff»
 #     в `.git/info/attributes` и в `core.attributesFile`; законная ветка рядом с
-#     бинарём (антимаска); строка перечня без предмета и без довода; ELF и
+#     бинарём (антимаска) — ELF первой и последней из двух ссылок, первой,
+#     средней и последней из трёх; строка перечня без предмета и без довода; ELF и
 #     крупный текст, переименованные с правкой (и при `diff.renames=copies`);
 #     опубликованный текст, перезаписанный ELF либо раздутый за порог; ELF в
 #     первом коммите отправки при тексте во втором; текст мимо шаблона перечня;
+#     путь глубже шаблона перечня (`*` не пересекает `/`): бинарь в подкаталоге
+#     под `cert-manager-*.tgz`, коллекция в подкаталогах под `services/*/…`;
+#     строка, чей предмет лежит лишь глубже каталогом, — без предмета;
 #     ELF в корневом коммите при `log.showRoot=false` без ссылок удалённого;
 #   молчание (код 0): коллекция newman больше 1 МБ по строке перечня (законный
 #     близнец); исполняемый текстовый скрипт; текст ровно 1 МБ; бинарь, уже
 #     опубликованный на удалённом; снятие ветки; `git mv` крупного текста без
 #     правки и его копия (при любой `diff.renames`); правка текста меньше
-#     порога; запись строки перечня с предметом; 3000 новых blob'ов (страж не
+#     порога; запись строки перечня с предметом;
+#     законные строки перечня (`*` в имени, `**` через каталоги); 3000 новых blob'ов (страж не
 #     встаёт насмерть на трубе);
 #   не судимо: битая ссылка удалённого — страж выходит 2.
 # ЧТО ТРЕБУЕТСЯ ОТ ХУКА (настоящий pre-push песочницы):
@@ -46,10 +51,11 @@
 # непригоден: отказ на бинаре прошёл бы тождественно и не доказал бы ничего.
 # Отказал на ней сам страж — это находка (код 1), не VOID. Настоящего ELF нет — 2.
 #
-# --mutants: та же проба на семи воссозданных дефектах стража (детектор бинаря
+# --mutants: та же проба на девяти воссозданных дефектах стража (детектор бинаря
 # снят; порог снят; слияние не судится; атрибуты дерева перекрашивают бинарь;
 # опубликованное не вычитается; строка перечня без предмета принята; строка без
-# довода принята) — каждый обязан дать код 1, исходный страж — код 0.
+# довода принята; судится лишь последняя ссылка отправки; `*` шаблона
+# перечня пересекает `/`) — каждый обязан дать код 1, исходный страж — код 0.
 #
 # ИСХОДЫ: 0 — все пробы сошлись; 1 — проба с находкой (названа); 2 — не судимо.
 set -uo pipefail
@@ -100,6 +106,8 @@ PY
 опубликованное не вычитается|rng = tcs + prev + ['--not', '--remotes=' + remote]|rng = tcs
 строка перечня без предмета принята|    if not a[2]:|    if False:
 строка перечня без довода принята|        elif len(f) < 3 or not f[2].strip():|        elif False:
+судится лишь последняя ссылка отправки|rng = tcs + prev + ['--not', '--remotes=' + remote]|tcs = tcs[-1:]; rng = tcs + prev + ['--not', '--remotes=' + remote]
+шаблон перечня пересекает «/»|    return seg(path.split('/'), pat.split('/'))|    return fnmatch.fnmatchcase(path, pat)
 EOF
     exit "$rc"
 fi
@@ -267,10 +275,27 @@ branch attr; printf '*.bin diff\n' > "$box/.gitattributes"; cp "$ELF" "$box/x.bi
 commit "маска" .gitattributes x.bin
 expect_refuse x.bin "бинарь под строкой «*.bin diff» в .gitattributes" "$(create)"
 
+# Антимаска: судится КАЖДАЯ ссылка отправки на любой позиции входа — мутант
+# «лишь последняя ссылка» молчал, пока законная шла первой, а ELF последним.
+branch lawful3; printf 'т3\n' > "$box/n3.md"; commit "текст" n3.md
+LAWFUL3_TIP="$(head_sha)"
 branch elf2; cp "$ELF" "$box/edge"; commit "бинарь" edge
-expect_refuse edge "законная ветка рядом с бинарём (антимаска)" \
-    "refs/heads/a $LAWFUL_TIP refs/heads/a $ZERO
-$(create)"
+LA="refs/heads/a $LAWFUL_TIP refs/heads/a $ZERO"
+LB="refs/heads/b $LAWFUL3_TIP refs/heads/b $ZERO"
+EL="$(create)"
+expect_refuse edge "законная ветка первой, бинарь последним (антимаска)" "$LA
+$EL"
+expect_refuse edge "бинарь первым, законная ветка второй (антимаска)" "$EL
+$LA"
+expect_refuse edge "три ссылки: бинарь первым (антимаска)" "$EL
+$LA
+$LB"
+expect_refuse edge "три ссылки: бинарь посередине (антимаска)" "$LA
+$EL
+$LB"
+expect_refuse edge "три ссылки: бинарь последним (антимаска)" "$LA
+$LB
+$EL"
 
 branch renelf; pgit -C "$box" mv pub.bin renamed2.bin; flip renamed2.bin; commit "переименован с правкой" renamed2.bin
 expect_refuse renamed2.bin "ELF переименован с правкой байта (R) — новый blob" "$(create)"
@@ -321,6 +346,29 @@ branch newman; text "$COLL/b.postman_collection.json" 1500000; commit "колл�
 expect_pass "коллекция newman больше 1 МБ по строке перечня — законный близнец" "$(create)"
 branch newman2; text "$COLL/b.json" 1500000; commit "не коллекция" "$COLL/b.json"
 expect_refuse "$COLL/b.json" "тот же текст мимо шаблона перечня — отказ (перечень, а не каталог)" "$(create)"
+
+# Шаблон перечня — посегментно: `*` не пересекает `/`, `**` — любое число каталогов.
+CH="deploy/helm/umbrella/charts"
+chart() { mkdir -p "$(dirname "$box/$1")"; printf 'TGZ\0%s\n' "$1" > "$box/$1"; }
+CHART_LINE="binary $CH/cert-manager-*.tgz вендоренный чарт песочницы"
+branch globok; chart "$CH/cert-manager-v1.tgz"; commit "чарт" "$CH/cert-manager-v1.tgz"
+printf '%s\n' "$CHART_LINE" >> "$ALLOW"
+expect_pass "чарт cert-manager-v1.tgz под строкой cert-manager-*.tgz — законная строка перечня" "$(create)"
+printf 'binary deploy/*.tgz архив чарта\n' >> "$ALLOW"
+expect_refuse "deploy/*.tgz" "строка deploy/*.tgz, чей предмет лишь глубже каталогом, — без предмета" "$(create)"
+branch globch; chart "$CH/cert-manager-v1.tgz"; chart "$CH/cert-manager-x/evil.tgz"
+commit "чарт и подкаталог" "$CH/cert-manager-v1.tgz" "$CH/cert-manager-x/evil.tgz"
+printf '%s\n' "$CHART_LINE" >> "$ALLOW"
+expect_refuse "$CH/cert-manager-x/evil.tgz" "бинарь в подкаталоге cert-manager-x/ под cert-manager-*.tgz — «*» не пересекает «/»" "$(create)"
+branch globnm; mkdir -p "$box/services/a/b/tests/newman/collections/c"; text "services/a/b/tests/newman/collections/c/d.postman_collection.json" 1500000
+commit "коллекция в подкаталогах" services/a/b/tests/newman/collections/c/d.postman_collection.json
+expect_refuse "services/a/b/tests/newman/collections/c/d.postman_collection.json" \
+    "крупный текст в подкаталогах под services/*/…/collections/*.postman_collection.json — «*» не пересекает «/»" "$(create)"
+branch globdeep; mkdir -p "$box/docs/a/b"; text docs/a/b/c.big.txt 1500000; text docs/top.big.txt 1500000
+commit "крупный текст под **" docs/a/b/c.big.txt docs/top.big.txt
+printf 'size docs/**/*.big.txt крупный текст песочницы\n' >> "$ALLOW"
+expect_pass "строка docs/**/*.big.txt: «**» — любое число каталогов, и ни одного" "$(create)"
+cp "$TMP/allow" "$ALLOW"
 branch script; printf '#!/usr/bin/env bash\necho ok\n' > "$box/run.sh"; chmod +x "$box/run.sh"; commit "скрипт" run.sh
 expect_pass "исполняемый текстовый скрипт" "$(create)"
 branch edge1m; text exact.txt 1048576; commit "ровно 1 МБ" exact.txt
@@ -365,4 +413,4 @@ fi
 
 echo "prepush-added-files-inject: осмотрено проб $examined (законных $lawful, отвергаемых и не судимых $unlawful); находок $findings" >&2
 [ "$findings" -eq 0 ] || exit 1
-echo "prepush-added-files-inject: ЗЕЛЁНОЕ — хук отвергает бинарь и файл больше 1 МБ среди новых blob'ов до обхода и называет файл; перечень с доводом и без предмета судится; законные близнецы проходят; пустой обход — не зелёный" >&2
+echo "prepush-added-files-inject: ЗЕЛЁНОЕ — хук отвергает бинарь и файл больше 1 МБ среди новых blob'ов до обхода и называет файл; перечень с доводом и без предмета судится; законные близнецы проходят; судится каждая ссылка отправки, шаблон перечня — посегментно; пустой обход — не зелёный" >&2
