@@ -71,13 +71,15 @@ RULE="$here/git-rule.sh"
 INSTALL="$here/install.sh"
 PREPUSH="$here/pre-push"
 PUSHRULE="$here/git-rule-push.sh"
+# Второй страж хука отправки — новых blob'ов (#117): без него хук отказывает.
+ADDED="$here/prepush-added-files.sh"
 PRCHECK="$tree/.github/scripts/pr-rule-check.sh"
 MAKEFILE="$tree/Makefile"
 CI="$tree/.github/workflows/ci.yml"
 
 void() { echo "git-rule-inject: НЕ ВЫПОЛНИЛОСЬ — $*" >&2; exit 2; }
 BARE="$here/git-rule-bare-branches.txt"
-for f in "$HOOK" "$RULE" "$INSTALL" "$PREPUSH" "$PUSHRULE" "$PRCHECK" "$MAKEFILE" "$CI" "$BARE"; do
+for f in "$HOOK" "$RULE" "$INSTALL" "$PREPUSH" "$PUSHRULE" "$ADDED" "$PRCHECK" "$MAKEFILE" "$CI" "$BARE"; do
     [ -f "$f" ] || void "нет $f"
 done
 for t in git make sed grep cmp seq mktemp python3 curl; do command -v "$t" >/dev/null 2>&1 || void "нет $t в PATH"; done
@@ -126,7 +128,7 @@ not() { ! "$@"; }
 # h1 — коммит правила: заводит scripts/hooks; его время автора — T0.
 F="$work/f"
 mkdir -p "$F/scripts/hooks"
-cp "$HOOK" "$RULE" "$INSTALL" "$PREPUSH" "$PUSHRULE" "$F/scripts/hooks/" || void "файлы под пробой не скопированы"
+cp "$HOOK" "$RULE" "$INSTALL" "$PREPUSH" "$PUSHRULE" "$ADDED" "$F/scripts/hooks/" || void "файлы под пробой не скопированы"
 chmod +x "$F/scripts/hooks/commit-msg" "$F/scripts/hooks/pre-push"
 printf '# переходный перечень фикстуры\n42 ветка релиза фикстуры\n' > "$F/scripts/hooks/git-rule-bare-branches.txt"
 echo 'фикстура пробы правила git' > "$F/README"
