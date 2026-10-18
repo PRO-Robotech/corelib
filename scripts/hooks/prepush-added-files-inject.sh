@@ -388,12 +388,23 @@ expect_pass "3000 новых blob'ов — страж завершается с�
 
 # ── Не судимо: битая ссылка удалённого ──────────────────────────────────────
 branch void; printf 'в\n' > "$box/v.md"; commit "текст" v.md
-printf 'deadbeefdeadbeefdeadbeefdeadbeefdeadbeef\n' > "$box/.git/refs/remotes/origin/broken"
+# Битая ссылка ставится git'ом, а не файлом в refs/: ссылки могут лежать
+# упакованными (каталога refs/remotes/origin нет), а хранилище reftable файлов
+# ссылок не читает. Ссылка ведёт на настоящий коммит, затем его свободный
+# объект снимается — условие не зависит от того, как хранятся ссылки.
+bsha="$(pgit -C "$box" commit-tree "$(pgit -C "$box" rev-parse 'HEAD^{tree}')" -m "битая ссылка")" &&
+    pgit -C "$box" update-ref refs/remotes/origin/broken "$bsha" &&
+    rm -f "$box/.git/objects/${bsha:0:2}/${bsha:2}" || bsha=""
+if [ -z "$bsha" ] || pgit -C "$box" cat-file -e "$bsha" 2> /dev/null ||
+    [ "$(pgit -C "$box" rev-parse -q --verify refs/remotes/origin/broken)" != "$bsha" ]; then
+    echo "prepush-added-files-inject: НЕ СУДИМО — битая ссылка удалённого не создана (объект $bsha жив либо ссылки нет)" >&2
+    exit 2
+fi
 examined=$((examined + 1)); unlawful=$((unlawful + 1))
 res="$(judge "$(create)")"
 { [ "$(head -1 <<< "$res")" -eq 2 ] && grep -qF 'НЕ СУДИМО' <<< "$res"; } ||
     fail "битая ссылка удалённого: страж вышел $(head -1 <<< "$res") вместо 2 — пустой обход прошёл бы зелёным"
-rm -f "$box/.git/refs/remotes/origin/broken"
+pgit -C "$box" update-ref -d refs/remotes/origin/broken
 # Хук читает код стража, а не его вывод: «не судимо» (2) — отказ хука. Заглушка
 # отделяет провязку от стража правила, который на битой ссылке судил бы первым.
 mv "$box/scripts/hooks/prepush-added-files.sh" "$TMP/guard.away"
