@@ -99,20 +99,28 @@ func HierarchicalRelations() []Relation {
 	return []Relation{RelationProject, RelationParent, RelationOwner}
 }
 
-// PublicReadRelation / PublicReadSubject — the only NON-hierarchical pair the proxy
-// accepts: «anybody reads this module's resource».
+// PublicReadRelation / PublicReadSubject / PublicReadClassSubject — единственная
+// НЕиерархическая пара, которую принимает прокси: «объект модуля читает всякий».
 //
-// Publicness is expressed by the tuple itself: kacho-registry writes
-// `user:* #v_get @registry_repository:<reg>/<repo>` and that tuple IS the
-// visibility an anonymous pull resolves — there is no separate flag. Without the
-// pair the intent would be emitted and refused whole, and a public repository would
-// not exist under any configuration.
+// Публичность выражена самим кортежем: служба реестра пишет
+// `<слово> #v_get @registry_repository:<reg>/<repo>`, и этот кортеж И ЕСТЬ
+// видимость, которую разрешает анонимное чтение, — отдельного флага нет. Без пары
+// намерение было бы отправлено и отвергнуто целиком, и публичного репозитория не
+// существовало бы ни при какой конфигурации.
 //
-// The narrowing is by SUBJECT, not by relation: the wildcard `user:*` names NO
-// individual recipient, so a module still cannot hand read access to a particular
-// user or service account — that stays with AccessBinding, where it is enumerable,
-// scoped and revocable. Every other constraint (object domain, forbidden types)
-// applies unchanged.
+// Входных слов ДВА, перечень закрыт (PublicReadSubjects): подстановка `user:*` —
+// переходное написание, класс `system_class:anonymous` — то, чем публикацию
+// хранит и о чём спрашивает принимающая сторона (corelib#116). Оба слова значат
+// одно — «всякий, в том числе без входа», — поэтому принятое одним снимается
+// другим: хранимая форма публикации у принимающей стороны одна.
+//
+// Сужение — по СУБЪЕКТУ, а не по отношению: ни одно из слов не называет
+// отдельного получателя, поэтому модуль по-прежнему не может выдать чтение
+// конкретному пользователю или сервисному аккаунту — это остаётся за выдачей прав,
+// где грант перечислим, ограничен областью и отзываем. Класс «вошедший»
+// (`system_class:authenticated`) словом публикации не является: «читает всякий
+// вошедший» — не возможность ресурса. Прочие ограничения (домен объекта,
+// запрещённые типы, закрытый список публикуемых типов) действуют без изменений.
 const (
 	PublicReadRelation Relation = "v_get"
 	// Тип назван явно: в группе констант вторая строка без типа унаследовала бы
@@ -120,7 +128,20 @@ const (
 	// строкой там, где рядом стоит `Relation`. Читается как «оба одного типа»,
 	// проверяется компилятором как разные.
 	PublicReadSubject string = "user:*"
+	// PublicReadClassSubject — второе входное слово публикации: класс «аноним»
+	// (corelib#116). Написание совпадает с хранимым субъектом публикации у
+	// принимающей стороны.
+	PublicReadClassSubject string = "system_class:anonymous"
 )
+
+// publicReadSubjects — закрытый перечень входных слов публикации, в порядке
+// объявления: переходное слово первым. Предикат приёма читает ЕГО, перепись
+// (PublicReadSubjects) — копию его же: второго написания перечня нет.
+var publicReadSubjects = [...]string{PublicReadSubject, PublicReadClassSubject}
+
+// PublicReadSubjects — закрытый перечень входных слов публикации, копией: правка
+// потребителя правила не меняет.
+func PublicReadSubjects() []string { return append([]string(nil), publicReadSubjects[:]...) }
 
 // publicReadObjectTypes — the CLOSED list of object types for which publicness is a
 // product capability of the resource. Subject narrowing alone already prevents
@@ -215,8 +236,9 @@ var forbiddenObjectTypes = map[string]struct{}{
 // предка или владельца раздал бы доступ к ресурсу целому классу через иерархию,
 // мимо выдачи прав, где грант перечислим, ограничен областью и отзываем.
 //
-// Пару публичного чтения набор не трогает: её субъект закреплён дословно
-// (PublicReadSubject), и класс субъектов там не проходит и без этого набора.
+// Пару публичного чтения набор не трогает: она не отношение иерархии, её
+// субъекты — закрытый перечень (publicReadSubjects), и из классов в нём только
+// `anonymous`; `authenticated` там не проходит и без этого набора.
 var forbiddenHierarchySubjectTypes = map[string]struct{}{
 	"system_class": {},
 }
@@ -231,18 +253,26 @@ func subjectType(subject string) string {
 	return subject[:colon]
 }
 
-// IsPublicReadGrant reports whether the pair is «anybody reads this resource»
-// (`user:* #v_get`).
+// IsPublicReadGrant — пара есть «объект читает всякий»: `v_get` с одним из
+// входных слов публикации (`user:*` либо `system_class:anonymous`).
 //
-// It differs from a hierarchical intent in kind: it does not describe the state of
-// the resource (no parent scope, no labels) — it only opens reading. The applying
-// side must therefore treat it as a PURE tuple and leave the resource projection
-// alone: a register would otherwise blank the parent scope and an unregister would
-// delete the projection row of a live resource. Exported so the policy and the
-// apply path share ONE predicate.
+// От намерения иерархии она отличается родом: состояния ресурса не описывает (ни
+// родительской области, ни меток) — только открывает чтение. Применяющая сторона
+// поэтому обязана считать её ЧИСТЫМ кортежем и не трогать проекцию ресурса:
+// иначе регистрация обнулила бы родительскую область, а снятие удалило бы строку
+// проекции живого ресурса. Экспортирован, чтобы правило и путь применения делили
+// ОДИН предикат — и для обоих слов сразу.
 func IsPublicReadGrant(subject, relation string) bool {
-	return Relation(strings.TrimSpace(relation)) == PublicReadRelation &&
-		strings.TrimSpace(subject) == PublicReadSubject
+	if Relation(strings.TrimSpace(relation)) != PublicReadRelation {
+		return false
+	}
+	subject = strings.TrimSpace(subject)
+	for _, word := range publicReadSubjects {
+		if subject == word {
+			return true
+		}
+	}
+	return false
 }
 
 // IsProxyWritable — could THIS relation have been written by a module through the
