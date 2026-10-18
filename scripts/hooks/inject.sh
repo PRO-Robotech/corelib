@@ -315,7 +315,8 @@ B="$work/b"
 mkdir -p "$B/scripts/hooks" "$B/.github/scripts"
 cp "$HOOK" "$B/scripts/hooks/pre-push"
 cp "$INSTALL" "$B/scripts/hooks/install.sh"
-cp "$here/git-rule.sh" "$here/git-rule-push.sh" "$B/scripts/hooks/"
+# Второй страж хука — новых blob'ов (#117): без него хук отказывает всякой отправке.
+cp "$here/git-rule.sh" "$here/git-rule-push.sh" "$here/prepush-added-files.sh" "$B/scripts/hooks/"
 cp "$VERDICT" "$B/.github/scripts/go-test-verdict.py"
 chmod +x "$B/scripts/hooks/pre-push"
 printf 'module example.invalid/probe\n\ngo 1.21\n' > "$B/go.mod"
@@ -511,9 +512,10 @@ pathdir() {
         ln -s "$p" "$d/$t"
     done
 }
-# bare — PATH без go, gofmt, python3 и линтера: только то, что нужно самому хуку
-# и провязке, которую он спрашивает.
-basic=(bash git grep head wc sort mkdir cat sed tr date)
+# bare — PATH без go, gofmt и линтера: только то, что нужно самому хуку, его
+# стражам и провязке, которую он спрашивает. python3 — инструмент стража новых
+# blob'ов (#117): без него хук отказывает до проверок (близнец — nopy ниже).
+basic=(bash git grep head wc sort mkdir cat sed tr date python3)
 bare="$work/bare"
 pathdir "$bare" "${basic[@]}"
 # nogrep — bare без одного инструмента самого хука: близнец bare ровно в один факт.
@@ -521,9 +523,11 @@ nogrep="$work/nogrep"
 no_grep=()
 for t in "${basic[@]}"; do [ "$t" = grep ] || no_grep+=("$t"); done
 pathdir "$nogrep" "${no_grep[@]}"
-# nopy — всё, кроме интерпретатора прогонщика вердикта.
+# nopy — всё, кроме python3: интерпретатора стража новых blob'ов и прогонщика вердикта.
 nopy="$work/nopy"
-pathdir "$nopy" "${basic[@]}" go gofmt
+no_py=()
+for t in "${basic[@]}"; do [ "$t" = python3 ] || no_py+=("$t"); done
+pathdir "$nopy" "${no_py[@]}" go gofmt
 ln -s "$shim/golangci-lint" "$nopy/golangci-lint"
 
 hk() { (cd "$B" && PATH="$shim:$PATH" bash scripts/hooks/pre-push origin "$work/b.git"); }
@@ -617,8 +621,10 @@ runin "$(line 21-probe "$h0")" env PATH="$nogrep" "$nogrep/bash" -c "cd '$B' && 
 expect "нет grep — отказ до проверок, назван инструмент хука" 2 "нет grep в PATH" "исполнено проверок: 0"
 fact "нет grep — ложной причины «правки в копии» нет" not grep -qF "неотслеживаемых файлов" <<<"$out"
 runin "$(line 21-probe "$h0")" env PATH="$nopy" "$nopy/bash" -c "cd '$B' && bash scripts/hooks/pre-push"
-expect "нет python3 — go test без условия, назван, в «исполнено» не входит" 0 \
-    "без условия 1" "python3 не найден" "исполнено 4 из 5"
+# Без python3 страж новых blob'ов судить не может (код 2): отправка остановлена до
+# проверок, а не выпущена с «go test без условия» (#117).
+expect "нет python3 — страж новых blob'ов не судит: отказ до проверок, причина названа" 1 \
+    "prepush-added-files: НЕ СУДИМО — нет python3" "код стража 2" "исполнено проверок: 0"
 runin "$(line 21-probe "$h0")" with CORELIB_SKIP_PREPUSH=1 hk
 expect "обход объявлен и печатает непроверенное" 0 "НЕ выполнялись" "здесь НЕ гонялось"
 runin "" hk

@@ -9,8 +9,9 @@
 # конвейер, а зовёт человек в своём клоне, и цель — это адрес, по которому её
 # ищут (под теми же именами она есть в Makefile ствола kacho). Тела целей —
 # вызовы scripts/hooks/install.sh и проб scripts/hooks/inject.sh (хук отправки
-# и провязка) и scripts/hooks/git-rule-inject.sh (правило git: хук коммита,
-# страж отправки, проверка запроса), своей логики нет.
+# и провязка), scripts/hooks/git-rule-inject.sh (правило git: хук коммита,
+# страж отправки, проверка запроса) и scripts/hooks/prepush-added-files-inject.sh
+# (страж новых blob'ов отправки), своей логики нет.
 #
 # Что каждая цель делает и почему переходник, а не core.hooksPath, — в шапке
 # scripts/hooks/install.sh. Существование каждой цели, названной текстами хука
@@ -31,7 +32,8 @@ install-hooks:
 check-hooks:
 	@bash scripts/hooks/install.sh check
 
-## probe-hooks — пробы хуков, провязки и правила git инъекцией (те же, что в задании сборки ci.yml).
+## probe-hooks — пробы хуков, провязки, правила git и стража новых blob'ов инъекцией (те же, что в задании сборки ci.yml).
 probe-hooks:
 	@bash scripts/hooks/inject.sh
 	@bash scripts/hooks/git-rule-inject.sh
+	@bash scripts/hooks/prepush-added-files-inject.sh
