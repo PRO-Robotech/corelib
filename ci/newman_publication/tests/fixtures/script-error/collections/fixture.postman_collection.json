@@ -1,0 +1,68 @@
+{
+  "info": {
+    "name": "CI-NP-01 reader fixture",
+    "_postman_id": "b53a2c8f-3613-4bf4-b2ef-864f44ed25e4",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "item": [
+    {
+      "name": "trusted-folder",
+      "item": [
+        {
+          "name": "trusted-request-0",
+          "request": {
+            "method": "GET",
+            "url": "http://127.0.0.1:37989/"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"status is 200\", () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "trusted-request-1",
+          "request": {
+            "method": "GET",
+            "url": "http://127.0.0.1:37989/"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"status is 200\", () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "trusted-request-2",
+          "request": {
+            "method": "GET",
+            "url": "http://127.0.0.1:37989/"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "throw new Error(\"synthetic reader fixture failure\");"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
