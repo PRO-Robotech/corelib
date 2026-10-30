@@ -94,15 +94,17 @@ func (j Journal) Accept(req *subscriptionv1.SubscriptionRequest) (Filter, error)
 		f.Honored = append(f.Honored, axisKinds)
 	}
 
+	forms := j.idForms(kinds)
 	for _, id := range req.GetIds() {
 		// Пустая строка сюда не проходит: `corevalidate.ResourceID` её пропускает
 		// по контракту (required — ответственность вызывающего), а как ось она
-		// означала бы сужение, которому не отвечает ни один предмет.
+		// означала бы сужение, которому не отвечает ни один предмет. Форму
+		// владельца о ней не спрашивают вовсе: отказ одинаков у любого владельца.
 		if id == "" {
 			return Filter{}, status.Error(codes.InvalidArgument,
 				"ids: empty identifier")
 		}
-		if err := corevalidate.ResourceID("resource", "", id); err != nil {
+		if !idHasForm(id, forms) {
 			return Filter{}, status.Errorf(codes.InvalidArgument,
 				"ids: invalid resource id '%s'", id)
 		}
@@ -125,6 +127,55 @@ func (j Journal) Accept(req *subscriptionv1.SubscriptionRequest) (Filter, error)
 	}
 
 	return f, nil
+}
+
+// idForms — формы идентификатора, объявленные владельцем у видов, которые
+// подписка ЗАТРАГИВАЕТ: у названных осью `kinds`, а без неё — у всех видов
+// словаря. Форма вида, не названного подпиской, идентификатор не судит:
+// подписка, сузившая виды до сети, о форме аккаунта не спрашивает, иначе
+// строка формы аккаунта открыла бы поток, которому по сети не ответит ничто.
+//
+// Виды на входе уже осуждены [Journal.Accept]; сравнение идёт по слову
+// провода (типу объекта), а не по ключу хранилища.
+func (j Journal) idForms(kinds []string) []func(string) bool {
+	var named map[string]struct{}
+	if len(kinds) > 0 {
+		named = make(map[string]struct{}, len(kinds))
+		for _, k := range kinds {
+			named[k] = struct{}{}
+		}
+	}
+	var forms []func(string) bool
+	for _, binding := range j.Mapping.Kinds {
+		if binding.IDForm == nil {
+			continue
+		}
+		if named != nil {
+			if _, ok := named[binding.ObjectType]; !ok {
+				continue
+			}
+		}
+		forms = append(forms, binding.IDForm)
+	}
+	return forms
+}
+
+// idHasForm — годна ли непустая строка как идентификатор: формой
+// маршрутизатора либо формой хотя бы одного затронутого вида.
+//
+// Форма маршрутизатора спрашивается ПЕРВОЙ и остаётся годной всегда:
+// объявление владельца её дополняет и не сужает ([Kind.IDForm]). Владелец, не
+// объявивший формы, получает ровно прежний отказ.
+func idHasForm(id string, forms []func(string) bool) bool {
+	if corevalidate.ResourceID("resource", "", id) == nil {
+		return true
+	}
+	for _, form := range forms {
+		if form(id) {
+			return true
+		}
+	}
+	return false
 }
 
 // Start — с какого места отдавать. Три состояния, и все три различимы.
