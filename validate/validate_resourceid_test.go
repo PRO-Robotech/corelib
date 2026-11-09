@@ -107,6 +107,7 @@ func TestResourceID_KnownPrefixesAcceptValid(t *testing.T) {
 		{"group", "grp"},
 		{"role", "rol"},
 		{"access binding", "acb"},
+		{"grant delegation", "gdl"},
 		{"iam operation", "iop"},
 		{"user oauth client", "uoc"},
 		// nlb
